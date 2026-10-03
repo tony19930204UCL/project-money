@@ -39,7 +39,12 @@ def test_workstation_page_viewport(
     api_trace: list[dict] = []
 
     page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
-    page.on("pageerror", lambda exc: page_errors.append(str(exc)))
+    page.on(
+        "pageerror",
+        lambda exc: page_errors.append(
+            getattr(exc, "stack", None) or str(exc)
+        ),
+    )
     page.on(
         "response",
         lambda response: api_trace.append({
