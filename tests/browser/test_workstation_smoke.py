@@ -74,10 +74,12 @@ def test_workstation_page_viewport(
                 const el = document.querySelector(`[data-workspace-view="${slug}"]`);
                 return el && el.getAttribute('data-api-status') !== 'loading';
             }""",
-            slug,
+            arg=slug,
             timeout=5_000,
         )
         assert view.get_attribute("data-api-status") in {"ok", "empty", "stale", "error"}
+        if slug == "command-center":
+            assert page.get_by_role("button", name="Open Trading Terminal", exact=True).count() == 1
 
         overflow = page.evaluate(
             "() => document.documentElement.scrollWidth - document.documentElement.clientWidth"
@@ -146,7 +148,7 @@ def test_smoke_negative_state_contracts(
                 document.querySelector('[data-workspace-view="markets"]')
                     ?.getAttribute('data-api-status') === state
             """,
-            expected_state,
+            arg=expected_state,
             timeout=5_000,
         )
         assert view.get_attribute("data-api-status") == expected_state
