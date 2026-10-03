@@ -110,51 +110,43 @@ def test_workstation_page_viewport(
 
 
 @pytest.mark.parametrize(
-    "fixture_body,fixture_status,expected_state",
+    "market_mode,expected_state",
     [
-        ([], 200, "empty"),
-        ({"is_stale": True, "items": [{"symbol": "TEST_ONLY"}]}, 200, "stale"),
-        ({"detail": "TEST_ONLY deterministic fixture failure"}, 503, "error"),
+        ("empty", "empty"),
+        ("stale", "stale"),
+        ("error", "error"),
     ],
     ids=["empty-response", "stale-response", "error-response"],
 )
 def test_smoke_negative_state_contracts(
-    browser_server,
+    browser_server_factory,
     chromium,
-    fixture_body,
-    fixture_status,
+    market_mode,
     expected_state,
 ):
-    """Negative states are rendered from deterministic HTTP responses, not static labels."""
-    base_url, _, _ = browser_server
-    context = chromium.new_context(viewport={"width": 1280, "height": 720})
-    page = context.new_page()
-    page.route(
-        "**/api/watchlists",
-        lambda route: route.fulfill(
-            status=fixture_status,
-            content_type="application/json",
-            body=json.dumps(fixture_body),
-        ),
-    )
-    page.goto(base_url, wait_until="domcontentloaded", timeout=15_000)
-    try:
-        markets_nav = page.get_by_role("button", name="Markets", exact=True)
-        markets_nav.wait_for(state="visible", timeout=5_000)
-        markets_nav.click()
-        view = page.locator('[data-workspace-view="markets"]')
-        page.wait_for_function(
-            """(state) =>
-                document.querySelector('[data-workspace-view="markets"]')
-                    ?.getAttribute('data-api-status') === state
-            """,
-            arg=expected_state,
-            timeout=5_000,
-        )
-        assert view.get_attribute("data-api-status") == expected_state
-        assert view.locator(f'[data-state-kind="{expected_state}"]').count() == 1
-    finally:
-        context.close()
+    """Negative states must come through the real FastAPI + TEST_ONLY adapter."""
+    with browser_server_factory(market_mode=market_mode) as server:
+        base_url, _, _ = server
+        context = chromium.new_context(viewport={"width": 1280, "height": 720})
+        page = context.new_page()
+        try:
+            page.goto(base_url, wait_until="domcontentloaded", timeout=15_000)
+            chart_nav = page.get_by_role("button", name="Chart", exact=True)
+            chart_nav.wait_for(state="visible", timeout=5_000)
+            chart_nav.click()
+            view = page.locator('[data-workspace-view="chart"]')
+            page.wait_for_function(
+                """(state) =>
+                    document.querySelector('[data-workspace-view="chart"]')
+                        ?.getAttribute('data-api-status') === state
+                """,
+                arg=expected_state,
+                timeout=5_000,
+            )
+            assert view.get_attribute("data-api-status") == expected_state
+            assert view.locator(f'[data-state-kind="{expected_state}"]').count() == 1
+        finally:
+            context.close()
 
 
 def test_smoke_is_get_only_without_operator_actions(browser_server, chromium):
