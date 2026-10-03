@@ -63,6 +63,11 @@ def test_workstation_page_viewport(
         nav.click()
         page.locator(f'[data-workspace-view="{slug}"]').wait_for(state="visible", timeout=5_000)
         view = page.locator(f'[data-workspace-view="{slug}"]')
+        page.wait_for_function(
+            "(slug) => { const el = document.querySelector('[data-workspace-view="' + slug + '"]'); return el && el.getAttribute('data-api-status') !== 'loading'; }",
+            slug,
+            timeout=5_000,
+        )
         assert view.get_attribute("data-api-status") in {"ok", "empty", "stale", "error"}
 
         overflow = page.evaluate(
@@ -93,17 +98,45 @@ def test_workstation_page_viewport(
         context.close()
 
 
-def test_smoke_negative_state_contracts(browser_server, chromium):
-    """One deterministic empty/stale/error surface must be explicit, never a fake PASS."""
+@pytest.mark.parametrize(
+    "fixture_body,fixture_status,expected_state",
+    [
+        ([], 200, "empty"),
+        ({"is_stale": True, "items": [{"symbol": "TEST_ONLY"}]}, 200, "stale"),
+        ({"detail": "TEST_ONLY deterministic fixture failure"}, 503, "error"),
+    ],
+    ids=["empty-response", "stale-response", "error-response"],
+)
+def test_smoke_negative_state_contracts(
+    browser_server,
+    chromium,
+    fixture_body,
+    fixture_status,
+    expected_state,
+):
+    """Negative states are rendered from deterministic HTTP responses, not static labels."""
     base_url, _, _ = browser_server
     context = chromium.new_context(viewport={"width": 1280, "height": 720})
     page = context.new_page()
+    page.route(
+        "**/api/watchlists",
+        lambda route: route.fulfill(
+            status=fixture_status,
+            content_type="application/json",
+            body=json.dumps(fixture_body),
+        ),
+    )
     page.goto(base_url, wait_until="domcontentloaded", timeout=15_000)
     try:
         page.get_by_role("button", name="Markets", exact=True).click()
-        assert page.locator('[data-state-kind="empty"]').count() >= 1
-        assert page.locator('[data-state-kind="stale"]').count() >= 1
-        assert page.locator('[data-state-kind="error"]').count() >= 1
+        view = page.locator('[data-workspace-view="markets"]')
+        page.wait_for_function(
+            "(state) => document.querySelector('[data-workspace-view="markets"]')?.getAttribute('data-api-status') === state",
+            expected_state,
+            timeout=5_000,
+        )
+        assert view.get_attribute("data-api-status") == expected_state
+        assert view.locator(f'[data-state-kind="{expected_state}"]').count() == 1
     finally:
         context.close()
 
