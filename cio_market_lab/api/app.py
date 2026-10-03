@@ -814,11 +814,21 @@ def create_app(
 
     @app.post("/api/paper/orders/preview", tags=["Paper Trade"])
     def preview_paper_order(req: PaperOrderRequest) -> Dict[str, Any]:
+        if req.origin == OrderOrigin.MAIN_CIO:
+            raise HTTPException(
+                status_code=403,
+                detail="MAIN_CIO_REQUIRES_AUTHENTICATED_DECISION_PACKET",
+            )
         return app.state.app_state.paper_orders.preview(req)
 
     @app.post("/api/paper/orders", tags=["Paper Trade"])
     def submit_paper_order(req: PaperOrderRequest, request: Request) -> Dict[str, Any]:
         assert_owner_port(request, "Order mutations")
+        if req.origin == OrderOrigin.MAIN_CIO:
+            raise HTTPException(
+                status_code=403,
+                detail="MAIN_CIO_REQUIRES_AUTHENTICATED_DECISION_PACKET",
+            )
         if (
             os.getenv("CIO_ALLOW_CLOSED_MARKET_TEST_ORDERS") != "1"
             and not intraday_market_open(req.symbol, datetime.now(timezone.utc))
@@ -861,6 +871,11 @@ def create_app(
     @app.post("/api/paper/orders/{order_id}/cancel-replace", tags=["Paper Trade"])
     def cancel_replace_paper_order(order_id: str, req: PaperOrderRequest, request: Request) -> Dict[str, Any]:
         assert_owner_port(request, "Order mutations")
+        if req.origin == OrderOrigin.MAIN_CIO:
+            raise HTTPException(
+                status_code=403,
+                detail="MAIN_CIO_REQUIRES_AUTHENTICATED_DECISION_PACKET",
+            )
         if (
             os.getenv("CIO_ALLOW_CLOSED_MARKET_TEST_ORDERS") != "1"
             and not intraday_market_open(req.symbol, datetime.now(timezone.utc))

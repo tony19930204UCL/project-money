@@ -11,6 +11,9 @@ import pytest
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+# Browser acceptance is opt-in. Default source pytest must not collect tests/browser.
+collect_ignore = [] if os.environ.get("CIO_BROWSER_TESTS") == "1" else ["browser"]
+
 # 1. Capture pristine environment at collection time
 _ORIG_ENV = dict(os.environ)
 
