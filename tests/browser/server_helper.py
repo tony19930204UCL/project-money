@@ -13,6 +13,23 @@ import uvicorn
 from cio_market_lab.api.app import create_app
 from cio_market_lab.domain.models import Bar, DecisionScope, OrderOrigin, OrderSide, OrderType, Quote
 from cio_market_lab.engine.paper_orders import PaperDataContext, PaperExperimentSettings, PaperOrderRequest
+from cio_market_lab.research.browser import FakeBrowserResearchAdapter, ResearchItem
+
+
+def _test_only_research_adapter() -> FakeBrowserResearchAdapter:
+    return FakeBrowserResearchAdapter([
+        ResearchItem(
+            id="TEST_ONLY_RESEARCH_FIXTURE",
+            url="https://example.test/project-money/research-fixture",
+            title="TEST_ONLY populated research fixture",
+            claims=["TEST_ONLY verified browser acceptance content"],
+            source_mode="fake",
+            status="verified",
+            related_symbols=["2330.TW"],
+            provenance={"source": "TEST_ONLY_BROWSER_HARNESS"},
+            hypothesis="TEST_ONLY browser acceptance only",
+        )
+    ])
 
 
 class TestOnlyMarketAdapter:
@@ -124,6 +141,7 @@ async def serve(
             market_adapter=TestOnlyMarketAdapter(market_mode),
         )
         init_state = initializer.state.app_state
+        init_state.research_adapter = _test_only_research_adapter()
         if market_mode == "normal":
             init_state.runner.configure(PaperExperimentSettings(
                 strategy_id="TEST_ONLY_BROWSER_EXPERIMENT",
@@ -162,6 +180,7 @@ async def serve(
         is_read_only=not writable,
         market_adapter=TestOnlyMarketAdapter(market_mode),
     )
+    app.state.app_state.research_adapter = _test_only_research_adapter()
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("127.0.0.1", 0))
