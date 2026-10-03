@@ -5,7 +5,7 @@
   const state = {
     view: "command", watchMarket: "TW", selectedSymbol: "2330.TW", selectedQuote: null, timeframe: "1D", layout: "dense",
     watchlists: {TW: [], US: []}, overview: null, portfolios: null, strategies: [], research: [], diagnostics: null, markets: null, experiments: [],
-    fills: [], orders: [], positions: [], bars: [], apiErrors: [], killSwitch: false, competition: null, chartSource: "DELAYED DATA", orderPreview: null
+    fills: [], orders: [], positions: [], bars: [], apiErrors: [], killSwitch: false, competition: null, chartSource: "DELAYED DATA", orderPreview: null, replaceOrderId: null
   };
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -216,7 +216,47 @@
     renderPortfolioCards(); renderPaperLedger(); renderOverview();
   }
   function renderPortfolioCards() { const p = state.portfolios || {}; $("#portfolio-cards").innerHTML = ["swing","intraday"].map(key => { const x = p[key]; if (!x) return `<div class="portfolio-card"><div class="label">${key.toUpperCase()}</div><strong>—</strong><small>ledger endpoint unavailable</small></div>`; return `<div class="portfolio-card"><div class="label">${key.toUpperCase()} LEDGER</div><strong>${money(x.equity)}</strong><small>cash ${money(x.cash)} · realized ${money(x.realized_pnl)} · positions ${Array.isArray(x.positions) ? x.positions.length : Object.keys(x.positions || {}).length}</small></div>`; }).join(""); }
-  function renderPaperLedger() { $("#paper-ledger").innerHTML = tableHtml([...state.orders, ...state.fills], [{label:"TYPE",render:r=>r.fill_id?"FILL":"ORDER"},{label:"SYMBOL",key:"symbol"},{label:"SIDE",key:"side"},{label:"PRICE",render:r=>num(r.price ?? r.limit_price)},{label:"ORIGIN",render:r=>esc(r.origin || r.order_origin || "—")},{label:"STATUS",render:r=>esc(r.status || "FILLED")}], "No paper orders or fills returned."); }
+  function renderPaperLedger() {
+    $("#paper-ledger").innerHTML = tableHtml([...state.orders, ...state.fills], [
+      {label:"TYPE",render:r=>r.fill_id?"FILL":"ORDER"},
+      {label:"SYMBOL",key:"symbol"},
+      {label:"SIDE",key:"side"},
+      {label:"PRICE",render:r=>num(r.price ?? r.limit_price)},
+      {label:"ORIGIN",render:r=>esc(r.origin || r.order_origin || "—")},
+      {label:"VERSION",render:r=>esc(r.strategy_version || "—")},
+      {label:"STATUS",render:r=>esc(r.status || "FILLED")},
+      {label:"ACTIONS",render:r=>{
+        const editable = r.order_id && r.origin === "MANUAL" && ["PENDING","PARTIALLY_FILLED"].includes(r.status);
+        return editable ? `<button class="text-btn" data-order-cancel="${esc(r.order_id)}">Cancel</button> <button class="text-btn" data-order-replace="${esc(r.order_id)}">Replace</button>` : "—";
+      }}
+    ], "No paper orders or fills returned.");
+    $("[data-order-cancel]", $("#paper-ledger")).forEach(button => button.addEventListener("click", async () => {
+      button.disabled = true;
+      const result = await api(`/api/paper/orders/${encodeURIComponent(button.dataset.orderCancel)}/cancel`, {method:"POST"});
+      showToast(result ? "Paper order cancelled." : "Cancel failed; order state unchanged.");
+      await loadAll();
+    }));
+    $("[data-order-replace]", $("#paper-ledger")).forEach(button => button.addEventListener("click", () => {
+      const order = state.orders.find(item => item.order_id === button.dataset.orderReplace);
+      if (!order) return;
+      state.replaceOrderId = order.order_id;
+      state.orderPreview = null;
+      $("#order-symbol").value = order.symbol;
+      $("#order-market").value = order.market;
+      $("#order-side").value = order.side;
+      $("#order-type").value = order.order_type;
+      $("#order-qty").value = order.remaining_quantity || order.quantity;
+      $("#order-price").value = order.limit_price ?? "";
+      $("#order-stop").value = order.stop_price ?? "";
+      $("#order-bucket").value = order.bucket;
+      $("#order-origin").value = "MANUAL";
+      $("#order-reason").value = `Replace ${order.order_id}: ${order.reason || "manual paper order"}`;
+      $(".submit-order").innerHTML = "Preview replacement <span>→</span>";
+      navigate("command");
+      $("#order-message").textContent = `Replacement mode for ${order.order_id}. Preview and confirm to cancel-replace.`;
+      $("#order-message").className = "inline-message info";
+    }));
+  }
 
   function renderStrategies() { const el = $("#strategy-list"); if (!state.strategies.length) { el.innerHTML = stateHtml("No strategies returned from registry."); return; } el.innerHTML = state.strategies.map(s => `<article class="strategy-card"><div class="strategy-card-head"><div><h3>${esc(s.name || s.id)}</h3><div class="strategy-meta">${esc(s.id)} · v${esc(s.version || "—")} · hash ${esc((s.code_hash || "—").slice(0,10))}</div></div><span class="badge ${s.status === "PAPER_ACTIVE" ? "badge-good" : "badge-neutral"}">${esc(s.status || "UNKNOWN")}</span></div><div class="strategy-params">${Object.entries(s.config || {}).map(([k,v]) => `<span class="param">${esc(k)}=${esc(v)}</span>`).join("") || '<span class="muted">manifest parameters unavailable</span>'}</div></article>`).join(""); }
   function renderResearch() { const el = $("#research-list"); if (!state.research.length) { el.innerHTML = stateHtml("Inbox empty. Sources stay quarantined until verified."); return; } el.innerHTML = state.research.map(r => `<article class="research-card"><div class="research-card-head"><div><h3>${esc(r.title)}</h3><div class="research-meta">${esc(r.id || "item")} · ${esc(r.source_mode || "source")} · ${esc((r.related_symbols || []).join(", ") || "no symbols")}</div></div><span class="badge badge-neutral">${esc((r.status || "UNVERIFIED").toUpperCase())}</span></div><div class="research-meta">${esc(r.url)}</div></article>`).join(""); }
@@ -316,7 +356,7 @@
         symbol: raw.symbol.trim().toUpperCase(), market: raw.market, bucket: raw.bucket, side: raw.side,
         order_type: raw.type, quantity: Number(raw.quantity), limit_price: raw.price ? Number(raw.price) : null,
         stop_price: raw.stop ? Number(raw.stop) : null, origin: raw.origin, reason: raw.reason.trim(),
-        explicit_user_instruction: raw.origin === "MAIN_CIO", audit_metadata: {ui:"cio-market-lab-v2", paper_only:true, two_step_confirmation:true},
+        explicit_user_instruction: false, audit_metadata: {ui:"cio-market-lab-v2", paper_only:true, two_step_confirmation:true},
         data: {source: quote?.source || lastBar?.source || "ui_no_source", observed_at: observedAt, age_seconds: Number.isFinite(ageSeconds) ? ageSeconds : 999999, last_price: quote?.last || lastBar?.close || null, is_stale: dataStale, is_fallback: dataFallback}
       };
       const message = $("#order-message");
@@ -324,10 +364,15 @@
       if (state.killSwitch) { message.textContent = "Kill switch is ON. New simulated orders are blocked."; message.className = "inline-message error"; return; }
       const formSignature = JSON.stringify(raw);
       if (state.orderPreview?.response?.status === "APPROVED" && state.orderPreview.formSignature === formSignature) {
-        const result = await api("/api/paper/orders", {method:"POST", body:JSON.stringify(state.orderPreview.payload)});
+        const endpoint = state.replaceOrderId
+          ? `/api/paper/orders/${encodeURIComponent(state.replaceOrderId)}/cancel-replace`
+          : "/api/paper/orders";
+        const result = await api(endpoint, {method:"POST", body:JSON.stringify(state.orderPreview.payload)});
         if (!result) { message.textContent = "Simulation engine rejected the order. Nothing was sent to a broker."; message.className = "inline-message error"; return; }
-        message.textContent = `Simulated order accepted: ${result.order?.order_id || "local ledger entry"}. No broker route exists.`;
-        message.className = "inline-message success"; resetPreview(); await loadAll(); return;
+        message.textContent = state.replaceOrderId
+          ? `Replacement accepted: ${result.order?.order_id || "local ledger entry"}. No broker route exists.`
+          : `Simulated order accepted: ${result.order?.order_id || "local ledger entry"}. No broker route exists.`;
+        message.className = "inline-message success"; state.replaceOrderId = null; resetPreview(); await loadAll(); return;
       }
       const preview = await api("/api/paper/orders/preview", {method:"POST", body:JSON.stringify(payload)});
       if (!preview) { message.textContent = "Paper preview service unavailable; nothing was submitted."; message.className = "inline-message error"; return; }

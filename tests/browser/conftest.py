@@ -133,3 +133,48 @@ def browser_evidence_dir(tmp_path_factory):
     target = Path(configured) if configured else tmp_path_factory.mktemp("browser-evidence")
     target.mkdir(parents=True, exist_ok=True)
     return target
+
+@pytest.fixture
+def fresh_runtime(tmp_path: Path):
+    runtime_dir = tmp_path / "runtime"
+    subprocess.run(
+        [
+            sys.executable,
+            str(HELPER),
+            "prepare",
+            "--workspace-root",
+            str(PROJECT_ROOT),
+            "--runtime-dir",
+            str(runtime_dir),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return runtime_dir
+
+
+@pytest.fixture
+def server_factory():
+    return _server
+
+
+def run_helper_command(command: str, runtime_dir: Path) -> dict:
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(HELPER),
+            command,
+            "--workspace-root",
+            str(PROJECT_ROOT),
+            "--runtime-dir",
+            str(runtime_dir),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=40,
+    )
+    lines = [line for line in proc.stdout.splitlines() if line.strip()]
+    return json.loads(lines[-1]) if lines else {}

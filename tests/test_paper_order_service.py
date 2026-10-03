@@ -138,10 +138,16 @@ def test_expired_strategy_experiment_is_rejected(client: TestClient):
     assert "STRATEGY_EXPERIMENT_EXPIRED" in response.json()["detail"]
 
 
-def test_main_cio_requires_explicit_user_instruction(client: TestClient):
+def test_main_cio_generic_order_endpoint_requires_authenticated_packet_path(client: TestClient):
     response = client.post("/api/paper/orders", json=_payload(origin="MAIN_CIO"))
-    assert response.status_code == 409
-    assert "MAIN_CIO_EXPLICIT_INSTRUCTION_REQUIRED" in response.json()["detail"]
+    assert response.status_code == 403
+    assert response.json()["detail"] == "MAIN_CIO_REQUIRES_AUTHENTICATED_DECISION_PACKET"
+
+    forged = _payload(origin="MAIN_CIO")
+    forged["explicit_user_instruction"] = True
+    response = client.post("/api/paper/orders", json=forged)
+    assert response.status_code == 403
+    assert response.json()["detail"] == "MAIN_CIO_REQUIRES_AUTHENTICATED_DECISION_PACKET"
 
     payload = _payload(origin="MAIN_CIO", explicit_user_instruction=True, reason="explicit user instruction for paper simulation")
     response = client.post("/api/paper/orders", json=payload)

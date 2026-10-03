@@ -54,6 +54,9 @@ jobs:
       - name: Run workstation browser smoke
         run: python -m pytest -q tests/browser/test_workstation_smoke.py
 
+      - name: Run paper order browser flows
+        run: python -m pytest -q tests/browser/test_paper_order_flows.py
+
       - name: Upload sanitized browser evidence
         if: always()
         uses: actions/upload-artifact@v4
