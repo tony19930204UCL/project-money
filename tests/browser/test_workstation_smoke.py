@@ -1,0 +1,124 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+PAGES = [
+    ("Command Center", "command-center"),
+    ("Markets", "markets"),
+    ("Chart", "chart"),
+    ("Paper Trade", "paper-trade"),
+    ("Portfolio", "portfolio"),
+    ("Strategy Lab", "strategy-lab"),
+    ("Research", "research"),
+    ("Replay", "replay"),
+    ("Risk", "risk"),
+    ("Diagnostics", "diagnostics"),
+]
+VIEWPORTS = [(1280, 720), (1536, 864)]
+
+
+@pytest.mark.parametrize("label,slug", PAGES, ids=[item[1] for item in PAGES])
+@pytest.mark.parametrize("viewport", VIEWPORTS, ids=["1280x720", "1536x864"])
+def test_workstation_page_viewport(
+    browser_server,
+    chromium,
+    evidence_dir: Path,
+    label: str,
+    slug: str,
+    viewport: tuple[int, int],
+):
+    base_url, _, _ = browser_server
+    width, height = viewport
+    context = chromium.new_context(viewport={"width": width, "height": height})
+    page = context.new_page()
+    console_errors: list[str] = []
+    page_errors: list[str] = []
+    api_trace: list[dict] = []
+
+    page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+    page.on("pageerror", lambda exc: page_errors.append(str(exc)))
+    page.on(
+        "response",
+        lambda response: api_trace.append({
+            "method": response.request.method,
+            "url": response.url,
+            "status": response.status,
+        }) if "/api/" in response.url else None,
+    )
+
+    stem = f"{slug}-{width}x{height}"
+    try:
+        response = page.goto(base_url, wait_until="networkidle", timeout=15_000)
+        assert response is not None and response.ok
+        health = page.request.get(f"{base_url}/api/health").json()
+        assert health["paper_only"] is True
+        assert health["broker_connected"] is False
+
+        nav = page.get_by_role("button", name=label, exact=True)
+        assert nav.count() == 1, f"missing actual SPA navigation control: {label}"
+        nav.click()
+        page.locator(f'[data-workspace-view="{slug}"]').wait_for(state="visible", timeout=5_000)
+        view = page.locator(f'[data-workspace-view="{slug}"]')
+        assert view.get_attribute("data-api-status") in {"ok", "empty", "stale", "error"}
+
+        overflow = page.evaluate(
+            "() => document.documentElement.scrollWidth - document.documentElement.clientWidth"
+        )
+        assert overflow <= 1, f"page-level horizontal overflow={overflow}px"
+        assert page.locator("body").is_visible()
+        assert not page_errors
+
+        critical = [
+            item for item in api_trace
+            if item["status"] >= 400 and "/api/" in item["url"]
+        ]
+        assert not critical, f"fixture-critical API failures: {critical}"
+        assert not console_errors, f"console errors: {console_errors}"
+    finally:
+        page.screenshot(path=str(evidence_dir / f"{stem}.png"), full_page=True)
+        (evidence_dir / f"{stem}.json").write_text(
+            json.dumps({
+                "page": label,
+                "viewport": [width, height],
+                "console_errors": console_errors,
+                "page_errors": page_errors,
+                "api_trace": api_trace,
+            }, indent=2),
+            encoding="utf-8",
+        )
+        context.close()
+
+
+def test_smoke_negative_state_contracts(browser_server, chromium):
+    """One deterministic empty/stale/error surface must be explicit, never a fake PASS."""
+    base_url, _, _ = browser_server
+    context = chromium.new_context(viewport={"width": 1280, "height": 720})
+    page = context.new_page()
+    page.goto(base_url, wait_until="networkidle", timeout=15_000)
+    try:
+        page.get_by_role("button", name="Markets", exact=True).click()
+        assert page.locator('[data-state-kind="empty"]').count() >= 1
+        assert page.locator('[data-state-kind="stale"]').count() >= 1
+        assert page.locator('[data-state-kind="error"]').count() >= 1
+    finally:
+        context.close()
+
+
+def test_smoke_is_get_only_without_operator_actions(browser_server, chromium):
+    base_url, _, _ = browser_server
+    context = chromium.new_context(viewport={"width": 1280, "height": 720})
+    page = context.new_page()
+    mutations: list[str] = []
+    page.on(
+        "request",
+        lambda req: mutations.append(f"{req.method} {req.url}")
+        if "/api/" in req.url and req.method in {"POST", "PUT", "DELETE", "PATCH"} else None,
+    )
+    page.goto(base_url, wait_until="networkidle", timeout=15_000)
+    for label, _ in PAGES:
+        page.get_by_role("button", name=label, exact=True).click()
+    context.close()
+    assert not mutations, f"observer navigation emitted mutation requests: {mutations}"
