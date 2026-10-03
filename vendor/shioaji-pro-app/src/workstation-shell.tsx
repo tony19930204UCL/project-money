@@ -14,7 +14,7 @@ type WorkspaceKey =
     | 'risk'
     | 'diagnostics';
 
-type LoadStatus = 'ok' | 'empty' | 'stale' | 'error';
+type LoadStatus = 'loading' | 'ok' | 'empty' | 'stale' | 'error';
 
 type ViewDefinition = {
     key: WorkspaceKey;
@@ -128,14 +128,14 @@ function classify(value: unknown): LoadStatus {
 }
 
 function DataWorkspace({ definition }: { definition: ViewDefinition }) {
-    const [status, setStatus] = useState<LoadStatus>('empty');
+    const [status, setStatus] = useState<LoadStatus>('loading');
     const [payload, setPayload] = useState<unknown>(null);
     const [message, setMessage] = useState('Loading local API state…');
 
     useEffect(() => {
         if (!definition.endpoint) return;
         const controller = new AbortController();
-        setStatus('empty');
+        setStatus('loading');
         setMessage('Loading local API state…');
         fetch(definition.endpoint, { cache: 'no-store', signal: controller.signal })
             .then(async (response) => {
@@ -167,15 +167,7 @@ function DataWorkspace({ definition }: { definition: ViewDefinition }) {
                 <span className={`pm-status pm-status-${status}`}>{status.toUpperCase()}</span>
             </header>
 
-            {definition.key === 'markets' ? (
-                <div className="pm-state-contracts" aria-label="Market-state rendering contracts">
-                    <div data-state-kind="empty"><strong>Empty</strong><span>Missing optional feeds stay explicit.</span></div>
-                    <div data-state-kind="stale"><strong>Stale</strong><span>Stale observations remain visibly marked and rejected for autonomous entry.</span></div>
-                    <div data-state-kind="error"><strong>Error</strong><span>Source failures surface as errors instead of fabricated market data.</span></div>
-                </div>
-            ) : null}
-
-            <div className="pm-data-card">
+            <div className="pm-data-card" data-state-kind={status === 'loading' ? undefined : status}>
                 <div className="pm-data-card-head">
                     <strong>{definition.endpoint}</strong>
                     <span>{message}</span>
@@ -188,6 +180,20 @@ function DataWorkspace({ definition }: { definition: ViewDefinition }) {
 
 export function WorkstationShell() {
     const [active, setActive] = useState<WorkspaceKey>('command-center');
+    const [healthStatus, setHealthStatus] = useState<LoadStatus>('loading');
+    useEffect(() => {
+        const controller = new AbortController();
+        fetch('/api/health', { cache: 'no-store', signal: controller.signal })
+            .then((response) => {
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return response.json();
+            })
+            .then(() => setHealthStatus('ok'))
+            .catch(() => {
+                if (!controller.signal.aborted) setHealthStatus('error');
+            });
+        return () => controller.abort();
+    }, []);
     const definition = useMemo(
         () => VIEWS.find((item) => item.key === active) ?? VIEWS[0],
         [active],
@@ -220,7 +226,7 @@ export function WorkstationShell() {
                     <section
                         className="pm-workspace-panel pm-command-center"
                         data-workspace-view="command-center"
-                        data-api-status="ok"
+                        data-api-status={healthStatus}
                     >
                         <div className="pm-command-center-intro">
                             <span className="pm-eyebrow">TRADING TERMINAL</span>
