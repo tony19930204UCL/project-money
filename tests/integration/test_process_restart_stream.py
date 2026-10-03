@@ -157,8 +157,9 @@ def _state_snapshot(base_url: str, seed: dict) -> dict:
     }
 
 
-def _read_sse_sequences(base_url: str, cursor: int, expected_count: int) -> list[int]:
-    sequences: list[int] = []
+def _read_sse_records(base_url: str, cursor: int, expected_count: int) -> list[dict]:
+    records: list[dict] = []
+    current_id: int | None = None
     with httpx.Client(timeout=httpx.Timeout(5.0)) as client:
         with client.stream(
             "GET",
@@ -168,14 +169,20 @@ def _read_sse_sequences(base_url: str, cursor: int, expected_count: int) -> list
             response.raise_for_status()
             for line in response.iter_lines():
                 if line.startswith("id: "):
-                    sequences.append(int(line[4:]))
-                    if len(sequences) == expected_count:
+                    current_id = int(line[4:])
+                elif line.startswith("data: "):
+                    payload = json.loads(line[6:])
+                    assert current_id is not None
+                    assert payload["sequence"] == current_id
+                    records.append(payload)
+                    current_id = None
+                    if len(records) == expected_count:
                         break
-    return sequences
+    return records
 
 
-def _read_ws_sequences(ws_url: str, cursor: int, expected_count: int) -> list[int]:
-    sequences: list[int] = []
+def _read_ws_records(ws_url: str, cursor: int, expected_count: int) -> list[dict]:
+    records: list[dict] = []
     with websocket_connect(
         f"{ws_url}/api/events/ws?since_id={cursor}",
         open_timeout=5,
@@ -184,9 +191,16 @@ def _read_ws_sequences(ws_url: str, cursor: int, expected_count: int) -> list[in
         for _ in range(expected_count):
             payload = json.loads(websocket.recv(timeout=5))
             assert payload.get("type") != "heartbeat"
-            sequences.append(int(payload["sequence"]))
-    return sequences
+            records.append(payload)
+    return records
 
+
+def _read_sse_sequences(base_url: str, cursor: int, expected_count: int) -> list[int]:
+    return [item["sequence"] for item in _read_sse_records(base_url, cursor, expected_count)]
+
+
+def _read_ws_sequences(ws_url: str, cursor: int, expected_count: int) -> list[int]:
+    return [item["sequence"] for item in _read_ws_records(ws_url, cursor, expected_count)]
 
 def _assert_sequence_contract(snapshot: dict) -> None:
     sequences = snapshot["event_sequences"]
@@ -213,17 +227,39 @@ def test_process_restart_preserves_committed_state_and_resumable_streams(tmp_pat
         assert initial["fill_ids"].count(FILL_ID) == 1
         assert initial["event_types"].count("ORDER_FILLED") == 1
 
-        cursor = initial["event_sequences"][1]
-        expected_after_cursor = [seq for seq in initial["event_sequences"] if seq > cursor]
-        assert expected_after_cursor
-        assert _read_sse_sequences(first.base_url, cursor, len(expected_after_cursor)) == expected_after_cursor
-        assert _read_ws_sequences(first.ws_url, cursor, len(expected_after_cursor)) == expected_after_cursor
+        committed = _get_json(first.base_url, "/api/events?since_id=0&limit=1000")["events"]
+        assert len(committed) >= 2
+        assert _read_sse_records(first.base_url, 0, len(committed)) == committed
+        assert _read_ws_records(first.ws_url, 0, len(committed)) == committed
+
+        graceful_prefix_count = min(2, len(committed) - 1)
+        graceful_sse_prefix = _read_sse_records(first.base_url, 0, graceful_prefix_count)
+        graceful_ws_prefix = _read_ws_records(first.ws_url, 0, graceful_prefix_count)
+        assert graceful_sse_prefix == committed[:graceful_prefix_count]
+        assert graceful_ws_prefix == committed[:graceful_prefix_count]
+        graceful_cursor = graceful_sse_prefix[-1]["sequence"]
+        assert graceful_cursor > 0
 
     with _server(workspace_root, runtime_dir, control_dir) as second:
         assert second.pid != first_pid
         graceful = _state_snapshot(second.base_url, seed)
         assert graceful == initial
         assert graceful["event_types"].count("ORDER_FILLED") == 1
+        graceful_suffix = _get_json(
+            second.base_url, f"/api/events?since_id={graceful_cursor}&limit=1000"
+        )["events"]
+        assert graceful_suffix
+        assert graceful_suffix == [
+            item for item in committed if item["sequence"] > graceful_cursor
+        ]
+        assert _read_sse_records(
+            second.base_url, graceful_cursor, len(graceful_suffix)
+        ) == graceful_suffix
+        assert _read_ws_records(
+            second.ws_url, graceful_cursor, len(graceful_suffix)
+        ) == graceful_suffix
+        assert len({item["sequence"] for item in graceful_suffix}) == len(graceful_suffix)
+
         inspect = _run_helper("inspect", workspace_root, runtime_dir)
         assert inspect["learning_case_id"] == LEARNING_CASE_ID
         assert inspect["event_count"] == seed["event_count"]
@@ -231,6 +267,15 @@ def test_process_restart_preserves_committed_state_and_resumable_streams(tmp_pat
     with _server(workspace_root, runtime_dir, control_dir) as abrupt:
         abrupt_before_kill = _state_snapshot(abrupt.base_url, seed)
         assert abrupt_before_kill == initial
+        abrupt_committed = _get_json(abrupt.base_url, "/api/events?since_id=0&limit=1000")["events"]
+        assert abrupt_committed == committed
+        abrupt_prefix_count = min(2, len(abrupt_committed) - 1)
+        abrupt_sse_prefix = _read_sse_records(abrupt.base_url, 0, abrupt_prefix_count)
+        abrupt_ws_prefix = _read_ws_records(abrupt.ws_url, 0, abrupt_prefix_count)
+        assert abrupt_sse_prefix == abrupt_committed[:abrupt_prefix_count]
+        assert abrupt_ws_prefix == abrupt_committed[:abrupt_prefix_count]
+        abrupt_cursor = abrupt_sse_prefix[-1]["sequence"]
+        assert abrupt_cursor > 0
         abrupt_pid = abrupt.pid
         abrupt.kill()
 
@@ -240,7 +285,20 @@ def test_process_restart_preserves_committed_state_and_resumable_streams(tmp_pat
         assert recovered == initial
         assert recovered["fill_ids"].count(FILL_ID) == 1
         assert recovered["event_types"].count("ORDER_FILLED") == 1
-
+        abrupt_suffix = _get_json(
+            after_kill.base_url, f"/api/events?since_id={abrupt_cursor}&limit=1000"
+        )["events"]
+        assert abrupt_suffix
+        assert abrupt_suffix == [
+            item for item in abrupt_committed if item["sequence"] > abrupt_cursor
+        ]
+        assert _read_sse_records(
+            after_kill.base_url, abrupt_cursor, len(abrupt_suffix)
+        ) == abrupt_suffix
+        assert _read_ws_records(
+            after_kill.ws_url, abrupt_cursor, len(abrupt_suffix)
+        ) == abrupt_suffix
+        assert len({item["sequence"] for item in abrupt_suffix}) == len(abrupt_suffix)
 
 def test_read_only_observer_does_not_mutate_runtime(tmp_path: Path):
     workspace_root = tmp_path / "workspace"

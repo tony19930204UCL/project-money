@@ -45,3 +45,29 @@ The original files and their acceptance evidence remain local. The export is not
 The source tree includes an offline integration test for B14/C09 that seeds only explicit `TEST_ONLY` data in a pytest temporary runtime, starts uvicorn in a real subprocess on loopback with an OS-assigned port, and exercises graceful restart, committed-state abrupt restart, HTTP event readback, SSE `Last-Event-ID` resume, WebSocket `since_id` resume, and read-only byte preservation. The test also checks that restart does not create duplicate `ORDER_FILLED` events or lose committed cash, positions, pending orders, experiment settings, or the test learning receipt.
 
 This engineering coverage does **not** close the original B14/C09 production/live-source acceptance. It does not prove deployed-process recovery, real broker/source correspondence, live stream reconnection across production infrastructure, desktop behavior, or any ABC live acceptance item. Main must perform those local/live checks separately under the existing acceptance boundary.
+
+
+## Source regression vs installed-host acceptance
+
+The portable default pytest suite and installed-host acceptance are now explicit,
+separate surfaces. The two original installed-machine modules
+`test_cli_import_repair_regression.py` and `test_native_abi_repair_regression.py`
+were moved intact to `host_acceptance/`, outside default `testpaths`. Their 9
+original tests retain the real-Hermes, Python 3.14, legacy ABI, system-Python and
+credential-containment assertions. Main must run `python -m pytest host_acceptance`
+on the installed host; source CI does not claim those proofs.
+
+Portable launcher tests under `tests/` use only pytest-owned fixture paths and
+cover configured agent/interpreter selection, facts.json discovery priority,
+missing-install fallback, invalid configured-path fallback, bootstrap-before-
+entrypoint command construction, and current-interpreter pydantic/pydantic_core
+imports. These are source regressions only and are not substitutes for installed-
+host acceptance.
+
+The B14/C09 integration now resumes both SSE and WebSocket cursors **across real
+process boundaries**: a nonzero cursor is captured from the original PID, that
+process is gracefully stopped or abruptly killed after committed fixture setup,
+and a new PID using the same runtime must return exactly the committed HTTP suffix
+through SSE `Last-Event-ID` and WebSocket `since_id`. Zero-cursor full replay,
+finite timeouts, cleanup, sequence integrity, and read-only byte preservation remain
+covered.

@@ -23,7 +23,7 @@ Outage, inability to place orders, or wrong accounting requires immediate client
 Pull requests run two GitHub Actions checks from `.github/workflows/source-regression.yml`:
 
 - `Source regression / frontend`: fresh Node 22 install, production frontend build, and Vitest.
-- `Source regression / backend`: fresh Python 3.13 install, frontend build required by backend contract tests, then the full Python pytest suite.
+- `Source regression / backend`: fresh Python 3.13 install, frontend build required by backend contract tests, repeated subprocess restart/stream integration, then the full portable **source** pytest suite.
 
 The equivalent local commands are:
 
@@ -37,6 +37,16 @@ npm test
 cd ../..
 .venv/bin/python -m pytest
 ```
+
+The default `.venv/bin/python -m pytest` command is the full portable **source regression**. Installed-machine Hermes/ABI proofs are retained separately under `host_acceptance/` and are intentionally outside default `testpaths`.
+
+On the installed host, Main runs:
+
+```sh
+.venv/bin/python -m pytest host_acceptance
+```
+
+Those host tests keep their original assertions and are not replaced, skipped, or claimed by source CI. See `host_acceptance/README.md` for prerequisites and inventory.
 
 Pending or skipped tests are reported separately and are not counted as passes.
 
