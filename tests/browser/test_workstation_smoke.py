@@ -51,8 +51,9 @@ def test_workstation_page_viewport(
 
     stem = f"{slug}-{width}x{height}"
     try:
-        response = page.goto(base_url, wait_until="networkidle", timeout=15_000)
+        response = page.goto(base_url, wait_until="domcontentloaded", timeout=15_000)
         assert response is not None and response.ok
+        page.locator("#root").wait_for(state="attached", timeout=5_000)
         health = page.request.get(f"{base_url}/api/health").json()
         assert health["paper_only"] is True
         assert health["broker_connected"] is False
@@ -97,7 +98,7 @@ def test_smoke_negative_state_contracts(browser_server, chromium):
     base_url, _, _ = browser_server
     context = chromium.new_context(viewport={"width": 1280, "height": 720})
     page = context.new_page()
-    page.goto(base_url, wait_until="networkidle", timeout=15_000)
+    page.goto(base_url, wait_until="domcontentloaded", timeout=15_000)
     try:
         page.get_by_role("button", name="Markets", exact=True).click()
         assert page.locator('[data-state-kind="empty"]').count() >= 1
@@ -117,7 +118,7 @@ def test_smoke_is_get_only_without_operator_actions(browser_server, chromium):
         lambda req: mutations.append(f"{req.method} {req.url}")
         if "/api/" in req.url and req.method in {"POST", "PUT", "DELETE", "PATCH"} else None,
     )
-    page.goto(base_url, wait_until="networkidle", timeout=15_000)
+    page.goto(base_url, wait_until="domcontentloaded", timeout=15_000)
     for label, _ in PAGES:
         page.get_by_role("button", name=label, exact=True).click()
     context.close()
