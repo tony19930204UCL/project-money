@@ -21,6 +21,7 @@ class TestOnlyMarketAdapter:
 
     def __init__(self, mode: str = "normal") -> None:
         self.mode = mode
+        self.offline_mode = True
         self.last_fetch_mode = f"TEST_ONLY_fixture_{mode}"
         self.last_error = None
 
