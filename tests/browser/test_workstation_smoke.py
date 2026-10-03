@@ -78,9 +78,12 @@ def test_workstation_named_view(
         assert root is not None and root.status == 200
         page.get_by_text("Project Money", exact=False).first.wait_for(state="visible", timeout=10000)
         assert page.locator("#root").count() == 1
-        assert any("/assets/" in item["url"] for item in evidence["responses"]), (
-            "FastAPI root did not load the built SPA asset bundle"
-        )
+        assert any(
+            item["url"].startswith(read_only_server.base_url + "/")
+            and item["url"].split("?", 1)[0].endswith(".js")
+            and "/static/app.js" not in item["url"]
+            for item in evidence["responses"]
+        ), "FastAPI root did not load the built SPA JavaScript bundle"
 
         legacy = page.goto(
             read_only_server.base_url + "/static/index.html",
