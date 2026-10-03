@@ -69,8 +69,9 @@ def _serve(tmp_path: Path, *, writable: bool = False):
             proc.stderr.close()
 
 
-@pytest.fixture
-def browser_server(tmp_path):
+@pytest.fixture(scope="module")
+def browser_server(tmp_path_factory):
+    tmp_path = tmp_path_factory.mktemp("browser-smoke-server")
     with _serve(tmp_path, writable=False) as server:
         yield server
 
