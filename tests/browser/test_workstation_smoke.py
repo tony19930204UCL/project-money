@@ -39,12 +39,12 @@ def test_workstation_page_viewport(
     api_trace: list[dict] = []
 
     page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
-    page.on(
-        "pageerror",
-        lambda exc: page_errors.append(
-            getattr(exc, "stack", None) or str(exc)
-        ),
-    )
+    def record_page_error(exc):
+        detail = getattr(exc, "stack", None) or str(exc)
+        page_errors.append(detail)
+        print(f"BROWSER_PAGE_ERROR: {detail}", flush=True)
+
+    page.on("pageerror", record_page_error)
     page.on(
         "response",
         lambda response: api_trace.append({
@@ -64,6 +64,7 @@ def test_workstation_page_viewport(
         assert health["broker_connected"] is False
 
         nav = page.get_by_role("button", name=label, exact=True)
+        nav.wait_for(state="visible", timeout=5_000)
         assert nav.count() == 1, f"missing actual SPA navigation control: {label}"
         nav.click()
         page.locator(f'[data-workspace-view="{slug}"]').wait_for(state="visible", timeout=5_000)
@@ -136,7 +137,9 @@ def test_smoke_negative_state_contracts(
     )
     page.goto(base_url, wait_until="domcontentloaded", timeout=15_000)
     try:
-        page.get_by_role("button", name="Markets", exact=True).click()
+        markets_nav = page.get_by_role("button", name="Markets", exact=True)
+        markets_nav.wait_for(state="visible", timeout=5_000)
+        markets_nav.click()
         view = page.locator('[data-workspace-view="markets"]')
         page.wait_for_function(
             """(state) =>
@@ -163,6 +166,9 @@ def test_smoke_is_get_only_without_operator_actions(browser_server, chromium):
         if "/api/" in req.url and req.method in {"POST", "PUT", "DELETE", "PATCH"} else None,
     )
     page.goto(base_url, wait_until="domcontentloaded", timeout=15_000)
+    page.get_by_role("button", name="Command Center", exact=True).wait_for(
+        state="visible", timeout=5_000
+    )
     for label, _ in PAGES:
         page.get_by_role("button", name=label, exact=True).click()
     context.close()
