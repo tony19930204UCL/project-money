@@ -13,7 +13,6 @@
 
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import App from './App';
-import { WorkstationShell } from './workstation-shell';
 import {
     ChildSetupNotice,
     SettingsLoadError,
@@ -60,7 +59,7 @@ function MainWindowGate() {
             />
         );
     }
-    return state === 'setup' ? <OnboardingSetup /> : <WorkstationShell />;
+    return state === 'setup' ? <OnboardingSetup /> : <App />;
 }
 
 function ChildWindowGate() {
