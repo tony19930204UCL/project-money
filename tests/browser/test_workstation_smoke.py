@@ -17,7 +17,7 @@ PAGES = [
     ("Risk", "risk"),
     ("Diagnostics", "diagnostics"),
 ]
-VIEWPORTS = [(1280, 720), (1536, 864)]
+VIEWPORTS = [(1280, 720), (1536, 864)]  # ABC C01/C02/C03/C09/B16 viewport corpus
 
 
 @pytest.mark.parametrize("label,slug", PAGES, ids=[item[1] for item in PAGES])
