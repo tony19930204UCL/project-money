@@ -14,8 +14,6 @@ jobs:
   browser:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    env:
-      BROWSER_EVIDENCE_DIR: ${{ runner.temp }}/project-money-browser-evidence
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,6 +33,8 @@ jobs:
       - name: Install Chromium
         run: python -m playwright install --with-deps chromium
       - name: Run browser smoke
+        env:
+          BROWSER_EVIDENCE_DIR: ${{ runner.temp }}/project-money-browser-evidence
         run: python -m pytest -q tests/browser/test_workstation_smoke.py
       - name: Upload sanitized browser evidence
         if: always()
