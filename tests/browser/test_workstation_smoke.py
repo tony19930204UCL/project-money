@@ -13,7 +13,7 @@ PAGES = [
     ("Paper Trade", "paper-trade", "/api/paper/orders", "ok", "TEST_ONLY_BROWSER_ORDER"),
     ("Portfolio", "portfolio", "/api/portfolio", "ok", "TEST_ONLY_BROWSER_ORDER"),
     ("Strategy Lab", "strategy-lab", "/api/strategies", "ok", "opening_range_breakout"),
-    ("Research", "research", "/api/research/inbox", "empty", "No records currently available."),
+    ("Research", "research", "/api/research/inbox", "ok", "TEST_ONLY_RESEARCH_FIXTURE"),
     ("Replay", "replay", "/api/paper/experiments", "ok", "TEST_ONLY_BROWSER_EXPERIMENT"),
     ("Risk", "risk", "/api/paper/risk-limits", "ok", "max_order_notional"),
     ("Diagnostics", "diagnostics", "/api/diagnostics", "ok", "TEST_ONLY_fixture_normal"),
@@ -22,10 +22,23 @@ VIEWPORTS = [(1280, 720), (1536, 864)]
 
 
 def _recorders(page):
-    console_errors: list[str] = []
+    console_errors: list[dict] = []
     page_errors: list[str] = []
     api_trace: list[dict] = []
-    page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+
+    def record_console(msg):
+        if msg.type != "error":
+            return
+        location = msg.location or {}
+        console_errors.append({
+            "type": msg.type,
+            "text": msg.text,
+            "url": location.get("url", ""),
+            "line_number": location.get("lineNumber"),
+            "column_number": location.get("columnNumber"),
+        })
+
+    page.on("console", record_console)
 
     def record_page_error(exc):
         detail = getattr(exc, "stack", None) or str(exc)
@@ -80,6 +93,15 @@ def _matching_responses(api_trace: list[dict], endpoint: str) -> list[dict]:
         item for item in api_trace
         if urlsplit(item["url"]).path == target and item["method"] == "GET"
     ]
+
+
+def _is_expected_chart_500_console(item: dict) -> bool:
+    return (
+        item.get("type") == "error"
+        and urlsplit(item.get("url", "")).path == "/api/market/bars/2330.TW"
+        and "Failed to load resource" in item.get("text", "")
+        and "500" in item.get("text", "")
+    )
 
 
 @pytest.mark.parametrize(
@@ -210,7 +232,15 @@ def test_smoke_negative_state_contracts(
             ]
             assert not unrelated
             assert not page_errors
-            assert not console_errors
+            if market_mode == "error":
+                expected_console_errors = [
+                    item for item in console_errors
+                    if _is_expected_chart_500_console(item)
+                ]
+                assert expected_console_errors, console_errors
+                assert len(expected_console_errors) == len(console_errors), console_errors
+            else:
+                assert not console_errors
         finally:
             _write_evidence(page, evidence_dir, stem, {
                 "market_mode": market_mode,
@@ -231,12 +261,25 @@ def test_smoke_is_get_only_without_operator_actions(
     context = chromium.new_context(viewport={"width": 1280, "height": 720})
     page = context.new_page()
     console_errors, page_errors, api_trace = _recorders(page)
+    issued_requests: list[dict] = []
     mutations: list[str] = []
-    page.on(
-        "request",
-        lambda req: mutations.append(f"{req.method} {req.url}")
-        if "/api/" in req.url and req.method in {"POST", "PUT", "DELETE", "PATCH"} else None,
-    )
+    visited_pages: list[str] = []
+    traversal_completed = False
+    orders_after = None
+    events_after = None
+    orders_equal = False
+    events_equal = False
+
+    def record_request(req):
+        if "/api/" not in req.url:
+            return
+        item = {"method": req.method, "url": req.url}
+        issued_requests.append(item)
+        if req.method in {"POST", "PUT", "DELETE", "PATCH"}:
+            mutations.append(f"{req.method} {req.url}")
+
+    page.on("request", record_request)
+
     orders_before = page.request.get(f"{base_url}/api/paper/orders").json()
     events_before = page.request.get(f"{base_url}/api/events?since_id=0&limit=1000").json()
     assert any(
@@ -253,25 +296,57 @@ def test_smoke_is_get_only_without_operator_actions(
             page.get_by_role("button", name=label, exact=True).click()
             view = _wait_workspace(page, slug, expected_state)
             _assert_core_content(view, label, expected_text)
-            assert _matching_responses(api_trace, endpoint), endpoint
+            completed = _matching_responses(api_trace, endpoint)
+            assert completed, endpoint
+            assert completed[-1]["status"] == 200
+            visited_pages.append(slug)
+
+        assert visited_pages == [item[1] for item in PAGES]
+        expected_paths = {item[2].split("?", 1)[0] for item in PAGES}
+        completed_paths = {
+            urlsplit(item["url"]).path
+            for item in api_trace
+            if item["method"] == "GET" and item["status"] == 200
+        }
+        assert expected_paths.issubset(completed_paths)
 
         orders_after = page.request.get(f"{base_url}/api/paper/orders").json()
         events_after = page.request.get(f"{base_url}/api/events?since_id=0&limit=1000").json()
-        assert orders_after == orders_before
-        assert events_after == events_before
+        orders_equal = orders_after == orders_before
+        events_equal = events_after == events_before
+
+        assert orders_equal
+        assert events_equal
         assert not mutations
         assert not page_errors
         assert not console_errors
+        assert issued_requests
+        assert all(item["method"] == "GET" for item in issued_requests)
         assert all(item["method"] == "GET" for item in api_trace)
+        traversal_completed = True
     finally:
         _write_evidence(page, evidence_dir, "get-only-full-traversal", {
+            "completed": traversal_completed,
+            "visited_pages": visited_pages,
+            "expected_pages": [item[1] for item in PAGES],
             "console_errors": console_errors,
             "page_errors": page_errors,
             "api_trace": api_trace,
+            "issued_requests": issued_requests,
             "mutations": mutations,
-            "orders_before": orders_before,
-            "orders_after": locals().get("orders_after"),
+            "orders_equal": orders_equal,
+            "events_equal": events_equal,
+            "orders_before_count": len(orders_before),
+            "orders_after_count": len(orders_after) if orders_after is not None else None,
             "events_before_count": len(events_before.get("events", [])),
-            "events_after_count": len(locals().get("events_after", {}).get("events", [])),
+            "events_after_count": (
+                len(events_after.get("events", []))
+                if events_after is not None
+                else None
+            ),
+            "orders_before": orders_before,
+            "orders_after": orders_after,
+            "events_before": events_before,
+            "events_after": events_after,
         })
         context.close()
