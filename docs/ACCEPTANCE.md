@@ -38,3 +38,10 @@ The original files and their acceptance evidence remain local. The export is not
 - B15 elapsed observation/maturity remains open. Passage of time, live market/source events and separately authorized deployment cannot be manufactured by passing unit tests.
 
 **This delivery is a tested private source baseline and contribution workflow. It is not complete original-system acceptance, main-service deployment or broker/live-money authorization.**
+
+
+## Portable process/stream regression coverage
+
+The source tree includes an offline integration test for B14/C09 that seeds only explicit `TEST_ONLY` data in a pytest temporary runtime, starts uvicorn in a real subprocess on loopback with an OS-assigned port, and exercises graceful restart, committed-state abrupt restart, HTTP event readback, SSE `Last-Event-ID` resume, WebSocket `since_id` resume, and read-only byte preservation. The test also checks that restart does not create duplicate `ORDER_FILLED` events or lose committed cash, positions, pending orders, experiment settings, or the test learning receipt.
+
+This engineering coverage does **not** close the original B14/C09 production/live-source acceptance. It does not prove deployed-process recovery, real broker/source correspondence, live stream reconnection across production infrastructure, desktop behavior, or any ABC live acceptance item. Main must perform those local/live checks separately under the existing acceptance boundary.
