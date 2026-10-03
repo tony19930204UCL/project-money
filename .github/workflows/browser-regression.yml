@@ -23,6 +23,13 @@ jobs:
       - name: Install frontend dependencies for local diagnosis export
         working-directory: vendor/shioaji-pro-app
         run: npm ci --ignore-scripts
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install Playwright browser for local diagnosis export
+        run: |
+          python -m pip install playwright==1.55.0
+          python -m playwright install chromium
       - name: Upload authorized branch source snapshot
         uses: actions/upload-artifact@v4
         with:
@@ -31,6 +38,13 @@ jobs:
             .
             !.git
             !vendor/shioaji-pro-app/dist
+          include-hidden-files: true
+          retention-days: 1
+      - name: Upload Playwright Chromium for local diagnosis
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-chromium-${{ github.sha }}
+          path: ~/.cache/ms-playwright
           include-hidden-files: true
           retention-days: 1
 
