@@ -163,7 +163,18 @@ def test_smoke_is_get_only_without_operator_actions(browser_server, chromium):
     page.get_by_role("button", name="Command Center", exact=True).wait_for(
         state="visible", timeout=5_000
     )
-    for label, _ in PAGES:
+    for label, slug in PAGES:
         page.get_by_role("button", name=label, exact=True).click()
+        page.locator(f'[data-workspace-view="{slug}"]').wait_for(
+            state="visible", timeout=5_000
+        )
+        page.wait_for_function(
+            """(slug) => {
+                const el = document.querySelector(`[data-workspace-view="${slug}"]`);
+                return el && el.getAttribute('data-api-status') !== 'loading';
+            }""",
+            arg=slug,
+            timeout=5_000,
+        )
     context.close()
     assert not mutations, f"observer navigation emitted mutation requests: {mutations}"
