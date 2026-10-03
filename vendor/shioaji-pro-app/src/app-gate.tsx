@@ -12,6 +12,7 @@
 // a running server, so no gate applies there.
 
 import { useEffect, useState, useSyncExternalStore } from 'react';
+import App from './App';
 import { WorkstationShell } from './workstation-shell';
 import {
     ChildSetupNotice,
@@ -69,7 +70,7 @@ function ChildWindowGate() {
         () => null,
     );
     if (isTauri && configured !== true) return <ChildSetupNotice />;
-    return <WorkstationShell />;
+    return <App />;
 }
 
 export function AppGate() {
