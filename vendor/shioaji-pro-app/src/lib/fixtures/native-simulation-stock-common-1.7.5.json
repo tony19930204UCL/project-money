@@ -1,0 +1,166 @@
+[
+  {
+    "state": "StockOrder",
+    "data": {
+      "StockOrder": {
+        "operation": {
+          "op_type": "New",
+          "op_code": "00",
+          "op_msg": ""
+        },
+        "order": {
+          "id": "fixture-1",
+          "seqno": "fixture-1",
+          "ordno": "fixture-2",
+          "account": {
+            "account_type": "S",
+            "person_id": "",
+            "broker_id": "fixture",
+            "account_id": "fixture",
+            "signed": true,
+            "username": ""
+          },
+          "action": "Buy",
+          "price": 0.0,
+          "quantity": 1,
+          "order_type": "IOC",
+          "price_type": "MKT",
+          "order_cond": "Cash",
+          "order_lot": "Common",
+          "custom_field": ""
+        },
+        "status": {
+          "id": "fixture-1",
+          "exchange_ts": 1789443930.753853,
+          "modified_price": 0.0,
+          "cancel_quantity": 0,
+          "order_quantity": 1,
+          "web_id": "137"
+        },
+        "contract": {
+          "exchange": "OTC",
+          "code": "3374",
+          "security_type": "STK",
+          "symbol": "",
+          "name": "",
+          "currency": "TWD"
+        }
+      }
+    }
+  },
+  {
+    "state": "StockDeal",
+    "data": {
+      "StockDeal": {
+        "trade_id": "fixture-1",
+        "seqno": "fixture-1",
+        "ordno": "fixture-2",
+        "exchange_seq": "fixture-3",
+        "action": "Buy",
+        "code": "3374",
+        "order_cond": "Cash",
+        "order_lot": "Common",
+        "price": 424.0,
+        "quantity": 1,
+        "ts": 1789443935.58239,
+        "broker_id": "fixture",
+        "account_id": "fixture",
+        "web_id": "137",
+        "custom_field": ""
+      }
+    }
+  },
+  {
+    "state": "StockOrder",
+    "data": {
+      "StockOrder": {
+        "operation": {
+          "op_type": "New",
+          "op_code": "00",
+          "op_msg": ""
+        },
+        "order": {
+          "id": "fixture-4",
+          "seqno": "fixture-4",
+          "ordno": "fixture-5",
+          "account": {
+            "account_type": "S",
+            "person_id": "",
+            "broker_id": "fixture",
+            "account_id": "fixture",
+            "signed": true,
+            "username": ""
+          },
+          "action": "Sell",
+          "price": 0.0,
+          "quantity": 2,
+          "order_type": "IOC",
+          "price_type": "MKT",
+          "order_cond": "Cash",
+          "order_lot": "Common",
+          "custom_field": ""
+        },
+        "status": {
+          "id": "fixture-4",
+          "exchange_ts": 1789443955.790342,
+          "modified_price": 0.0,
+          "cancel_quantity": 0,
+          "order_quantity": 2,
+          "web_id": "137"
+        },
+        "contract": {
+          "exchange": "OTC",
+          "code": "3374",
+          "security_type": "STK",
+          "symbol": "",
+          "name": "",
+          "currency": "TWD"
+        }
+      }
+    }
+  },
+  {
+    "state": "StockDeal",
+    "data": {
+      "StockDeal": {
+        "trade_id": "fixture-4",
+        "seqno": "fixture-4",
+        "ordno": "fixture-5",
+        "exchange_seq": "fixture-3",
+        "action": "Sell",
+        "code": "3374",
+        "order_cond": "Cash",
+        "order_lot": "Common",
+        "price": 424.0,
+        "quantity": 1,
+        "ts": 1789443965.225313,
+        "broker_id": "fixture",
+        "account_id": "fixture",
+        "web_id": "137",
+        "custom_field": ""
+      }
+    }
+  },
+  {
+    "state": "StockDeal",
+    "data": {
+      "StockDeal": {
+        "trade_id": "fixture-4",
+        "seqno": "fixture-4",
+        "ordno": "fixture-5",
+        "exchange_seq": "fixture-6",
+        "action": "Sell",
+        "code": "3374",
+        "order_cond": "Cash",
+        "order_lot": "Common",
+        "price": 424.0,
+        "quantity": 1,
+        "ts": 1789443969.746795,
+        "broker_id": "fixture",
+        "account_id": "fixture",
+        "web_id": "137",
+        "custom_field": ""
+      }
+    }
+  }
+]

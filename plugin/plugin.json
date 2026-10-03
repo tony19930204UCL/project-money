@@ -1,0 +1,53 @@
+{
+  "id": "cio-market-lab",
+  "name": "Project Money",
+  "version": "0.1.0",
+  "description": "Hermes Desktop plugin cockpit for deterministic replay, strategy research, paper execution, and bounded Jev browser analysis.",
+  "author": "Main CIO",
+  "plugin_type": "server_plugin",
+  "main": "register.py",
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8765,
+    "command": [
+      "python",
+      "-m",
+      "uvicorn",
+      "cio_market_lab.api.app:app",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8765"
+    ],
+    "health_endpoint": "/api/health",
+    "overview_endpoint": "/api/overview"
+  },
+  "ui": {
+    "entry": "ui/index.html",
+    "title": "Project Money",
+    "icon": "bar-chart-2",
+    "mode": "embedded_webview",
+    "watermark": "PAPER SIMULATION ONLY - NO BROKER INTEGRATION"
+  },
+  "capabilities": [
+    "market_overview",
+    "strategy_lab",
+    "paper_portfolio",
+    "jev_decision_bridge",
+    "hermes_chat_draft",
+    "research_inbox"
+  ],
+  "permissions": {
+    "network": "loopback_only",
+    "broker_access": false,
+    "chat_draft_generation": true,
+    "direct_message_send": false,
+    "filesystem": "workspace_scoped"
+  },
+  "safety": {
+    "simulation_only": true,
+    "paper_execution": true,
+    "broker_credentials": false,
+    "autonomous_capital_decisions": false
+  }
+}

@@ -1,0 +1,675 @@
+// src/lib/stream.ts — single combined SSE connection with auto-reconnect.
+// Quote state lives here (module-level store) so components can subscribe
+// via useSyncExternalStore without prop drilling.
+
+import { getApiBase, getStreamBase } from './runtime';
+import { apiPost } from './api';
+import type { SseBidAsk, SseIndexQuote, SseTick } from './types/market';
+import {
+    normalizeOrderEvent,
+    type OrderEventReport,
+} from './order-report';
+import { reportLedger } from './report-ledger';
+import { knownServerInfo } from './server-info-store';
+
+/** `stale`: the EventSource still looks open but no heartbeat or event
+ *  arrived within the watchdog window (e.g. the sidecar behind a proxy was
+ *  restarted). Treated like `down` everywhere: not LIVE, reconnecting. */
+export type StreamStatus = 'connecting' | 'live' | 'down' | 'stale';
+
+export interface ContractChangeEvent {
+    event_id: string;
+    action: string;
+    region: string;
+    security_type: string | null;
+    published_at: string;
+    base_changed: boolean;
+    info_changed: boolean;
+    info_scope: 'ALL' | 'SHARDS' | null;
+    info_shards: string[];
+}
+
+export interface QuoteState {
+    tick?: SseTick;
+    bidask?: SseBidAsk;
+    index?: SseIndexQuote;
+    lastDir: 1 | -1 | 0; // direction of last price move, for flash effects
+    seq: number; // bumps on every update (tick or bidask)
+    flashSeq: number; // bumps only on real trades (not simtrade/bidask)
+}
+
+type Listener = () => void;
+
+const quotes = new Map<string, QuoteState>();
+// continuous-month aliases (e.g. TXFR1): SSE events carry the resolved
+// contract code (e.g. TXFF6); map it back to the display code.
+const codeAlias = new Map<string, string>();
+
+export function registerCodeAlias(actual: string, alias: string) {
+    if (actual && alias && actual !== alias) {
+        codeAlias.set(actual, alias);
+    }
+}
+
+// resolve an actual contract code (e.g. TXFF6 from positions/orders) back
+// to the display alias the user is watching (e.g. TXFR1)
+export function getAliasFor(actualCode: string): string | undefined {
+    return codeAlias.get(actualCode);
+}
+let status: StreamStatus = 'connecting';
+let lastHeartbeat = 0;
+
+const quoteListeners = new Map<string, Set<Listener>>();
+const statusListeners = new Set<Listener>();
+const orderEventListeners = new Set<(ev: OrderEventReport) => void>();
+const tickTapeListeners = new Set<(tick: SseTick) => void>();
+const contractEventListeners = new Set<
+    (event: ContractChangeEvent) => void
+>();
+
+function emitContractChange(event: ContractChangeEvent) {
+    contractEventListeners.forEach((listener) => listener(event));
+}
+
+function emitFullContractRefresh(
+    action: 'RECONNECT' | 'MAINTENANCE',
+    eventId: string,
+    publishedAt: string,
+) {
+    emitContractChange({
+        event_id: eventId,
+        action,
+        region: 'TW',
+        security_type: null,
+        published_at: publishedAt,
+        base_changed: true,
+        info_changed: true,
+        info_scope: 'ALL',
+        info_shards: [],
+    });
+}
+
+// React 通知採 50ms 批次 — 開盤 tick 風暴（多面板×多檔訂閱）下逐筆
+// 同步喚醒所有 useSyncExternalStore 訂閱者，會被 React 19 判定成巢狀
+// 無限更新（Maximum update depth exceeded）而整頁炸掉。行情資料本身
+// （quotes map）仍逐筆即時寫入，只有「通知 React 重繪」合併節流。
+// 刻意用 setTimeout 而非 rAF：rAF 會夾進 React 併發渲染的 frame 節奏，
+// 啟動風暴時 flush 落在 render 中間仍會觸發巢狀更新告警。
+const QUOTE_FLUSH_MS = 50;
+const dirtyQuoteCodes = new Set<string>();
+let quoteFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function flushQuoteEmits() {
+    quoteFlushTimer = null;
+    const codes = Array.from(dirtyQuoteCodes);
+    dirtyQuoteCodes.clear();
+    for (const code of codes) {
+        quoteListeners.get(code)?.forEach((l) => {
+            // 單一 listener 拋錯不能中斷整批 flush — dirty set 已清空，
+            // 中斷會讓其他 code 的更新無聲丟失直到下一筆 tick
+            try {
+                l();
+            } catch (err) {
+                console.error('[stream] quote listener threw', err);
+            }
+        });
+    }
+}
+
+function emitQuote(code: string) {
+    dirtyQuoteCodes.add(code);
+    if (quoteFlushTimer === null) {
+        quoteFlushTimer = setTimeout(flushQuoteEmits, QUOTE_FLUSH_MS);
+    }
+}
+
+function setStatus(s: StreamStatus) {
+    if (status !== s) {
+        status = s;
+        statusListeners.forEach((l) => l());
+    }
+}
+
+function handleTick(raw: string) {
+    const tick = JSON.parse(raw) as SseTick;
+    if (tick.intraday_odd) return; // board shows regular-lot stream only
+    ingestTick(tick);
+    const alias = codeAlias.get(tick.code);
+    if (alias) ingestTick({ ...tick, code: alias });
+}
+
+function ingestTick(tick: SseTick) {
+    const prev = quotes.get(tick.code);
+    const prevClose = prev?.tick ? Number(prev.tick.close) : undefined;
+    const close = Number(tick.close);
+    const lastDir: QuoteState['lastDir'] =
+        prevClose === undefined || close === prevClose
+            ? (prev?.lastDir ?? 0)
+            : close > prevClose
+              ? 1
+              : -1;
+    // flash only on real deals — simtrade (試撮) updates must not blink
+    const isRealTrade = !tick.simtrade && tick.volume > 0;
+    quotes.set(tick.code, {
+        tick,
+        bidask: prev?.bidask,
+        index: prev?.index,
+        lastDir,
+        seq: (prev?.seq ?? 0) + 1,
+        flashSeq: (prev?.flashSeq ?? 0) + (isRealTrade ? 1 : 0),
+    });
+    emitQuote(tick.code);
+    if (isRealTrade) {
+        tickTapeListeners.forEach((l) => l(tick));
+    }
+}
+
+function handleBidAsk(raw: string) {
+    const bidask = JSON.parse(raw) as SseBidAsk;
+    if (bidask.intraday_odd) return;
+    ingestBidAsk(bidask);
+    const alias = codeAlias.get(bidask.code);
+    if (alias) ingestBidAsk({ ...bidask, code: alias });
+}
+
+function ingestBidAsk(bidask: SseBidAsk) {
+    const prev = quotes.get(bidask.code);
+    quotes.set(bidask.code, {
+        tick: prev?.tick,
+        bidask,
+        index: prev?.index,
+        lastDir: prev?.lastDir ?? 0,
+        seq: (prev?.seq ?? 0) + 1,
+        flashSeq: prev?.flashSeq ?? 0,
+    });
+    emitQuote(bidask.code);
+}
+
+const INDEX_UPSTREAM_ALIASES: Record<string, string> = {
+    limit_up_count: 'RaiseStop',
+    raise_count: 'Raise',
+    flat_count: 'Flat',
+    fall_count: 'Fall',
+    limit_down_count: 'FallStop',
+};
+
+function indexField(
+    raw: Record<string, unknown>,
+    name: string,
+): unknown {
+    const pascal = name
+        .split('_')
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join('');
+    return raw[name] ?? raw[pascal] ?? raw[INDEX_UPSTREAM_ALIASES[name] ?? ''];
+}
+
+function optionalString(raw: Record<string, unknown>, name: string) {
+    const value = indexField(raw, name);
+    return value === undefined || value === null ? undefined : String(value);
+}
+
+function optionalNumber(raw: Record<string, unknown>, name: string) {
+    const value = indexField(raw, name);
+    if (value === undefined || value === null) return undefined;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : undefined;
+}
+
+// Shioaji Server 1.7 preserves the upstream QuoteIdxV1 field names in SSE
+// (Date, Time, Reference, Close...). Normalize once at the stream boundary so
+// the rest of the frontend can use the same lower-case shape as tick events.
+export function normalizeIndexQuote(raw: string): SseIndexQuote {
+    const source = JSON.parse(raw) as Record<string, unknown>;
+    return {
+        code: String(indexField(source, 'code') ?? ''),
+        exchange: String(indexField(source, 'exchange') ?? ''),
+        date: String(indexField(source, 'date') ?? ''),
+        time: String(indexField(source, 'time') ?? ''),
+        datetime: optionalString(source, 'datetime'),
+        reference: String(indexField(source, 'reference') ?? ''),
+        open: String(indexField(source, 'open') ?? ''),
+        high: String(indexField(source, 'high') ?? ''),
+        low: String(indexField(source, 'low') ?? ''),
+        close: String(indexField(source, 'close') ?? ''),
+        amount_sum: optionalString(source, 'amount_sum'),
+        amount: optionalString(source, 'amount'),
+        volume: optionalNumber(source, 'volume'),
+        vol_sum: optionalNumber(source, 'vol_sum'),
+        count: optionalNumber(source, 'count'),
+        count_sum: optionalNumber(source, 'count_sum'),
+        no_trade: optionalNumber(source, 'no_trade'),
+        limit_up_count: optionalNumber(source, 'limit_up_count'),
+        raise_count: optionalNumber(source, 'raise_count'),
+        flat_count: optionalNumber(source, 'flat_count'),
+        fall_count: optionalNumber(source, 'fall_count'),
+        limit_down_count: optionalNumber(source, 'limit_down_count'),
+        estimate_amount_sum: optionalString(source, 'estimate_amount_sum'),
+    };
+}
+
+function handleIndexQuote(raw: string) {
+    const index = normalizeIndexQuote(raw);
+    if (!index.code || !Number.isFinite(Number(index.close))) return;
+    const prev = quotes.get(index.code);
+    const previousClose = prev?.index ? Number(prev.index.close) : undefined;
+    const close = Number(index.close);
+    const moved = previousClose !== undefined && close !== previousClose;
+    const lastDir: QuoteState['lastDir'] =
+        previousClose === undefined || close === previousClose
+            ? (prev?.lastDir ?? 0)
+            : close > previousClose
+              ? 1
+              : -1;
+    quotes.set(index.code, {
+        tick: prev?.tick,
+        bidask: prev?.bidask,
+        index,
+        lastDir,
+        seq: (prev?.seq ?? 0) + 1,
+        flashSeq: (prev?.flashSeq ?? 0) + (moved ? 1 : 0),
+    });
+    emitQuote(index.code);
+}
+
+// registry of every quote subscription made this session — replayed after
+// the SSE connection recovers (covers shioaji-server restarts)
+const subscriptionRegistry = new Map<string, Record<string, unknown>>();
+const capabilityRegistry = new Map<
+    string,
+    { path: string; body: Record<string, unknown> }
+>();
+
+export function registerSubscription(body: {
+    security_type: string | null;
+    exchange: string | null;
+    code: string;
+    target_code: string | null;
+    quote_type: string;
+    intraday_odd: boolean;
+}) {
+    subscriptionRegistry.set(`${body.code}:${body.quote_type}`, body);
+}
+
+export function unregisterSubscription(code: string, quoteType: string) {
+    subscriptionRegistry.delete(`${code}:${quoteType}`);
+}
+
+// 巢狀 body 的訂閱（如 managed 組合合約 {contract:{legs,...}}）— key 用
+// 組合 code（同時是 SSE 事件身分），body 原樣重播
+export function registerSubscriptionRaw(
+    code: string,
+    quoteType: string,
+    body: Record<string, unknown>,
+) {
+    subscriptionRegistry.set(`${code}:${quoteType}`, body);
+}
+
+export function registerCapabilitySubscription(
+    key: string,
+    path: string,
+    body: Record<string, unknown>,
+) {
+    capabilityRegistry.set(key, { path, body });
+}
+
+export function unregisterCapabilitySubscription(key: string) {
+    capabilityRegistry.delete(key);
+}
+
+let resubscribeRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Replay after a reconnect is paced: Shioaji documents 50 subscriptions per
+// 5 s. A restart/stale reconnect (now also driven by the heartbeat watchdog)
+// must not burst the whole registry at once. One replay at a time.
+export const REPLAY_BATCH = 40;
+export const REPLAY_WINDOW_MS = 5000;
+let replaying: Promise<void> | null = null;
+let replayAgain = false;
+function resubscribeAll(): Promise<void> {
+    if (replaying) { replayAgain = true; return replaying; }
+    replaying = replayOnce().finally(() => {
+        replaying = null;
+        if (replayAgain) { replayAgain = false; void resubscribeAll(); }
+    });
+    return replaying;
+}
+async function replayOnce() {
+    let failed = false;
+    let sent = 0;
+    let windowStart = Date.now();
+    const pace = async () => {
+        if (sent > 0 && sent % REPLAY_BATCH === 0) {
+            const wait = windowStart + REPLAY_WINDOW_MS - Date.now();
+            if (wait > 0) await new Promise(r => setTimeout(r, wait));
+            windowStart = Date.now();
+        }
+        sent++;
+    };
+    for (const body of [...subscriptionRegistry.values()]) {
+        await pace();
+        try {
+            const response = await apiPost<{ success?: boolean; message?: string }>(
+                '/api/v1/stream/subscribe',
+                body,
+            );
+            if (response.success === false) {
+                throw new Error(response.message || '行情重新訂閱失敗');
+            }
+        } catch {
+            failed = true;
+        }
+    }
+    for (const { path, body } of [...capabilityRegistry.values()]) {
+        await pace();
+        try {
+            const response = await apiPost<{ success: boolean; message: string }>(
+                `/api/v1/stream/subscribe/${path}`,
+                body,
+            );
+            if (!response.success) throw new Error(response.message);
+        } catch {
+            failed = true;
+        }
+    }
+    if (failed && !resubscribeRetryTimer) {
+        resubscribeRetryTimer = setTimeout(() => {
+            resubscribeRetryTimer = null;
+            void resubscribeAll();
+        }, 5000);
+    }
+}
+
+let es: EventSource | null = null;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let retryDelay = 1000;
+let everDown = false;
+
+// Extra named-event listeners (enriched index, scanner, …) share the ONE
+// aggregate SSE connection. Since shioaji 1.7.2 the aggregate stream
+// carries every event family, so consumers register here instead of
+// opening dedicated per-channel EventSources (six HTTP/1.1 streams used
+// to exhaust the browser's per-origin connection pool).
+const namedListeners = new Map<string, Set<(raw: string) => void>>();
+
+function attachNamed(source: EventSource, name: string) {
+    source.addEventListener(name, (event) => {
+        markActivity();
+        const set = namedListeners.get(name);
+        set?.forEach((listener) => listener((event as MessageEvent).data));
+    });
+}
+
+export function onStreamEvent(
+    name: string,
+    listener: (raw: string) => void,
+) {
+    let set = namedListeners.get(name);
+    if (!set) {
+        set = new Set();
+        namedListeners.set(name, set);
+        if (es) attachNamed(es, name);
+    }
+    set.add(listener);
+    return () => {
+        namedListeners.get(name)?.delete(listener);
+    };
+}
+
+// ---- heartbeat watchdog ----
+// The sidecar heartbeats every 30 s (1.7.5/1.7.6; docs/design/debug-monitor.md).
+// A proxied EventSource can stay "open" after the sidecar behind it died, so
+// silence longer than two periods plus slack marks the stream STALE, closes
+// it and reconnects through the normal backoff. Local only: the watchdog never
+// issues any HTTP request itself.
+export const HEARTBEAT_PERIOD_MS = 30_000;
+export const STALE_AFTER_MS = 2 * HEARTBEAT_PERIOD_MS + 15_000;
+export const WATCHDOG_TICK_MS = 5000;
+// A check this late means the WebView/tab was suspended: queued events may
+// not have been delivered yet, so allow one heartbeat period before STALE.
+const RESUME_GAP_MS = 15_000;
+// Connections that open but never deliver a heartbeat (e.g. a buffering
+// proxy) keep escalating the retry delay instead of resetting to 1 s.
+const SILENT_RETRY_MAX_MS = 5 * 60_000;
+let lastActivity = 0;
+let lastCheckAt = 0;
+let graceUntil = 0;
+let heartbeatSinceOpen = false;
+let silentConnections = 0;
+let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+function markActivity() {
+    lastActivity = Date.now();
+}
+const NORMAL_RETRY_MAX_MS = 15_000;
+/** `cap` bounds this and the following delay: connection errors use the
+ *  normal backoff; only a connection that opened but never delivered a
+ *  heartbeat may escalate beyond it. */
+function scheduleReconnect(cap = NORMAL_RETRY_MAX_MS) {
+    everDown = true;
+    es?.close();
+    es = null;
+    if (retryTimer) clearTimeout(retryTimer);
+    const delay = Math.min(retryDelay, cap);
+    retryTimer = setTimeout(connect, delay);
+    retryDelay = Math.min(delay * 2, cap);
+}
+let lastCheckGap = 0;
+function checkWatchdog() {
+    const now = Date.now();
+    const gap = lastCheckAt > 0 ? now - lastCheckAt : 0;
+    // One grace per resume: only when this check is late but the previous one
+    // was on time and the stream was not already silent then. A throttled
+    // background timer (every 20–60 s) is late on every check and must not
+    // renew the grace forever.
+    const staleAtPreviousCheck = lastActivity > 0 && lastCheckAt - lastActivity > STALE_AFTER_MS;
+    if (gap > RESUME_GAP_MS && lastCheckGap <= RESUME_GAP_MS && !staleAtPreviousCheck && now >= graceUntil) {
+        graceUntil = now + HEARTBEAT_PERIOD_MS;
+    }
+    lastCheckGap = gap;
+    lastCheckAt = now;
+    if (!es || status !== 'live' || !lastActivity) return;
+    if (now < graceUntil || now - lastActivity <= STALE_AFTER_MS) return;
+    const silent = !heartbeatSinceOpen;
+    if (silent) silentConnections++;
+    setStatus('stale');
+    scheduleReconnect(silent ? SILENT_RETRY_MAX_MS : NORMAL_RETRY_MAX_MS);
+}
+/** Watchdog diagnostics for Debug: consecutive connections that opened but
+ *  went stale without any heartbeat, and the current retry delay. */
+export function getStreamWatchdog() {
+    return { silentConnections, retryDelayMs: retryDelay, staleAfterMs: STALE_AFTER_MS };
+}
+
+function listen(source: EventSource, name: string, handler: (event: MessageEvent) => void) {
+    source.addEventListener(name, (event) => {
+        markActivity();
+        handler(event as MessageEvent);
+    });
+}
+
+function connect() {
+    if (es) es.close();
+    // Keep STALE visible until the reconnect actually opens.
+    setStatus(status === 'stale' ? 'stale' : 'connecting');
+    // region filters contract_event only; other families are unfiltered
+    es = new EventSource(`${getStreamBase()}/api/v1/stream/data?region=TW`);
+
+    es.onopen = () => {
+        // A connection only proves healthy once a heartbeat arrives; until
+        // then keep the backoff so silent connections do not loop every ~80 s.
+        if (silentConnections === 0) retryDelay = 1000;
+        heartbeatSinceOpen = false;
+        markActivity();
+        setStatus('live');
+        // SSE does not replay contract changes missed while disconnected —
+        // re-query on every successful connection so a daily update cannot
+        // stay stale.
+        const now = new Date().toISOString();
+        emitFullContractRefresh('RECONNECT', `reconnect:${now}`, now);
+        if (everDown) {
+            everDown = false;
+            void resubscribeAll(); // server may have restarted — replay subs
+        }
+    };
+
+    for (const ev of ['tick_stk', 'tick_fop']) {
+        listen(es, ev, (e) => handleTick((e as MessageEvent).data));
+    }
+    for (const ev of ['bidask_stk', 'bidask_fop']) {
+        listen(es, ev, (e) => handleBidAsk((e as MessageEvent).data));
+    }
+    listen(es, 'quote_idx', (e) =>
+        handleIndexQuote((e as MessageEvent).data),
+    );
+    listen(es, 'order_event', (e) => {
+        // the server wraps the body one level under its variant name
+        // ({state, data:{FuturesOrder:{...}}}) — normalize before fan-out
+        const report = normalizeOrderEvent(
+            JSON.parse((e as MessageEvent).data),
+        );
+        if (!report) return;
+        // Shioaji 1.7.6 delivers every decoded receipt, repeats included.
+        // The same complete event_id in the same environment is one report:
+        // drop it before any toast, projection or strategy sees it twice.
+        const admitted = reportLedger.admit(
+            { base: getApiBase(), simulation: knownServerInfo()?.simulation },
+            report.eventId,
+            report.kind,
+        );
+        if (admitted.duplicate) return;
+        orderEventListeners.forEach((l) => l(report));
+    });
+    listen(es, 'contract_event', (event) => {
+        const change = JSON.parse(
+            (event as MessageEvent).data,
+        ) as ContractChangeEvent;
+        emitContractChange(change);
+    });
+    listen(es, 'heartbeat', () => {
+        lastHeartbeat = Date.now();
+        heartbeatSinceOpen = true;
+        silentConnections = 0;
+        retryDelay = 1000;
+        setStatus('live');
+    });
+    for (const name of namedListeners.keys()) {
+        attachNamed(es, name);
+    }
+
+    es.onerror = () => {
+        setStatus('down');
+        // A refused/failed connection is a normal outage (e.g. sidecar
+        // restarting): normal backoff, even after silent connections.
+        scheduleReconnect(NORMAL_RETRY_MAX_MS);
+    };
+}
+
+// The shioaji server's daily maintenance (~08:22 TW) rebuilds its upstream
+// client and silently drops every market-data subscription while our SSE
+// connection stays up — watch last_maintenance and resubscribe when it moves.
+let lastMaintenance: string | null = null;
+
+async function watchMaintenance() {
+    try {
+        const res = await fetch(`${getApiBase()}/api/v1/health`);
+        if (!res.ok) return;
+        const h = (await res.json()) as { last_maintenance?: string };
+        const lm = h.last_maintenance ?? null;
+        if (lastMaintenance !== null && lm !== lastMaintenance) {
+            await resubscribeAll();
+            // Contract events are not replayed. The server can rebuild its
+            // client while this EventSource reconnects, so use maintenance as
+            // a compensating signal and re-query cached Contract V2 info.
+            emitFullContractRefresh(
+                'MAINTENANCE',
+                `maintenance:${lm ?? Date.now()}`,
+                lm ?? new Date().toISOString(),
+            );
+        }
+        lastMaintenance = lm;
+    } catch {
+        // server unreachable — SSE reconnect path handles resubscription
+    }
+}
+
+let started = false;
+export function ensureStream() {
+    if (!started) {
+        started = true;
+        connect();
+        lastCheckAt = Date.now();
+        watchdogTimer = setInterval(checkWatchdog, WATCHDOG_TICK_MS);
+        void watchMaintenance();
+        setInterval(watchMaintenance, 60000);
+    }
+}
+
+// ---- store API (for useSyncExternalStore) ----
+
+export function subscribeQuoteStore(code: string, listener: Listener) {
+    let set = quoteListeners.get(code);
+    if (!set) {
+        set = new Set();
+        quoteListeners.set(code, set);
+    }
+    set.add(listener);
+    return () => {
+        set.delete(listener);
+    };
+}
+
+export function getQuote(code: string): QuoteState | undefined {
+    return quotes.get(code);
+}
+
+export function subscribeStatusStore(listener: Listener) {
+    statusListeners.add(listener);
+    return () => {
+        statusListeners.delete(listener);
+    };
+}
+
+export function getStreamStatus(): StreamStatus {
+    return status;
+}
+
+export function getLastHeartbeat(): number {
+    return lastHeartbeat;
+}
+
+export function getSubscriptionCount(): number {
+    return subscriptionRegistry.size;
+}
+
+export function onOrderEvent(listener: (ev: OrderEventReport) => void) {
+    orderEventListeners.add(listener);
+    return () => {
+        orderEventListeners.delete(listener);
+    };
+}
+
+export function onAnyTick(listener: (tick: SseTick) => void) {
+    tickTapeListeners.add(listener);
+    return () => {
+        tickTapeListeners.delete(listener);
+    };
+}
+
+export function onContractEvent(
+    listener: (event: ContractChangeEvent) => void,
+) {
+    contractEventListeners.add(listener);
+    return () => {
+        contractEventListeners.delete(listener);
+    };
+}
+
+// 模組層有 SSE 連線、計時器與 listener 註冊 — HMR 熱換會疊出第二條
+// SSE 連線與殭屍 listener（每 tick 重複灌、CPU 飆高）。一變更就整頁
+// 重載，開發期不會再累積疊層。
+if (import.meta.hot) {
+    import.meta.hot.dispose(() => { if (watchdogTimer) clearInterval(watchdogTimer); });
+    import.meta.hot.accept(() => {
+        import.meta.hot?.invalidate();
+    });
+}

@@ -1,0 +1,470 @@
+[
+  {
+    "state": "FuturesOrder",
+    "data": {
+      "FuturesOrder": {
+        "operation": {
+          "op_type": "New",
+          "op_code": "00",
+          "op_msg": ""
+        },
+        "order": {
+          "id": "fixture-1",
+          "seqno": "fixture-1",
+          "ordno": "fixture-2",
+          "account": {
+            "account_type": "F",
+            "person_id": "",
+            "broker_id": "fixture",
+            "account_id": "fixture",
+            "signed": true,
+            "username": ""
+          },
+          "action": "Buy",
+          "price": 45000.0,
+          "quantity": 2,
+          "order_type": "ROD",
+          "price_type": "LMT",
+          "market_type": "Day",
+          "oc_type": "New",
+          "subaccount": "",
+          "combo": false
+        },
+        "status": {
+          "id": "fixture-1",
+          "exchange_ts": 1789441926.099428,
+          "modified_price": 0.0,
+          "cancel_quantity": 0,
+          "order_quantity": 2,
+          "web_id": "Z"
+        },
+        "contract": {
+          "security_type": "FUT",
+          "code": "MXFI6",
+          "exchange": "TAIFEX",
+          "delivery_month": "",
+          "full_code": "",
+          "delivery_date": "",
+          "strike_price": 0.0,
+          "option_right": "Future"
+        }
+      }
+    }
+  },
+  {
+    "state": "FuturesOrder",
+    "data": {
+      "FuturesOrder": {
+        "operation": {
+          "op_type": "UpdatePrice",
+          "op_code": "00",
+          "op_msg": ""
+        },
+        "order": {
+          "id": "fixture-1",
+          "seqno": "fixture-1",
+          "ordno": "fixture-2",
+          "account": {
+            "account_type": "F",
+            "person_id": "",
+            "broker_id": "fixture",
+            "account_id": "fixture",
+            "signed": true,
+            "username": ""
+          },
+          "action": "Buy",
+          "price": 45000.0,
+          "quantity": 2,
+          "order_type": "ROD",
+          "price_type": "LMT",
+          "market_type": "Day",
+          "oc_type": "New",
+          "subaccount": "",
+          "combo": false
+        },
+        "status": {
+          "id": "fixture-1",
+          "exchange_ts": 1789442666.407032,
+          "modified_price": 44990.0,
+          "cancel_quantity": 0,
+          "order_quantity": 2,
+          "web_id": "Z"
+        },
+        "contract": {
+          "security_type": "FUT",
+          "code": "MXFI6",
+          "exchange": "TAIFEX",
+          "delivery_month": "",
+          "full_code": "",
+          "delivery_date": "",
+          "strike_price": 0.0,
+          "option_right": "Future"
+        }
+      }
+    }
+  },
+  {
+    "state": "FuturesOrder",
+    "data": {
+      "FuturesOrder": {
+        "operation": {
+          "op_type": "UpdateQty",
+          "op_code": "00",
+          "op_msg": ""
+        },
+        "order": {
+          "id": "fixture-1",
+          "seqno": "fixture-1",
+          "ordno": "fixture-2",
+          "account": {
+            "account_type": "F",
+            "person_id": "",
+            "broker_id": "fixture",
+            "account_id": "fixture",
+            "signed": true,
+            "username": ""
+          },
+          "action": "Buy",
+          "price": 45000.0,
+          "quantity": 2,
+          "order_type": "ROD",
+          "price_type": "LMT",
+          "market_type": "Day",
+          "oc_type": "New",
+          "subaccount": "",
+          "combo": false
+        },
+        "status": {
+          "id": "fixture-1",
+          "exchange_ts": 1789442710.885159,
+          "modified_price": 44990.0,
+          "cancel_quantity": 1,
+          "order_quantity": 1,
+          "web_id": "Z"
+        },
+        "contract": {
+          "security_type": "FUT",
+          "code": "MXFI6",
+          "exchange": "TAIFEX",
+          "delivery_month": "",
+          "full_code": "",
+          "delivery_date": "",
+          "strike_price": 0.0,
+          "option_right": "Future"
+        }
+      }
+    }
+  },
+  {
+    "state": "FuturesOrder",
+    "data": {
+      "FuturesOrder": {
+        "operation": {
+          "op_type": "New",
+          "op_code": "00",
+          "op_msg": ""
+        },
+        "order": {
+          "id": "fixture-3",
+          "seqno": "fixture-3",
+          "ordno": "fixture-4",
+          "account": {
+            "account_type": "F",
+            "person_id": "",
+            "broker_id": "fixture",
+            "account_id": "fixture",
+            "signed": true,
+            "username": ""
+          },
+          "action": "Buy",
+          "price": 44980.0,
+          "quantity": 3,
+          "order_type": "ROD",
+          "price_type": "LMT",
+          "market_type": "Day",
+          "oc_type": "New",
+          "subaccount": "",
+          "combo": false
+        },
+        "status": {
+          "id": "fixture-3",
+          "exchange_ts": 1789442948.997419,
+          "modified_price": 0.0,
+          "cancel_quantity": 0,
+          "order_quantity": 3,
+          "web_id": "Z"
+        },
+        "contract": {
+          "security_type": "FUT",
+          "code": "MXFI6",
+          "exchange": "TAIFEX",
+          "delivery_month": "",
+          "full_code": "",
+          "delivery_date": "",
+          "strike_price": 0.0,
+          "option_right": "Future"
+        }
+      }
+    }
+  },
+  {
+    "state": "FuturesOrder",
+    "data": {
+      "FuturesOrder": {
+        "operation": {
+          "op_type": "UpdateQty",
+          "op_code": "00",
+          "op_msg": ""
+        },
+        "order": {
+          "id": "fixture-3",
+          "seqno": "fixture-3",
+          "ordno": "fixture-4",
+          "account": {
+            "account_type": "F",
+            "person_id": "",
+            "broker_id": "fixture",
+            "account_id": "fixture",
+            "signed": true,
+            "username": ""
+          },
+          "action": "Buy",
+          "price": 44980.0,
+          "quantity": 3,
+          "order_type": "ROD",
+          "price_type": "LMT",
+          "market_type": "Day",
+          "oc_type": "New",
+          "subaccount": "",
+          "combo": false
+        },
+        "status": {
+          "id": "fixture-3",
+          "exchange_ts": 1789443094.789567,
+          "modified_price": 0.0,
+          "cancel_quantity": 2,
+          "order_quantity": 1,
+          "web_id": "Z"
+        },
+        "contract": {
+          "security_type": "FUT",
+          "code": "MXFI6",
+          "exchange": "TAIFEX",
+          "delivery_month": "",
+          "full_code": "",
+          "delivery_date": "",
+          "strike_price": 0.0,
+          "option_right": "Future"
+        }
+      }
+    }
+  },
+  {
+    "state": "FuturesOrder",
+    "data": {
+      "FuturesOrder": {
+        "operation": {
+          "op_type": "Cancel",
+          "op_code": "00",
+          "op_msg": ""
+        },
+        "order": {
+          "id": "fixture-1",
+          "seqno": "fixture-1",
+          "ordno": "fixture-2",
+          "account": {
+            "account_type": "F",
+            "person_id": "",
+            "broker_id": "fixture",
+            "account_id": "fixture",
+            "signed": true,
+            "username": ""
+          },
+          "action": "Buy",
+          "price": 45000.0,
+          "quantity": 2,
+          "order_type": "ROD",
+          "price_type": "LMT",
+          "market_type": "Day",
+          "oc_type": "New",
+          "subaccount": "",
+          "combo": false
+        },
+        "status": {
+          "id": "fixture-1",
+          "exchange_ts": 1789443135.482514,
+          "modified_price": 44990.0,
+          "cancel_quantity": 1,
+          "order_quantity": 0,
+          "web_id": "Z"
+        },
+        "contract": {
+          "security_type": "FUT",
+          "code": "MXFI6",
+          "exchange": "TAIFEX",
+          "delivery_month": "",
+          "full_code": "",
+          "delivery_date": "",
+          "strike_price": 0.0,
+          "option_right": "Future"
+        }
+      }
+    }
+  },
+  {
+    "state": "FuturesOrder",
+    "data": {
+      "FuturesOrder": {
+        "operation": {
+          "op_type": "New",
+          "op_code": "00",
+          "op_msg": ""
+        },
+        "order": {
+          "id": "fixture-5",
+          "seqno": "fixture-5",
+          "ordno": "fixture-6",
+          "account": {
+            "account_type": "F",
+            "person_id": "",
+            "broker_id": "fixture",
+            "account_id": "fixture",
+            "signed": true,
+            "username": ""
+          },
+          "action": "Buy",
+          "price": 0.0,
+          "quantity": 1,
+          "order_type": "IOC",
+          "price_type": "MKT",
+          "market_type": "Day",
+          "oc_type": "New",
+          "subaccount": "",
+          "combo": false
+        },
+        "status": {
+          "id": "fixture-5",
+          "exchange_ts": 1789443209.713384,
+          "modified_price": 0.0,
+          "cancel_quantity": 0,
+          "order_quantity": 1,
+          "web_id": "Z"
+        },
+        "contract": {
+          "security_type": "FUT",
+          "code": "TXFI6",
+          "exchange": "TAIFEX",
+          "delivery_month": "",
+          "full_code": "",
+          "delivery_date": "",
+          "strike_price": 0.0,
+          "option_right": "Future"
+        }
+      }
+    }
+  },
+  {
+    "state": "FuturesDeal",
+    "data": {
+      "FuturesDeal": {
+        "trade_id": "fixture-5",
+        "seqno": "fixture-5",
+        "ordno": "fixture-6",
+        "exchange_seq": "fixture-7",
+        "action": "Buy",
+        "code": "TXFI6",
+        "price": 45762.0,
+        "quantity": 1,
+        "subaccount": "",
+        "security_type": "FUT",
+        "delivery_month": "",
+        "ts": 1789443210.300394,
+        "broker_id": "fixture",
+        "account_id": "fixture",
+        "full_code": "",
+        "strike_price": 0.0,
+        "option_right": "Future",
+        "market_type": "Day",
+        "combo": false
+      }
+    }
+  },
+  {
+    "state": "FuturesOrder",
+    "data": {
+      "FuturesOrder": {
+        "operation": {
+          "op_type": "New",
+          "op_code": "00",
+          "op_msg": ""
+        },
+        "order": {
+          "id": "fixture-8",
+          "seqno": "fixture-8",
+          "ordno": "fixture-9",
+          "account": {
+            "account_type": "F",
+            "person_id": "",
+            "broker_id": "fixture",
+            "account_id": "fixture",
+            "signed": true,
+            "username": ""
+          },
+          "action": "Sell",
+          "price": 0.0,
+          "quantity": 1,
+          "order_type": "IOC",
+          "price_type": "MKT",
+          "market_type": "Day",
+          "oc_type": "Cover",
+          "subaccount": "",
+          "combo": false
+        },
+        "status": {
+          "id": "fixture-8",
+          "exchange_ts": 1789443241.720897,
+          "modified_price": 0.0,
+          "cancel_quantity": 0,
+          "order_quantity": 1,
+          "web_id": "Z"
+        },
+        "contract": {
+          "security_type": "FUT",
+          "code": "TXFI6",
+          "exchange": "TAIFEX",
+          "delivery_month": "",
+          "full_code": "",
+          "delivery_date": "",
+          "strike_price": 0.0,
+          "option_right": "Future"
+        }
+      }
+    }
+  },
+  {
+    "state": "FuturesDeal",
+    "data": {
+      "FuturesDeal": {
+        "trade_id": "fixture-8",
+        "seqno": "fixture-8",
+        "ordno": "fixture-9",
+        "exchange_seq": "fixture-7",
+        "action": "Sell",
+        "code": "TXFI6",
+        "price": 45753.0,
+        "quantity": 1,
+        "subaccount": "",
+        "security_type": "FUT",
+        "delivery_month": "",
+        "ts": 1789443241.871705,
+        "broker_id": "fixture",
+        "account_id": "fixture",
+        "full_code": "",
+        "strike_price": 0.0,
+        "option_right": "Future",
+        "market_type": "Day",
+        "combo": false
+      }
+    }
+  }
+]

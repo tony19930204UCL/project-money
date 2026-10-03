@@ -1,0 +1,4 @@
+lookback_bars: 10
+contraction_threshold: 0.7
+rvol_threshold: 1.2
+risk_per_trade_pct: 0.02

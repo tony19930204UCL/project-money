@@ -1,0 +1,54 @@
+[
+  {
+    "state": "FuturesOrder",
+    "data": {
+      "FuturesOrder": {
+        "operation": {
+          "op_type": "New",
+          "op_code": "00",
+          "op_msg": ""
+        },
+        "order": {
+          "id": "fixture-1",
+          "seqno": "fixture-1",
+          "ordno": "fixture-2",
+          "account": {
+            "account_type": "F",
+            "person_id": "",
+            "broker_id": "fixture",
+            "account_id": "fixture",
+            "signed": true,
+            "username": ""
+          },
+          "action": "Buy",
+          "price": 45000.0,
+          "quantity": 2,
+          "order_type": "ROD",
+          "price_type": "LMT",
+          "market_type": "Day",
+          "oc_type": "New",
+          "subaccount": "",
+          "combo": false
+        },
+        "status": {
+          "id": "fixture-1",
+          "exchange_ts": 1789441926.099428,
+          "modified_price": 0.0,
+          "cancel_quantity": 0,
+          "order_quantity": 2,
+          "web_id": "Z"
+        },
+        "contract": {
+          "security_type": "FUT",
+          "code": "MXFI6",
+          "exchange": "TAIFEX",
+          "delivery_month": "",
+          "full_code": "",
+          "delivery_date": "",
+          "strike_price": 0.0,
+          "option_right": "Future"
+        }
+      }
+    }
+  }
+]

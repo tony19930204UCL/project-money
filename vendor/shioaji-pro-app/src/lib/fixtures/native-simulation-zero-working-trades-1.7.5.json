@@ -1,0 +1,134 @@
+[
+  {
+    "contract": {
+      "security_type": "FUT",
+      "region": "TW",
+      "exchange": "TAIFEX",
+      "code": "MXFI6",
+      "target_code": ""
+    },
+    "order": {
+      "id": "fixture-1",
+      "seqno": "fixture-1",
+      "ordno": "fixture-2",
+      "action": "Buy",
+      "price": 41291.0,
+      "quantity": 3,
+      "order_type": "ROD",
+      "price_type": "LMT",
+      "custom_field": "",
+      "account": {
+        "account_type": "F",
+        "person_id": "fixture",
+        "broker_id": "fixture",
+        "account_id": "fixture",
+        "signed": true,
+        "username": "fixture"
+      },
+      "ca": "",
+      "octype": "Auto"
+    },
+    "status": {
+      "id": "fixture-1",
+      "status": "Submitted",
+      "status_code": "00",
+      "web_id": "",
+      "order_ts": 1789439346.227147,
+      "msg": "",
+      "modified_ts": 1789439350.711853,
+      "modified_price": 0.0,
+      "order_quantity": 3,
+      "deal_quantity": 0,
+      "cancel_quantity": 3,
+      "deals": []
+    }
+  },
+  {
+    "contract": {
+      "security_type": "FUT",
+      "region": "TW",
+      "exchange": "TAIFEX",
+      "code": "MXFI6",
+      "target_code": ""
+    },
+    "order": {
+      "id": "fixture-3",
+      "seqno": "fixture-3",
+      "ordno": "fixture-4",
+      "action": "Buy",
+      "price": 45000.0,
+      "quantity": 2,
+      "order_type": "ROD",
+      "price_type": "LMT",
+      "custom_field": "",
+      "account": {
+        "account_type": "F",
+        "person_id": "fixture",
+        "broker_id": "fixture",
+        "account_id": "fixture",
+        "signed": true,
+        "username": "fixture"
+      },
+      "ca": "",
+      "octype": "New"
+    },
+    "status": {
+      "id": "fixture-3",
+      "status": "Submitted",
+      "status_code": "00",
+      "web_id": "",
+      "order_ts": 1789441926.099428,
+      "msg": "",
+      "modified_ts": 1789443135.474597,
+      "modified_price": 44990.0,
+      "order_quantity": 2,
+      "deal_quantity": 0,
+      "cancel_quantity": 2,
+      "deals": []
+    }
+  },
+  {
+    "contract": {
+      "security_type": "FUT",
+      "region": "TW",
+      "exchange": "TAIFEX",
+      "code": "TXFI6",
+      "target_code": ""
+    },
+    "order": {
+      "id": "fixture-5",
+      "seqno": "fixture-5",
+      "ordno": "fixture-6",
+      "action": "Buy",
+      "price": 44000.0,
+      "quantity": 3,
+      "order_type": "ROD",
+      "price_type": "LMT",
+      "custom_field": "",
+      "account": {
+        "account_type": "F",
+        "person_id": "fixture",
+        "broker_id": "fixture",
+        "account_id": "fixture",
+        "signed": true,
+        "username": "fixture"
+      },
+      "ca": "",
+      "octype": "New"
+    },
+    "status": {
+      "id": "fixture-5",
+      "status": "Submitted",
+      "status_code": "00",
+      "web_id": "",
+      "order_ts": 1789443573.269063,
+      "msg": "",
+      "modified_ts": 1789443608.463731,
+      "modified_price": 0.0,
+      "order_quantity": 3,
+      "deal_quantity": 0,
+      "cancel_quantity": 3,
+      "deals": []
+    }
+  }
+]

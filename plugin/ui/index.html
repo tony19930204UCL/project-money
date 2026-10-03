@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1018">
+  <title>CIO Market Lab · Decision Workstation</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="brand-mark">CM</div>
+        <div>
+          <div class="eyebrow">INDEPENDENT INVESTOR WORKSTATION</div>
+          <div class="brand-name">CIO Market Lab <span class="version">V2 / SLICE 01</span></div>
+        </div>
+      </div>
+      <div class="mode-banner"><span class="pulse-dot"></span><strong>PAPER ONLY</strong><span>PAPER SIMULATION ONLY · no broker connected</span></div>
+      <div class="top-actions">
+        <button class="icon-btn" id="command-btn" title="Command palette">⌘K</button>
+        <button class="btn btn-cio" id="open-cio-btn">Ask Main CIO <span>↗</span></button>
+      </div>
+    </header>
+
+    <section class="market-strip" aria-label="Market and data status">
+      <div class="strip-cell session-cell"><span class="strip-label">TW SESSION</span><strong id="tw-session">CLOSED / replay-ready</strong><span class="fresh-dot stale"></span></div>
+      <div class="strip-cell session-cell"><span class="strip-label">US SESSION</span><strong id="us-session">CLOSED / delayed</strong><span class="fresh-dot stale"></span></div>
+      <div class="strip-cell quote-cell"><span class="strip-label">TAIEX PROXY</span><strong id="taiex-value">—</strong><span id="taiex-change" class="neutral">—</span></div>
+      <div class="strip-cell quote-cell"><span class="strip-label">S&amp;P 500 PROXY</span><strong id="spx-value">—</strong><span id="spx-change" class="neutral">—</span></div>
+      <div class="strip-cell"><span class="strip-label">DATA</span><strong id="data-provider">checking…</strong><span id="data-age" class="muted">age —</span></div>
+      <div class="strip-cell"><span class="strip-label">PAPER EQUITY</span><strong id="paper-equity">—</strong><span id="paper-pnl" class="neutral">day P&amp;L —</span></div>
+      <div class="strip-cell"><span class="strip-label">GROSS EXPOSURE</span><strong id="gross-exposure">—</strong><span class="muted">portfolio</span></div>
+      <div class="strip-cell kill-cell"><span class="strip-label">KILL SWITCH</span><strong id="kill-state">checking…</strong><button id="kill-toggle" class="switch" aria-label="Toggle paper kill switch"><span></span></button></div>
+    </section>
+
+    <div class="workspace">
+      <aside class="sidebar">
+        <div class="sidebar-section-label">WORKSPACE</div>
+        <nav class="nav-list" aria-label="Workspace views">
+          <button class="nav-item active" data-view="command"><span class="nav-icon">◈</span><span>Command Center</span><kbd>1</kbd></button>
+          <button class="nav-item" data-view="markets"><span class="nav-icon">◌</span><span>Markets</span><kbd>2</kbd></button>
+          <button class="nav-item" data-view="chart"><span class="nav-icon">⌁</span><span>Chart Desk</span><kbd>3</kbd></button>
+          <button class="nav-item" data-view="paper"><span class="nav-icon">＋</span><span>Paper Trade</span><kbd>4</kbd></button>
+          <button class="nav-item" data-view="portfolio"><span class="nav-icon">▣</span><span>Portfolio</span><kbd>5</kbd></button>
+          <button class="nav-item" data-view="strategy"><span class="nav-icon">✦</span><span>Strategy Lab</span><kbd>6</kbd></button>
+          <button class="nav-item" data-view="research"><span class="nav-icon">⌕</span><span>Research</span><kbd>7</kbd></button>
+          <button class="nav-item" data-view="replay"><span class="nav-icon">↺</span><span>Replay</span><kbd>9</kbd></button>
+          <button class="nav-item" data-view="risk"><span class="nav-icon">⚑</span><span>Risk</span><kbd>0</kbd></button>
+          <button class="nav-item" data-view="diagnostics"><span class="nav-icon">◇</span><span>Diagnostics</span><kbd>8</kbd></button>
+        </nav>
+        <div class="sidebar-divider"></div>
+        <div class="sidebar-section-label">PRESETS</div>
+        <div class="preset-list">
+          <button class="preset active">CIO Command <span>●</span></button>
+          <button class="preset">TW Swing</button>
+          <button class="preset">US Growth</button>
+          <button class="preset">Intraday Lab</button>
+          <button class="preset">Research Review</button>
+        </div>
+        <div class="sidebar-footer">
+          <div class="system-line"><span class="status-dot"></span> local engine connected</div>
+          <div class="sidebar-meta">workspace: CIO-CMD<br>build: candidate / isolated</div>
+        </div>
+      </aside>
+
+      <main class="main-stage">
+        <div class="view-head">
+          <div><span class="eyebrow">COMMAND CENTER / DECISION TRACE</span><h1 id="view-title">Market pulse</h1></div>
+          <div class="head-actions"><span class="as-of" id="as-of">As of —</span><button class="btn btn-quiet" id="refresh-btn">↻ Refresh</button><button class="btn btn-quiet" id="layout-btn">▦ Layout</button></div>
+        </div>
+
+        <div id="global-notice" class="notice notice-info hidden"></div>
+        <div id="view-command" class="view active-view">
+          <div class="command-grid">
+            <section class="panel watch-panel" aria-labelledby="watch-title">
+              <div class="panel-head"><div><span class="panel-kicker">UNIVERSE</span><h2 id="watch-title">Watchlist radar</h2></div><div class="segmented"><button class="seg active" data-watch="TW">TW</button><button class="seg" data-watch="US">US</button></div></div>
+              <form id="symbol-search-form" class="symbol-search" data-endpoint="/api/markets/search"><input id="symbol-search" placeholder="Search symbol or name" autocomplete="off"><button class="btn btn-quiet" type="submit">Search / add</button></form><div id="symbol-search-results" class="symbol-search-results" aria-live="polite"></div>
+              <div class="watch-summary"><span id="watch-count">— symbols</span><span class="muted">last / change / source age</span></div>
+              <div id="watchlist" class="watchlist"><div class="state loading-state"><span class="spinner"></span> Loading watchlist</div></div>
+              <div class="panel-foot"><span class="muted">No order book source attached.</span><button class="text-btn" data-view-jump="markets">Open market breadth →</button></div>
+            </section>
+
+            <section class="panel chart-panel" aria-labelledby="chart-title">
+              <div class="panel-head chart-head"><div><span class="panel-kicker">PRICE ACTION / <span id="chart-source">DELAYED DATA</span></span><h2 id="chart-title">2330.TW <span class="instrument-name">TSMC</span></h2></div><div class="chart-head-right"><div class="ohlc"><span>O <b id="ohlc-open">—</b></span><span>H <b id="ohlc-high">—</b></span><span>L <b id="ohlc-low">—</b></span><span>C <b id="ohlc-close">—</b></span></div><div class="time-tabs" role="group" aria-label="Chart timeframe" data-endpoint="/api/market/bars/{symbol}?timeframe={timeframe}"><button class="time-tab active" data-timeframe="1D">1D</button><button class="time-tab" data-timeframe="1W">1W</button><button class="time-tab" data-timeframe="1M">1M</button><button class="time-tab" data-timeframe="Replay">Replay</button></div></div></div>
+              <div class="chart-canvas-wrap"><canvas id="price-chart" aria-label="Candlestick and volume chart"></canvas><div id="chart-state" class="chart-overlay">Loading bars…</div></div>
+              <div class="chart-footer"><span><i class="legend up"></i> up <i class="legend down"></i> down <i class="legend volume"></i> volume</span><span id="chart-freshness" class="muted">source age —</span><button class="text-btn" id="prefill-order">Use close in ticket ↗</button></div>
+            </section>
+
+            <section class="panel order-panel" aria-labelledby="order-title">
+              <div class="panel-head"><div><span class="panel-kicker">GUARDED SIMULATION</span><h2 id="order-title">Paper order ticket</h2></div><span class="badge badge-paper">PAPER</span></div>
+              <form id="order-form" class="order-form">
+                <div class="form-row two"><label>Symbol<input id="order-symbol" name="symbol" value="2330.TW" autocomplete="off"></label><label>Market<select id="order-market" name="market"><option value="TW">TW</option><option value="US">US</option></select></label></div>
+                <div class="form-row three"><label>Side<select id="order-side" name="side"><option>BUY</option><option>SELL</option></select></label><label>Type<select id="order-type" name="type"><option>LIMIT</option><option>MARKET</option><option>STOP</option></select></label><label>Qty<input id="order-qty" name="quantity" type="number" min="1" step="1" value="10"></label></div>
+                <div class="form-row two"><label>Limit / trigger<input id="order-price" name="price" type="number" step="0.01" placeholder="Price"></label><label>Bucket<select id="order-bucket" name="bucket"><option value="swing">Swing</option><option value="intraday">Intraday</option></select></label></div>
+                <div class="form-row two"><label>Stop / invalidation<input id="order-stop" name="stop" type="number" step="0.01" placeholder="Optional"></label><label>Origin<select id="order-origin" name="origin"><option value="MANUAL">MANUAL</option><option value="STRATEGY">STRATEGY</option><option value="MAIN_CIO">MAIN_CIO</option></select></label></div>
+                <label>Reason / evidence<input id="order-reason" name="reason" placeholder="Required: thesis, catalyst or experiment"></label>
+                <div id="risk-preview" class="risk-preview"><div class="risk-row"><span>Preview</span><strong>Enter inputs to model</strong></div><div class="risk-row"><span>Risk gate</span><span class="badge badge-neutral">PENDING</span></div></div>
+                <div id="order-message" class="inline-message hidden"></div>
+                <button class="btn btn-primary submit-order" type="submit">Preview paper order <span>→</span></button>
+                <div class="form-note">Two-step confirmation. Local simulation only; stale or fallback data blocks autonomous paper entry.</div>
+              </form>
+            </section>
+          </div>
+
+          <div class="bottom-grid">
+            <section class="panel dock-panel"><div class="panel-head compact"><div><span class="panel-kicker">LEDGER</span><h2>Positions</h2></div><button class="text-btn" data-view-jump="portfolio">View risk →</button></div><div id="positions-table" class="table-wrap"><div class="state empty-state">No paper positions returned.</div></div></section>
+            <section class="panel dock-panel"><div class="panel-head compact"><div><span class="panel-kicker">EXECUTION QUEUE</span><h2>Working orders</h2></div><button class="text-btn" data-view-jump="paper">Open paper trade →</button></div><div id="orders-table" class="table-wrap"><div class="state empty-state">No working orders returned.</div></div></section>
+            <section class="panel dock-panel"><div class="panel-head compact"><div><span class="panel-kicker">AUDIT TRAIL</span><h2>Latest fills</h2></div><button class="text-btn" data-view-jump="paper">All fills →</button></div><div id="fills-table" class="table-wrap"><div class="state empty-state">No paper fills returned.</div></div></section>
+          </div>
+        </div>
+
+        <div id="view-markets" class="view"><div class="module-grid"><section class="panel large-module" data-endpoint="/api/markets/breadth"><div class="panel-head"><div><span class="panel-kicker">BREADTH / LIVE ENDPOINT</span><h2>Market map</h2></div><span id="markets-source" class="badge badge-neutral">loading</span></div><div class="metric-grid"><div class="metric"><span>TW advance / decline</span><strong id="tw-breadth">— / —</strong><small id="tw-breadth-meta">/api/markets/breadth</small></div><div class="metric"><span>US advance / decline</span><strong id="us-breadth">— / —</strong><small id="us-breadth-meta">/api/markets/breadth</small></div><div class="metric"><span>Leaders / laggards</span><strong id="leaders-laggards">— / —</strong><small id="leaders-meta">/api/markets/leaders</small></div></div><div id="markets-list" class="markets-list"><div class="state loading-state"><span class="spinner"></span> Loading market breadth</div></div></section><section class="panel large-module"><div class="panel-head"><div><span class="panel-kicker">DEPTH</span><h2>Order book</h2></div><span class="badge badge-neutral">UNAVAILABLE</span></div><div class="unavailable"><div class="unavailable-icon">⌁</div><strong>No depth source connected</strong><p>Delayed bars do not provide reliable depth ladders or tick tape.</p></div></section></div></div>
+        <div id="view-chart" class="view"><div class="panel expanded-chart"><div class="panel-head"><div><span class="panel-kicker">CHART DESK</span><h2 id="desk-chart-title">Selected instrument</h2></div><div class="chart-desk-controls"><label>Symbol<input id="chart-symbol-input" value="2330.TW" autocomplete="off"></label><button class="btn btn-quiet" id="chart-symbol-load">Load</button><label>Timeframe<select id="desk-timeframe"><option value="1D">1D</option><option value="1W">1W</option><option value="1M">1M</option><option value="Replay">Replay</option></select></label><button class="btn btn-quiet" id="chart-ask-btn">Ask CIO about chart</button></div></div><div class="chart-meta" id="desk-chart-meta">No bars loaded.</div><div class="chart-canvas-wrap desk-canvas"><canvas id="desk-chart" aria-label="Expanded candlestick chart"></canvas><div id="desk-chart-state" class="chart-overlay">Select a symbol to load delayed bars.</div></div></div></div>
+        <div id="view-paper" class="view"><div class="module-grid"><section class="panel large-module"><div class="panel-head"><div><span class="panel-kicker">PAPER TRADE</span><h2>Orders & fills</h2></div><span class="badge badge-paper">SIMULATION LEDGER</span></div><div id="paper-ledger" class="table-wrap"><div class="state empty-state">Ledger data is loading from local state.</div></div></section><section class="panel large-module"><div class="panel-head"><div><span class="panel-kicker">COST MODEL</span><h2>Execution assumptions</h2></div></div><div class="assumption-list"><div><span>TW commission</span><strong>0.1425%</strong></div><div><span>TW sell tax</span><strong>0.30%</strong></div><div><span>US commission</span><strong>$0.005 / share</strong></div><div><span>Slippage stress</span><strong>5 bps</strong></div><div><span>Stale entry policy</span><strong>Reject</strong></div></div></section></div></div>
+        <div id="view-portfolio" class="view"><div class="module-grid"><section class="panel large-module"><div class="panel-head"><div><span class="panel-kicker">PORTFOLIO / RISK</span><h2>Ledger separation</h2></div><span class="badge badge-neutral">swing ≠ intraday</span></div><div id="portfolio-cards" class="portfolio-cards"><div class="state loading-state"><span class="spinner"></span> Loading ledgers</div></div></section><section class="panel large-module"><div class="panel-head"><div><span class="panel-kicker">CONTROL PLANE</span><h2>Risk limits</h2></div></div><div class="risk-limits"><div><span>Max order notional</span><strong>Configured by engine</strong></div><div><span>Stale-data threshold</span><strong>Reject new entry</strong></div><div><span>Open position cap</span><strong>Configured by engine</strong></div><div><span>Kill switch</span><strong id="portfolio-kill">OFF</strong></div></div></section></div></div>
+        <div id="view-strategy" class="view"><div class="module-grid"><section class="panel large-module"><div class="panel-head"><div><span class="panel-kicker">STRATEGY LAB</span><h2>Registry & experiment gates</h2></div><span class="badge badge-neutral">Main CIO controlled</span></div><div id="strategy-list" class="strategy-list"><div class="state loading-state"><span class="spinner"></span> Loading registry</div></div></section><section class="panel large-module experiment-panel"><div class="panel-head"><div><span class="panel-kicker">AUTONOMOUS PAPER / BOUNDED</span><h2>Experiment status</h2></div><span id="experiment-badge" class="badge badge-neutral">OFF</span></div><form id="experiment-form" class="experiment-form"><label>Strategy<select id="experiment-strategy"></select></label><label>Universe<input id="experiment-universe" placeholder="AAPL, NVDA"></label><div class="form-row two"><label>Mode<select id="experiment-mode"><option value="swing">Swing</option><option value="intraday">Intraday</option></select></label><label>Max position<input id="experiment-position" type="number" min="1" value="50000"></label></div><div class="form-row two"><label>Max daily loss<input id="experiment-loss" type="number" min="1" value="5000"></label></div><div class="form-row two"><label>Max open positions<input id="experiment-open" type="number" min="1" value="5"></label><label>Expires at<input id="experiment-expiry" type="datetime-local"></label></div><label class="check-row"><input id="experiment-enabled" type="checkbox"> Enable bounded paper experiment</label><button class="btn btn-primary" type="submit">Save experiment</button><div class="form-row three experiment-actions"><button class="btn btn-quiet" id="experiment-start" type="button">Start runner</button><button class="btn btn-quiet" id="experiment-cycle" type="button">Run one cycle</button><button class="btn btn-quiet" id="experiment-stop" type="button">Stop runner</button></div><div id="experiment-runtime" class="risk-preview"><div class="risk-row"><span>Runner</span><strong>status not loaded</strong></div></div><div id="experiment-message" class="inline-message hidden"></div><div class="form-note">Paper-only. Default OFF; bounded universe, loss, position and expiry are required. No broker path.</div></form></section></div></div>
+        <div id="view-research" class="view"><div class="module-grid"><section class="panel large-module"><div class="panel-head"><div><span class="panel-kicker">RESEARCH QUARANTINE</span><h2>Inbox</h2></div><span class="badge badge-neutral">never auto-promote</span></div><div id="research-list" class="research-list"><div class="state loading-state"><span class="spinner"></span> Loading inbox</div></div></section><section class="panel large-module"><div class="panel-head"><div><span class="panel-kicker">INTAKE</span><h2>Stage an idea</h2></div></div><form id="research-form" class="research-form"><label>Source URL<input id="research-url" type="url" placeholder="https://…" required></label><label>Headline<input id="research-title" placeholder="Observed claim" required></label><label>Symbols<input id="research-symbols" placeholder="NVDA, 2330.TW"></label><label>Hypothesis<textarea id="research-hypothesis" rows="4" placeholder="What would need to be true?"></textarea></label><button class="btn btn-primary" type="submit">Quarantine source</button><div class="form-note">Status starts UNVERIFIED. Research is not an order signal.</div></form></section></div></div>
+        <div id="view-replay" class="view"><section class="panel large-module"><div class="panel-head"><div><span class="panel-kicker">SOURCE-ALIGNED REPLAY</span><h2>Walk-forward / holdout</h2></div><a class="btn btn-quiet" href="/lab/replay" target="_blank" rel="noopener">Open full replay ↗</a></div><p class="form-note">Real captured historical sources only. Virtual research balance is not client capital. No backtest runs until explicitly submitted; no broker route.</p><iframe id="replay-frame" title="Source-aligned historical replay" data-src="/lab/replay" style="width:100%;height:70vh;border:0;min-height:420px" loading="lazy"></iframe></section></div>
+        <div id="view-risk" class="view"><section class="panel large-module"><div class="panel-head"><div><span class="panel-kicker">PAPER RISK / OBSERVER</span><h2>Current configured limits and capability truth</h2></div></div><p class="form-note">Read-only API state. Not a client capital allocation or live derivatives authorization.</p><div id="risk-live-summary" class="risk-summary">Open this view to load current risk sources.</div><pre id="risk-live-json" class="diagnostics-json"></pre></section></div>
+        <div id="view-diagnostics" class="view"><div class="module-grid"><section class="panel large-module"><div class="panel-head"><div><span class="panel-kicker">DIAGNOSTICS</span><h2>Local invariants</h2></div><button class="btn btn-quiet" id="diag-refresh">Refresh probe</button></div><pre id="diagnostics-json" class="diagnostics-json">Loading diagnostics…</pre></section><section class="panel large-module"><div class="panel-head"><div><span class="panel-kicker">ENDPOINT HEALTH</span><h2>Data readiness</h2></div></div><div id="endpoint-health" class="endpoint-health"><div class="state loading-state"><span class="spinner"></span> Probing local API</div></div></section></div></div>
+      </main>
+    </div>
+  </div>
+
+  <aside id="cio-drawer" class="cio-drawer" aria-label="Main CIO chat drawer"><div class="drawer-head"><div><span class="panel-kicker">DECISION SUPPORT</span><h2>Main CIO</h2></div><button class="icon-btn" id="close-cio-btn">×</button></div><div id="cio-thread" class="cio-thread"><div class="cio-message cio-system"><span class="message-label">SYSTEM</span>Draft bridge ready. Nothing is sent automatically. Ask for a comparison, a risk read, or a paper-order preview.</div></div><form id="cio-form" class="cio-form"><textarea id="cio-input" rows="3" placeholder="Ask about the selected symbol, exposure, or strategy…"></textarea><div class="cio-form-foot"><span class="muted">draft only · PAPER ONLY</span><button class="btn btn-cio" type="submit">Prepare draft ↗</button></div></form></aside>
+  <div id="toast" class="toast" role="status"></div>
+  <div id="command-palette" class="palette hidden"><div class="palette-card"><div class="palette-head"><strong>Command palette</strong><span class="muted">ESC to close</span></div><input id="palette-input" placeholder="Jump to workspace or symbol…"><div id="palette-results" class="palette-results"></div></div></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

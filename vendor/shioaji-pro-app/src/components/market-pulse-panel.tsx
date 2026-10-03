@@ -1,0 +1,1968 @@
+import {
+    sankey,
+    type SankeyGraph,
+    sankeyLinkHorizontal,
+} from 'd3-sankey';
+import {
+    AlertTriangle,
+    ChevronDown,
+    ChevronRight,
+    GitBranch,
+    Link2,
+    ListOrdered,
+    SlidersHorizontal,
+} from 'lucide-react';
+import {
+    type CSSProperties,
+    Fragment,
+    type KeyboardEvent,
+    type PointerEvent as ReactPointerEvent,
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+} from 'react';
+import { useIndexComponents } from '../hooks/use-index-components';
+import { useMarketPulseSnapshot } from '../hooks/use-market-pulse';
+import { useQuote } from '../hooks/use-stream';
+import { ensureContract } from '../lib/contracts-cache';
+import {
+    buildContributionFlow,
+    type ContributionFlowLink,
+    type ContributionFlowNode,
+    type FlowGroup,
+    type FlowStock,
+} from '../lib/contribution-flow';
+import {
+    exchangeTimeDifferenceSeconds,
+    futuresIndexBasis,
+} from '../lib/market-pulse';
+import {
+    subscribeEnrichedIndex,
+    subscribeMarketSignal,
+    unsubscribeEnrichedIndex,
+    unsubscribeMarketSignal
+} from '../lib/shioaji';
+import { loadStockDetails, type StockMeta } from '../lib/stock-index';
+import { useThemeSettings } from '../lib/theme-store';
+import type { ContractBase } from '../lib/types/contract';
+import type {
+    IcProjection,
+    IcRankingEntry,
+    ScannerExchange,
+    ScannerRule,
+} from '../lib/types/market';
+import type {
+    PulseIndexCode,
+    PulseSection,
+    PulseSectionWeights,
+} from '../lib/workspace';
+import { vars } from '../theme.css';
+import * as styles from './market-pulse-panel.css';
+import * as panel from './panel.css';
+
+type PulseView = 'index' | 'signals';
+type IndexVisualization = 'distribution' | 'flow';
+type StocksView = 'impact' | 'sides';
+type SignalFamily = 'limit' | 'move' | 'volume' | 'state';
+type SignalFilterGroup = 'market' | SignalFamily;
+
+const INDICES: Record<'IX0001' | 'IX0043', ContractBase> = {
+    IX0001: {
+        security_type: 'IND',
+        region: 'TW',
+        exchange: 'TSE',
+        code: 'IX0001',
+        target_code: null,
+    },
+    IX0043: {
+        security_type: 'IND',
+        region: 'TW',
+        exchange: 'OTC',
+        code: 'IX0043',
+        target_code: null,
+    },
+};
+
+const INDEX_LABELS = { IX0001: '加權', IX0043: '櫃買' } as const;
+// 每指數固定三條 index_components 投影：P25/N25 成分股貢獻排行（影響最大
+// /多空對照/傳導個股全由其聯集導出）＋群組貢獻（傳導的產業層與餘量）。
+// 建底/日切/重連語意在 index-components store（docs/adr/0001）。
+const PULSE_PROJECTIONS: IcProjection[] = [
+    {
+        kind: 'ranking',
+        target: 'component',
+        metric: 'contribution',
+        order: 'positive_desc',
+        limit: 25,
+    },
+    {
+        kind: 'ranking',
+        target: 'component',
+        metric: 'contribution',
+        order: 'negative_asc',
+        limit: 25,
+    },
+    { kind: 'group_metric', metric: 'contribution' },
+];
+const NO_PROJECTIONS: IcProjection[] = [];
+
+// 面板內部的成分股列 — 由 IcRankingEntry 映射（value→points），欄位語意
+// 與畫面一致；abnormal＝非正常交易/非即時資料（僅低調提示，不佔版面）
+interface PulseDriver {
+    code: string;
+    category: string;
+    points: number;
+    pct_chg: number;
+    weightPct: number;
+    abnormal: boolean;
+}
+
+function toDriver(entry: IcRankingEntry): PulseDriver {
+    return {
+        code: entry.code,
+        category: entry.category,
+        points: entry.value,
+        pct_chg: entry.pct_chg,
+        weightPct: entry.weight_pct,
+        abnormal:
+            entry.trading_status !== 'active' || entry.data_status !== 'live',
+    };
+}
+
+function driverTitle(entry: PulseDriver) {
+    return `權重 ${entry.weightPct.toFixed(2)}%${entry.abnormal ? ' · 狀態異常' : ''}`;
+}
+const IMPACT_LIMIT = 10;
+// 影響最大 bars live in the numeric columns — max extent in rem
+const IMPACT_BAR_MAX_REM = 4.25;
+const STOCKS_VIEWS: { value: StocksView; label: string }[] = [
+    { value: 'impact', label: '影響最大' },
+    { value: 'sides', label: '多空對照' },
+];
+const STOCK_DETAIL_BATCH_SIZE = 8;
+const PULSE_SECTIONS: PulseSection[] = ['stocks', 'flow'];
+const DEFAULT_SECTION_WEIGHTS: PulseSectionWeights = {
+    stocks: 41,
+    flow: 59,
+};
+const MIN_SECTION_WEIGHT = 12;
+const SECTION_LABELS: Record<PulseSection, string> = {
+    stocks: '成分股貢獻',
+    flow: '貢獻傳導',
+};
+
+function initialPulseSections(
+    sections: PulseSection[] | undefined,
+    legacyVisualization: IndexVisualization,
+): PulseSection[] {
+    // 舊存檔可能帶 'industries'（區塊已移至產業全景面板）— filter 直接淘汰
+    const valid = PULSE_SECTIONS.filter((section) => sections?.includes(section));
+    if (valid.length > 0) return valid;
+    return legacyVisualization === 'flow' ? ['flow'] : ['stocks'];
+}
+
+function initialPulseWeights(
+    weights: Partial<PulseSectionWeights> | undefined,
+): PulseSectionWeights {
+    const stocks = weights?.stocks ?? DEFAULT_SECTION_WEIGHTS.stocks;
+    const flow = weights?.flow ?? DEFAULT_SECTION_WEIGHTS.flow;
+    // 舊存檔的 industries 權重按比例併入剩餘兩區（讀時升級，不改存檔）
+    const legacyIndustries =
+        (weights as Record<string, number | undefined> | undefined)?.[
+            'industries'
+        ] ?? 0;
+    const total = stocks + flow;
+    if (!(legacyIndustries > 0) || total <= 0) return { stocks, flow };
+    return {
+        stocks: stocks + (legacyIndustries * stocks) / total,
+        flow: flow + (legacyIndustries * flow) / total,
+    };
+}
+const FAMILY_RULES: Record<SignalFamily, ScannerRule[]> = {
+    limit: [
+        'bid_near_limit_up',
+        'bid_touch_limit_up',
+        'limit_up_unlocked',
+        'ask_near_limit_down',
+        'ask_touch_limit_down',
+        'limit_down_unlocked',
+    ],
+    move: [
+        'trade_price_surge',
+        'trade_price_drop',
+        'bid_price_surge',
+        'ask_price_drop',
+    ],
+    volume: ['volume_burst'],
+    state: ['simtrade', 'suspend'],
+};
+const SIGNAL_FAMILIES: SignalFamily[] = ['limit', 'move', 'volume', 'state'];
+const FAMILY_LABELS: Record<SignalFamily, string> = {
+    limit: '漲跌停',
+    move: '急漲跌',
+    volume: '爆量',
+    state: '狀態',
+};
+const ALL_SIGNAL_RULES = SIGNAL_FAMILIES.flatMap(
+    (family) => FAMILY_RULES[family],
+);
+const SIGNAL_EXCHANGES: ScannerExchange[] = ['TSE', 'OTC'];
+const EXCHANGE_LABELS: Record<ScannerExchange, string> = {
+    TSE: '上市',
+    OTC: '上櫃',
+};
+const RULE_LABELS: Record<ScannerRule, string> = {
+    bid_near_limit_up: '接近漲停',
+    bid_touch_limit_up: '觸及漲停',
+    limit_up_unlocked: '漲停打開',
+    ask_near_limit_down: '接近跌停',
+    ask_touch_limit_down: '觸及跌停',
+    limit_down_unlocked: '跌停打開',
+    trade_price_surge: '成交急漲',
+    trade_price_drop: '成交急跌',
+    bid_price_surge: '買價急漲',
+    ask_price_drop: '賣價急跌',
+    volume_burst: '單筆爆量',
+    simtrade: '試撮',
+    suspend: '暫停交易',
+};
+
+function direction(value: number) {
+    return value > 0 ? 'up' : value < 0 ? 'down' : 'flat';
+}
+
+function signalDirection(rule: ScannerRule) {
+    return rule.includes('down') || rule.includes('drop')
+        ? 'down'
+        : rule.includes('up') || rule.includes('surge')
+          ? 'up'
+          : 'flat';
+}
+
+function signalDetail(rule: ScannerRule, extra: Record<string, unknown>) {
+    if (rule === 'volume_burst') {
+        const amount = Number(extra.amount ?? 0);
+        if (amount >= 100_000_000) {
+            return `${(amount / 100_000_000).toFixed(2)} 億`;
+        }
+        return amount > 0
+            ? `${Math.round(amount / 10_000).toLocaleString('en-US')} 萬`
+            : '爆量';
+    }
+    if (rule.includes('surge') || rule.includes('drop')) {
+        const pct = Number(extra.change_percent ?? 0);
+        return Number.isFinite(pct)
+            ? `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`
+            : '';
+    }
+    const price = Number(extra.trigger_price ?? extra.limit_price ?? 0);
+    return price > 0 ? price.toLocaleString('en-US') : '';
+}
+
+function ContributionSideColumn({
+    side,
+    entries,
+    scale,
+    stockByCode,
+    namesPending,
+    subscriptionPending,
+    onPick,
+}: {
+    side: 'up' | 'down';
+    entries: PulseDriver[];
+    scale: number;
+    stockByCode: ReadonlyMap<string, StockMeta>;
+    namesPending: boolean;
+    subscriptionPending: boolean;
+    onPick?: (code: string) => void;
+}) {
+    const color = side === 'up' ? vars.color.up : vars.color.down;
+    return (
+        <div className={styles.sideColumn}>
+            <div className={styles.sideHeader}>
+                <span className={styles.sideHeaderLabel}>
+                    {side === 'up' ? '上漲貢獻' : '下跌貢獻'}
+                    <span className={styles.sideCount}>Top</span>
+                </span>
+                <span className={styles.stockTableColumn}>貢獻（點）</span>
+                <span className={styles.stockTableColumn}>漲跌幅</span>
+            </div>
+            <div className={styles.sideList}>
+                {entries.map((entry) => (
+                    <button
+                        key={entry.code}
+                        className={styles.sideRow[side]}
+                        style={
+                            {
+                                '--bar-color': color,
+                                '--bar-size': `${Math.min(100, (Math.abs(entry.points) / scale) * 100).toFixed(1)}%`,
+                            } as CSSProperties
+                        }
+                        onClick={() => onPick?.(entry.code)}
+                        title={driverTitle(entry)}
+                    >
+                        <span className={styles.code}>
+                            {entry.code}
+                            <small className={styles.stockName}>
+                                {stockByCode.get(entry.code)?.name ??
+                                    (namesPending
+                                        ? '名稱載入中'
+                                        : '名稱未取得')}
+                            </small>
+                        </span>
+                        <span
+                            className={`${styles.points} ${panel.dirText[side]}`}
+                        >
+                            {entry.points > 0 ? '+' : ''}
+                            {entry.points.toFixed(2)}
+                        </span>
+                        <span
+                            className={`${styles.pct} ${panel.dirText[direction(entry.pct_chg)]}`}
+                        >
+                            {entry.pct_chg > 0 ? '+' : ''}
+                            {entry.pct_chg.toFixed(2)}%
+                        </span>
+                    </button>
+                ))}
+                {entries.length === 0 && (
+                    <div className={styles.empty}>
+                        {subscriptionPending
+                            ? '訂閱中...'
+                            : side === 'up'
+                              ? '無上漲貢獻'
+                              : '無下跌貢獻'}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function ContributionSankey({
+    stocks,
+    groups,
+    showPercent,
+    onPick,
+}: {
+    stocks: FlowStock[];
+    groups: FlowGroup[];
+    showPercent: boolean;
+    onPick?: (code: string) => void;
+}) {
+    const ref = useRef<HTMLDivElement>(null);
+    const [size, setSize] = useState({ width: 0, height: 0 });
+
+    useEffect(() => {
+        const element = ref.current;
+        if (!element || typeof ResizeObserver === 'undefined') return;
+        const update = () => {
+            const { width, height } = element.getBoundingClientRect();
+            setSize({ width: Math.floor(width), height: Math.floor(height) });
+        };
+        update();
+        const observer = new ResizeObserver(update);
+        observer.observe(element);
+        return () => observer.disconnect();
+    }, []);
+
+    const { fontScale } = useThemeSettings();
+    const layout = useMemo(() => {
+        const flow = buildContributionFlow(stocks, groups);
+        if (!flow.links.length || size.height <= 0) return null;
+        // geometry follows the root font-size setting so SVG text (rem-
+        // sized) keeps its reserved label space at any accessibility scale
+        const s = fontScale;
+        const width = Math.max(560 * s, size.width);
+        const height = Math.max(220 * s, size.height);
+        const rightLabelWidth = (showPercent ? 260 : 205) * s;
+        const rightInset = 18 * s;
+        const pointsColumnX = width - (showPercent ? 88 * s : rightInset);
+        const percentColumnX = width - rightInset;
+        const generator = sankey<
+            SankeyGraph<ContributionFlowNode, ContributionFlowLink>,
+            ContributionFlowNode,
+            ContributionFlowLink
+        >()
+            .nodeId((node) => node.id)
+            .nodeWidth(8)
+            .nodePadding(9 * s)
+            .extent([
+                [12, 28 * s],
+                [width - rightLabelWidth, height - 14 * s],
+            ]);
+        return {
+            width,
+            height,
+            scale: s,
+            rightLabelWidth,
+            pointsColumnX,
+            percentColumnX,
+            graph: generator({
+                nodes: flow.nodes.map((node) => ({ ...node })),
+                links: flow.links.map((link) => ({ ...link })),
+            }),
+        };
+    }, [fontScale, groups, showPercent, size, stocks]);
+
+    const linkPath = useMemo(
+        () => sankeyLinkHorizontal<ContributionFlowNode, ContributionFlowLink>(),
+        [],
+    );
+
+    return (
+        <div ref={ref} className={styles.sankeyViewport}>
+            {layout ? (
+                <svg
+                    className={styles.sankey}
+                    width={layout.width}
+                    height={layout.height}
+                    viewBox={`0 0 ${layout.width} ${layout.height}`}
+                    role="img"
+                    aria-label="拉抬與壓抑經由產業到主要個股的指數貢獻傳導圖"
+                >
+                    <g className={styles.sankeyLinks}>
+                        {layout.graph.links.map((link, index) => (
+                            <path
+                                key={`${String(link.source)}-${String(link.target)}-${index}`}
+                                className={styles.sankeyLink}
+                                d={linkPath(link) ?? undefined}
+                                stroke={
+                                    link.direction === 'up'
+                                        ? vars.color.up
+                                        : vars.color.down
+                                }
+                                strokeWidth={Math.max(1, link.width ?? 1)}
+                            >
+                                <title>{`${link.value.toFixed(2)} 點`}</title>
+                            </path>
+                        ))}
+                    </g>
+                    <g className={styles.sankeyTableHeader}>
+                        <text
+                            x={
+                                layout.width -
+                                layout.rightLabelWidth +
+                                14 * layout.scale
+                            }
+                            y={16 * layout.scale}
+                        >
+                            成分股
+                        </text>
+                        <text
+                            x={layout.pointsColumnX}
+                            y={16 * layout.scale}
+                            textAnchor="end"
+                        >
+                            貢獻（點）
+                        </text>
+                        {showPercent && (
+                            <text
+                                x={layout.percentColumnX}
+                                y={16 * layout.scale}
+                                textAnchor="end"
+                            >
+                                漲跌幅
+                            </text>
+                        )}
+                    </g>
+                    <g>
+                        {layout.graph.nodes.map((node) => {
+                            const x0 = node.x0 ?? 0;
+                            const x1 = node.x1 ?? 0;
+                            const y0 = node.y0 ?? 0;
+                            const y1 = node.y1 ?? 0;
+                            const color =
+                                node.direction === 'up'
+                                    ? vars.color.up
+                                    : vars.color.down;
+                            const isStock = node.kind === 'stock';
+                            return (
+                                <g
+                                    key={node.id}
+                                    className={
+                                        node.code && onPick
+                                            ? styles.sankeyInteractiveNode
+                                            : undefined
+                                    }
+                                    onClick={() =>
+                                        node.code && onPick?.(node.code)
+                                    }
+                                >
+                                    <rect
+                                        x={x0}
+                                        y={y0}
+                                        width={Math.max(1, x1 - x0)}
+                                        height={Math.max(1, y1 - y0)}
+                                        rx={2}
+                                        fill={color}
+                                    />
+                                    {isStock ? (
+                                        <>
+                                            <text
+                                                className={styles.sankeyLabel}
+                                                x={x1 + 6}
+                                                y={(y0 + y1) / 2}
+                                                dominantBaseline="middle"
+                                                fill={color}
+                                            >
+                                                {node.label}
+                                            </text>
+                                            <text
+                                                className={styles.sankeyValue}
+                                                x={layout.pointsColumnX}
+                                                y={(y0 + y1) / 2}
+                                                dominantBaseline="middle"
+                                                textAnchor="end"
+                                                fill={color}
+                                            >
+                                                {node.direction === 'up'
+                                                    ? '+'
+                                                    : '-'}
+                                                {node.points.toFixed(2)}
+                                            </text>
+                                            {showPercent &&
+                                                node.code &&
+                                                Number.isFinite(node.pctChg) && (
+                                                    <text
+                                                        className={
+                                                            styles.sankeyPercent
+                                                        }
+                                                        x={
+                                                            layout.percentColumnX
+                                                        }
+                                                        y={(y0 + y1) / 2}
+                                                        dominantBaseline="middle"
+                                                        textAnchor="end"
+                                                        fill={
+                                                            (node.pctChg ?? 0) > 0
+                                                                ? vars.color.up
+                                                                : (node.pctChg ?? 0) < 0
+                                                                  ? vars.color.down
+                                                                  : vars.color.flat
+                                                        }
+                                                    >
+                                                        {(node.pctChg ?? 0) > 0
+                                                            ? '+'
+                                                            : ''}
+                                                        {(node.pctChg ?? 0).toFixed(
+                                                            2,
+                                                        )}
+                                                        %
+                                                    </text>
+                                                )}
+                                        </>
+                                    ) : (
+                                        <text
+                                            className={styles.sankeyLabel}
+                                            x={x1 + 6}
+                                            y={(y0 + y1) / 2}
+                                            dominantBaseline="middle"
+                                            fill={color}
+                                        >
+                                            {node.label}
+                                            <tspan
+                                                className={styles.sankeyValue}
+                                            >
+                                                {' '}
+                                                {node.direction === 'up'
+                                                    ? '+'
+                                                    : '-'}
+                                                {node.points.toFixed(2)} 點
+                                            </tspan>
+                                        </text>
+                                    )}
+                                </g>
+                            );
+                        })}
+                    </g>
+                </svg>
+            ) : (
+                <div className={styles.empty}>等待成分股貢獻資料</div>
+            )}
+        </div>
+    );
+}
+
+export function MarketPulsePanel({
+    onPick,
+    initialVisualization = 'distribution',
+    initialSections,
+    initialWeights,
+    initialIndexCode = 'IX0001',
+    fixedIndex = false,
+    fixedView,
+    onConfigChange,
+}: {
+    onPick?: (code: string) => void;
+    initialVisualization?: IndexVisualization;
+    initialSections?: PulseSection[];
+    initialWeights?: Partial<PulseSectionWeights>;
+    initialIndexCode?: PulseIndexCode;
+    fixedIndex?: boolean;
+    fixedView?: PulseView;
+    onConfigChange?: (
+        sections: PulseSection[],
+        weights: PulseSectionWeights,
+    ) => void;
+}) {
+    const pulse = useMarketPulseSnapshot();
+    const view = fixedView ?? 'index';
+    const [sections, setSections] = useState<PulseSection[]>(() =>
+        initialPulseSections(initialSections, initialVisualization),
+    );
+    const [sectionWeights, setSectionWeights] = useState<PulseSectionWeights>(
+        () => initialPulseWeights(initialWeights),
+    );
+    const [showFlowPercent, setShowFlowPercent] = useState(true);
+    const sectionWorkspaceRef = useRef<HTMLDivElement>(null);
+    const sectionWeightsRef = useRef(sectionWeights);
+    sectionWeightsRef.current = sectionWeights;
+    const [indexCode, setIndexCode] =
+        useState<PulseIndexCode>(initialIndexCode);
+    const [stocksView, setStocksView] = useState<StocksView>('impact');
+    const [enabledSignalRules, setEnabledSignalRules] = useState<ScannerRule[]>(
+        () => [...FAMILY_RULES.move],
+    );
+    const [enabledSignalExchanges, setEnabledSignalExchanges] = useState<
+        ScannerExchange[]
+    >(() => [...SIGNAL_EXCHANGES]);
+    const [showSignalRules, setShowSignalRules] = useState(false);
+    const [expandedSignalGroups, setExpandedSignalGroups] = useState<
+        SignalFilterGroup[]
+    >(['market', 'move']);
+    const [autoFollowSignals, setAutoFollowSignals] = useState(true);
+    const latestSignalRef = useRef<string | null | undefined>(undefined);
+    const [error, setError] = useState('');
+    const [indexPending, setIndexPending] = useState(false);
+    const [stockDetails, setStockDetails] = useState<StockMeta[]>([]);
+    const [stockDetailsPending, setStockDetailsPending] = useState(false);
+    const [nearMonthCode, setNearMonthCode] = useState('');
+    const [nearMonthPending, setNearMonthPending] = useState(false);
+    const [signalCoverage, setSignalCoverage] = useState({
+        ok: 0,
+        total: 0,
+        pending: false,
+    });
+    const index = INDICES[indexCode];
+    // index_components：P25/N25/群組貢獻三條投影（signals 檢視時零訂閱）
+    const ic = useIndexComponents(
+        index,
+        view === 'index' ? PULSE_PROJECTIONS : NO_PROJECTIONS,
+    );
+    const officialIndex = useQuote(indexCode)?.index;
+    const nearMonthQuote = useQuote(
+        indexCode === 'IX0001' ? 'TXFR1' : null,
+    )?.tick;
+
+    useEffect(() => {
+        setSections(
+            initialPulseSections(initialSections, initialVisualization),
+        );
+    }, [initialSections, initialVisualization]);
+
+    useEffect(() => {
+        const next = initialPulseWeights(initialWeights);
+        sectionWeightsRef.current = next;
+        setSectionWeights(next);
+    }, [initialWeights]);
+
+    useEffect(() => {
+        setIndexCode(initialIndexCode);
+    }, [initialIndexCode]);
+
+    useEffect(() => {
+        if (view !== 'index') return;
+        let active = true;
+        setError('');
+        setIndexPending(true);
+        void Promise.all([
+            subscribeEnrichedIndex('calculated_index', index),
+        ])
+            .then(() => {
+                if (active) setIndexPending(false);
+            })
+            .catch((reason: unknown) => {
+                if (!active) return;
+                setIndexPending(false);
+                setError(
+                    reason instanceof Error
+                        ? reason.message
+                        : '指數動能訂閱失敗',
+                );
+            });
+        return () => {
+            active = false;
+            void Promise.allSettled([
+                unsubscribeEnrichedIndex('calculated_index', index),
+            ]);
+        };
+    }, [index, view]);
+
+    useEffect(() => {
+        if (view !== 'index' || indexCode !== 'IX0001') {
+            setNearMonthPending(false);
+            return;
+        }
+        let active = true;
+        setNearMonthPending(true);
+        void ensureContract('TXFR1', 'FUT')
+            .then((contract) => {
+                if (active) {
+                    setNearMonthCode(contract.target_code || contract.code);
+                }
+            })
+            .catch(() => {
+                if (active) setNearMonthCode('');
+            })
+            .finally(() => {
+                if (active) setNearMonthPending(false);
+            });
+        return () => {
+            active = false;
+        };
+    }, [indexCode, view]);
+
+    useEffect(() => {
+        if (view !== 'signals') return;
+        let active = true;
+        const rules = enabledSignalRules;
+        const subscriptions = rules.flatMap((rule) =>
+            enabledSignalExchanges.map((exchange) => ({ rule, exchange })),
+        );
+        setError('');
+        setSignalCoverage({ ok: 0, total: subscriptions.length, pending: true });
+        void Promise.allSettled(
+            subscriptions.map(({ rule, exchange }) =>
+                subscribeMarketSignal(rule, exchange),
+            ),
+        ).then((results) => {
+            if (!active) return;
+            const ok = results.filter(
+                (result) => result.status === 'fulfilled',
+            ).length;
+            setSignalCoverage({ ok, total: results.length, pending: false });
+            if (ok < results.length) {
+                setError(
+                    `市場訊號僅完成 ${ok}/${results.length} 個訂閱，資料可能不完整`,
+                );
+            }
+        });
+        return () => {
+            active = false;
+            void Promise.allSettled(
+                subscriptions.map(({ rule, exchange }) =>
+                    unsubscribeMarketSignal(rule, exchange),
+                ),
+            );
+        };
+    }, [enabledSignalExchanges, enabledSignalRules, view]);
+
+    const calculated = pulse.calculated.get(indexCode);
+    const officialCloseValue = Number(officialIndex?.close);
+    const officialClose = Number.isFinite(officialCloseValue)
+        ? officialCloseValue
+        : null;
+    const officialReference = Number(officialIndex?.reference);
+    const officialChg =
+        officialClose !== null &&
+        Number.isFinite(officialReference) &&
+        officialReference > 0
+            ? officialClose - officialReference
+            : null;
+    const officialPct =
+        officialChg !== null ? (officialChg / officialReference) * 100 : null;
+    const indexGap =
+        calculated && officialClose !== null
+            ? calculated.close - officialClose
+            : null;
+    const timeGap =
+        calculated && officialIndex?.time
+            ? exchangeTimeDifferenceSeconds(
+                  calculated.time,
+                  officialIndex.time,
+              )
+            : null;
+    const nearMonthPriceValue = Number(nearMonthQuote?.close);
+    const nearMonthPrice = Number.isFinite(nearMonthPriceValue)
+        ? nearMonthPriceValue
+        : null;
+    const nearMonthChgValue = Number(nearMonthQuote?.price_chg);
+    const nearMonthChg = Number.isFinite(nearMonthChgValue)
+        ? nearMonthChgValue
+        : null;
+    const nearMonthPctValue = Number(nearMonthQuote?.pct_chg);
+    const nearMonthPct = Number.isFinite(nearMonthPctValue)
+        ? nearMonthPctValue
+        : null;
+    const futuresBasis = futuresIndexBasis(
+        nearMonthPrice,
+        calculated?.close,
+    );
+    const [positiveState, negativeState, groupState] = ic.states;
+    const icError =
+        ic.subErrors.find(Boolean) ??
+        (ic.bootstrap.status === 'error' || ic.bootstrap.status === 'quota'
+            ? ic.bootstrap.error
+            : undefined);
+    // 投影事件與建底皆未抵達且沒失敗 → 視為載入中
+    const contributionPending =
+        !positiveState && !negativeState && !groupState && !icError;
+    // 投影事件已依 published matrix 過濾排序（正/負值、排序、limit）—
+    // 這裡只做形狀映射，不重排
+    const positiveDrivers = useMemo(
+        () => (positiveState?.entries ?? []).map(toDriver),
+        [positiveState],
+    );
+    const negativeDrivers = useMemo(
+        () => (negativeState?.entries ?? []).map(toDriver),
+        [negativeState],
+    );
+    const flowDrivers = useMemo(() => {
+        const byCode = new Map<string, PulseDriver>();
+        for (const entry of [...positiveDrivers, ...negativeDrivers]) {
+            const current = byCode.get(entry.code);
+            if (!current || Math.abs(entry.points) > Math.abs(current.points)) {
+                byCode.set(entry.code, entry);
+            }
+        }
+        return [...byCode.values()];
+    }, [negativeDrivers, positiveDrivers]);
+    const impactDrivers = useMemo(
+        () =>
+            [...flowDrivers]
+                .sort((a, b) => Math.abs(b.points) - Math.abs(a.points))
+                .slice(0, IMPACT_LIMIT),
+        [flowDrivers],
+    );
+    const sideBarScale = useMemo(() => {
+        const maxAbs = Math.max(
+            Math.abs(positiveDrivers[0]?.points ?? 0),
+            Math.abs(negativeDrivers[0]?.points ?? 0),
+        );
+        return maxAbs > 0 ? maxAbs : 1;
+    }, [negativeDrivers, positiveDrivers]);
+    const driverCodes = [...new Set(flowDrivers.map((entry) => entry.code))]
+        .sort()
+        .join(',');
+
+    useEffect(() => {
+        if (!driverCodes) {
+            setStockDetails([]);
+            setStockDetailsPending(false);
+            return;
+        }
+        let active = true;
+        const codes = driverCodes.split(',');
+        setStockDetailsPending(true);
+        setStockDetails((current) =>
+            current.filter((stock) => codes.includes(stock.code)),
+        );
+        const loadDetails = async () => {
+            const details: StockMeta[] = [];
+            for (let start = 0; start < codes.length; start += STOCK_DETAIL_BATCH_SIZE) {
+                const batch = await loadStockDetails(
+                    codes.slice(start, start + STOCK_DETAIL_BATCH_SIZE),
+                );
+                details.push(...batch);
+                if (active) setStockDetails([...details]);
+            }
+            return details;
+        };
+        void loadDetails()
+            .catch(() => undefined)
+            .finally(() => {
+                if (active) setStockDetailsPending(false);
+            });
+        return () => {
+            active = false;
+        };
+    }, [driverCodes]);
+
+    const stockByCode = useMemo(
+        () => new Map(stockDetails.map((stock) => [stock.code, stock])),
+        [stockDetails],
+    );
+    // 傳導個股：category 直接來自排行事件（server 真值），名稱懶載
+    const flowStocks = useMemo<FlowStock[]>(
+        () =>
+            flowDrivers.map((entry) => ({
+                code: entry.code,
+                name: stockByCode.get(entry.code)?.name,
+                category: entry.category,
+                points: entry.points,
+                pctChg: entry.pct_chg,
+            })),
+        [flowDrivers, stockByCode],
+    );
+    // 傳導的產業層：群組貢獻前 12 大＋「其他產業」餘量（up/down 分列）
+    const flowGroups = useMemo<FlowGroup[]>(() => {
+        const rows = (groupState?.groups ?? []).filter(
+            (group) => group.value !== 0,
+        );
+        const sorted = [...rows].sort(
+            (a, b) => Math.abs(b.value) - Math.abs(a.value),
+        );
+        const visible: FlowGroup[] = sorted.slice(0, 12).map((group) => ({
+            category: group.category,
+            name: group.name,
+            points: group.value,
+        }));
+        const rest = sorted.slice(12);
+        const otherUp = rest.reduce(
+            (sum, group) => sum + Math.max(0, group.value),
+            0,
+        );
+        const otherDown = rest.reduce(
+            (sum, group) => sum + Math.min(0, group.value),
+            0,
+        );
+        if (otherUp > 0) {
+            visible.push({
+                category: 'other-up',
+                name: '其他產業',
+                points: otherUp,
+            });
+        }
+        if (otherDown < 0) {
+            visible.push({
+                category: 'other-down',
+                name: '其他產業',
+                points: otherDown,
+            });
+        }
+        return visible;
+    }, [groupState]);
+    const contributionIsSimtrade =
+        positiveState?.simtrade ||
+        negativeState?.simtrade ||
+        groupState?.simtrade;
+    const enabledSignalRuleSet = new Set(enabledSignalRules);
+    const enabledSignalExchangeSet = new Set(enabledSignalExchanges);
+    const visibleSignals = pulse.signals
+        .filter(
+            (signal) =>
+                enabledSignalRuleSet.has(signal.scanner) &&
+                enabledSignalExchangeSet.has(signal.exchange),
+        )
+        .slice(0, 100);
+    const latestSignal = visibleSignals[0];
+    const latestSignalKey = latestSignal
+        ? `${latestSignal.exchange}-${latestSignal.scanner}-${latestSignal.quote.code}-${latestSignal.quote.time}`
+        : null;
+
+    useEffect(() => {
+        if (!showSignalRules) return;
+        const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+            if (event.key === 'Escape') setShowSignalRules(false);
+        };
+        document.addEventListener('keydown', closeOnEscape);
+        return () => document.removeEventListener('keydown', closeOnEscape);
+    }, [showSignalRules]);
+
+    useEffect(() => {
+        if (view !== 'signals') return;
+        if (!latestSignalKey || !latestSignal) return;
+        if (latestSignalRef.current === latestSignalKey) return;
+        latestSignalRef.current = latestSignalKey;
+        if (autoFollowSignals) onPick?.(latestSignal.quote.code);
+    }, [autoFollowSignals, latestSignal, latestSignalKey, onPick, view]);
+
+    const toggleSignalFamily = useCallback((family: SignalFamily) => {
+        const familyRules = FAMILY_RULES[family];
+        setEnabledSignalRules((current) => {
+            const currentSet = new Set(current);
+            const allEnabled = familyRules.every((rule) =>
+                currentSet.has(rule),
+            );
+            familyRules.forEach((rule) =>
+                allEnabled ? currentSet.delete(rule) : currentSet.add(rule),
+            );
+            return ALL_SIGNAL_RULES.filter((rule) => currentSet.has(rule));
+        });
+    }, []);
+
+    const toggleSignalRule = useCallback((rule: ScannerRule) => {
+        setEnabledSignalRules((current) => {
+            const currentSet = new Set(current);
+            currentSet.has(rule)
+                ? currentSet.delete(rule)
+                : currentSet.add(rule);
+            return ALL_SIGNAL_RULES.filter((value) => currentSet.has(value));
+        });
+    }, []);
+
+    const toggleSignalExchange = useCallback((exchange: ScannerExchange) => {
+        setEnabledSignalExchanges((current) =>
+            current.includes(exchange)
+                ? current.filter((value) => value !== exchange)
+                : SIGNAL_EXCHANGES.filter(
+                      (value) => current.includes(value) || value === exchange,
+                  ),
+        );
+    }, []);
+
+    const clearSignalFilters = useCallback(() => {
+        setEnabledSignalRules([]);
+        setEnabledSignalExchanges([]);
+    }, []);
+
+    const toggleSignalGroup = useCallback((group: SignalFilterGroup) => {
+        setExpandedSignalGroups((current) =>
+            current.includes(group)
+                ? current.filter((value) => value !== group)
+                : [...current, group],
+        );
+    }, []);
+
+    const toggleSection = useCallback(
+        (section: PulseSection) => {
+            const next = sections.includes(section)
+                ? sections.length === 1
+                    ? sections
+                    : sections.filter((value) => value !== section)
+                : PULSE_SECTIONS.filter(
+                      (value) => sections.includes(value) || value === section,
+                  );
+            if (next === sections) return;
+            setSections(next);
+            onConfigChange?.(next, sectionWeightsRef.current);
+        },
+        [onConfigChange, sections],
+    );
+
+    const resizeSections = useCallback(
+        (
+            left: PulseSection,
+            right: PulseSection,
+            delta: number,
+            persist: boolean,
+        ) => {
+            const current = sectionWeightsRef.current;
+            const pairTotal = current[left] + current[right];
+            const leftWeight = Math.max(
+                MIN_SECTION_WEIGHT,
+                Math.min(pairTotal - MIN_SECTION_WEIGHT, current[left] + delta),
+            );
+            const next = {
+                ...current,
+                [left]: leftWeight,
+                [right]: pairTotal - leftWeight,
+            };
+            sectionWeightsRef.current = next;
+            setSectionWeights(next);
+            if (persist) onConfigChange?.(sections, next);
+        },
+        [onConfigChange, sections],
+    );
+
+    const beginResize = useCallback(
+        (
+            event: ReactPointerEvent<HTMLDivElement>,
+            left: PulseSection,
+            right: PulseSection,
+        ) => {
+            event.preventDefault();
+            const startX = event.clientX;
+            const startWeights = sectionWeightsRef.current;
+            const width = sectionWorkspaceRef.current?.clientWidth ?? 1;
+            const totalWeight = sections.reduce(
+                (sum, section) => sum + startWeights[section],
+                0,
+            );
+            const move = (moveEvent: PointerEvent) => {
+                const delta = ((moveEvent.clientX - startX) / width) * totalWeight;
+                setSectionWeights((current) => {
+                    const pairTotal = startWeights[left] + startWeights[right];
+                    const leftWeight = Math.max(
+                        MIN_SECTION_WEIGHT,
+                        Math.min(
+                            pairTotal - MIN_SECTION_WEIGHT,
+                            startWeights[left] + delta,
+                        ),
+                    );
+                    const next = {
+                        ...current,
+                        [left]: leftWeight,
+                        [right]: pairTotal - leftWeight,
+                    };
+                    sectionWeightsRef.current = next;
+                    return next;
+                });
+            };
+            const end = () => {
+                window.removeEventListener('pointermove', move);
+                window.removeEventListener('pointerup', end);
+                onConfigChange?.(sections, sectionWeightsRef.current);
+            };
+            window.addEventListener('pointermove', move);
+            window.addEventListener('pointerup', end, { once: true });
+        },
+        [onConfigChange, sections],
+    );
+
+    const resizeWithKeyboard = useCallback(
+        (
+            event: KeyboardEvent<HTMLDivElement>,
+            left: PulseSection,
+            right: PulseSection,
+        ) => {
+            if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+            event.preventDefault();
+            resizeSections(left, right, event.key === 'ArrowLeft' ? -3 : 3, true);
+        },
+        [resizeSections],
+    );
+
+    return (
+        <div className={styles.root}>
+            {(error || icError) && (
+                <div className={styles.error}>
+                    <AlertTriangle size={13} />
+                    {error || icError}
+                </div>
+            )}
+            {view === 'index' ? (
+                <>
+                    <div className={styles.controls}>
+                        {fixedIndex ? (
+                            <span className={styles.marketBadge}>
+                                {INDEX_LABELS[indexCode]}
+                            </span>
+                        ) : (
+                            (Object.keys(INDICES) as PulseIndexCode[]).map(
+                                (code) => (
+                                <button
+                                    key={code}
+                                    className={
+                                        styles.control[
+                                            code === indexCode ? 'on' : 'off'
+                                        ]
+                                    }
+                                    onClick={() => setIndexCode(code)}
+                                >
+                                    {INDEX_LABELS[code]}
+                                </button>
+                                ),
+                            )
+                        )}
+                        <span className={styles.controlDivider} />
+                        <button
+                            className={styles.control[
+                                sections.includes('stocks') ? 'on' : 'off'
+                            ]}
+                            onClick={() => toggleSection('stocks')}
+                            aria-pressed={sections.includes('stocks')}
+                            title="顯示或隱藏成分股貢獻"
+                        >
+                            <ListOrdered size={12} /> 成分股貢獻
+                        </button>
+                        <button
+                            className={styles.control[
+                                sections.includes('flow') ? 'on' : 'off'
+                            ]}
+                            onClick={() => toggleSection('flow')}
+                            aria-pressed={sections.includes('flow')}
+                            title="顯示或隱藏貢獻傳導"
+                        >
+                            <GitBranch size={12} /> 貢獻傳導
+                        </button>
+                        <span className={styles.spacer} />
+                    </div>
+                    <div className={styles.summary}>
+                        <span className={styles.summaryMetric}>
+                            <span className={styles.summaryLabel}>自算</span>
+                            <strong
+                                className={`${styles.summaryValue} ${panel.dirText[direction(calculated?.price_chg ?? 0)]}`}
+                            >
+                                {calculated
+                                    ? calculated.close.toLocaleString('en-US', {
+                                          maximumFractionDigits: 2,
+                                      })
+                                    : '--'}
+                            </strong>
+                            <span
+                                className={`${styles.change} ${panel.dirText[direction(calculated?.price_chg ?? 0)]}`}
+                            >
+                                {calculated
+                                    ? `${calculated.price_chg > 0 ? '+' : ''}${calculated.price_chg.toFixed(2)} · ${calculated.pct_chg.toFixed(2)}%`
+                                    : indexPending
+                                      ? '訂閱中...'
+                                      : '等待盤中資料'}
+                            </span>
+                        </span>
+                        <span className={styles.metricDivider} />
+                        <span className={styles.summaryMetric}>
+                            <span className={styles.summaryLabel}>官方</span>
+                            <strong
+                                className={`${styles.metricValue} ${panel.dirText[direction(officialChg ?? 0)]}`}
+                            >
+                                {officialClose?.toLocaleString('en-US', {
+                                    maximumFractionDigits: 2,
+                                }) ?? '--'}
+                            </strong>
+                            {officialChg !== null && officialPct !== null && (
+                                <span
+                                    className={`${styles.change} ${panel.dirText[direction(officialChg)]}`}
+                                >
+                                    {officialChg > 0 ? '+' : ''}
+                                    {officialChg.toFixed(2)} ·{' '}
+                                    {officialPct.toFixed(2)}%
+                                </span>
+                            )}
+                        </span>
+                        <span className={styles.summaryMetric}>
+                            <span className={styles.summaryLabel}>價差</span>
+                            <strong
+                                className={`${styles.metricValue} ${panel.dirText[direction(indexGap ?? 0)]}`}
+                                title="自算指數 − 官方指數"
+                            >
+                                {indexGap === null
+                                    ? '--'
+                                    : `${indexGap > 0 ? '+' : ''}${indexGap.toFixed(2)} 點`}
+                            </strong>
+                        </span>
+                        <span className={styles.summaryMetric}>
+                            <span className={styles.summaryLabel}>時間差</span>
+                            <strong
+                                className={styles.metricValue}
+                                title="自算指數時間 − 官方指數時間（正值＝自算領先）"
+                            >
+                                {timeGap === null
+                                    ? '--'
+                                    : `${timeGap > 0 ? '+' : ''}${timeGap.toFixed(3)} 秒`}
+                            </strong>
+                        </span>
+                        {indexCode === 'IX0001' && (
+                            <>
+                                <span className={styles.metricDivider} />
+                                <span className={styles.summaryMetric}>
+                                    <span
+                                        className={styles.summaryLabel}
+                                        title={`連續近月 TXFR1${nearMonthCode ? `，目前映射 ${nearMonthCode}` : ''}`}
+                                    >
+                                        台指近月
+                                    </span>
+                                    <strong
+                                        className={`${styles.metricValue} ${panel.dirText[direction(nearMonthChg ?? 0)]}`}
+                                    >
+                                        {nearMonthPrice?.toLocaleString(
+                                            'en-US',
+                                            {
+                                                maximumFractionDigits: 2,
+                                            },
+                                        ) ??
+                                            (nearMonthPending
+                                                ? '訂閱中...'
+                                                : '--')}
+                                    </strong>
+                                    {nearMonthChg !== null &&
+                                        nearMonthPct !== null && (
+                                            <span
+                                                className={`${styles.change} ${panel.dirText[direction(nearMonthChg)]}`}
+                                            >
+                                                {nearMonthChg > 0 ? '+' : ''}
+                                                {nearMonthChg.toFixed(0)} ·{' '}
+                                                {nearMonthPct.toFixed(2)}%
+                                            </span>
+                                        )}
+                                    {nearMonthCode && (
+                                        <span className={styles.contractCode}>
+                                            {nearMonthCode}
+                                        </span>
+                                    )}
+                                </span>
+                                <span className={styles.summaryMetric}>
+                                    <span className={styles.summaryLabel}>
+                                        期現差
+                                    </span>
+                                    <strong
+                                        className={`${styles.metricValue} ${panel.dirText[direction(futuresBasis ?? 0)]}`}
+                                        title="台指期近月 − 自算加權指數；正值為升水，負值為逆價差"
+                                    >
+                                        {futuresBasis === null
+                                            ? '--'
+                                            : `${futuresBasis > 0 ? '+' : ''}${futuresBasis.toFixed(2)} 點`}
+                                    </strong>
+                                </span>
+                            </>
+                        )}
+                        <span className={styles.spacer} />
+                        {(calculated?.simtrade || contributionIsSimtrade) && (
+                            <span className={styles.simtrade}>試撮</span>
+                        )}
+                        <span className={styles.time}>
+                            {calculated?.time.slice(0, 8) ?? ''}
+                        </span>
+                    </div>
+                    <div
+                        ref={sectionWorkspaceRef}
+                        className={styles.sectionWorkspace}
+                    >
+                        {sections.map((section, index) => (
+                            <Fragment key={section}>
+                                {index > 0 && (
+                                    <div
+                                        className={styles.sectionDivider}
+                                        role="separator"
+                                        aria-label={`調整${SECTION_LABELS[sections[index - 1]!]}與${SECTION_LABELS[section]}寬度`}
+                                        aria-orientation="vertical"
+                                        tabIndex={0}
+                                        onPointerDown={(event) =>
+                                            beginResize(
+                                                event,
+                                                sections[index - 1]!,
+                                                section,
+                                            )
+                                        }
+                                        onKeyDown={(event) =>
+                                            resizeWithKeyboard(
+                                                event,
+                                                sections[index - 1]!,
+                                                section,
+                                            )
+                                        }
+                                    />
+                                )}
+                                <section
+                                    className={styles.section}
+                                    style={{
+                                        flexBasis: 0,
+                                        flexGrow: sectionWeights[section],
+                                    }}
+                                >
+                                    {section === 'stocks' ? (
+                                        <>
+                                            <div
+                                                className={
+                                                    styles.stockTableHeading
+                                                }
+                                            >
+                                                <span
+                                                    className={
+                                                        stocksView === 'sides'
+                                                            ? styles.stockTableTitleWide
+                                                            : styles.stockTableTitle
+                                                    }
+                                                >
+                                                    成分股貢獻
+                                                    <span
+                                                        className={
+                                                            styles.headingToggleGroup
+                                                        }
+                                                    >
+                                                        {STOCKS_VIEWS.map(
+                                                            (item) => (
+                                                                <button
+                                                                    key={
+                                                                        item.value
+                                                                    }
+                                                                    className={
+                                                                        styles
+                                                                            .headingToggle[
+                                                                            item.value ===
+                                                                            stocksView
+                                                                                ? 'on'
+                                                                                : 'off'
+                                                                        ]
+                                                                    }
+                                                                    aria-pressed={
+                                                                        item.value ===
+                                                                        stocksView
+                                                                    }
+                                                                    onClick={() =>
+                                                                        setStocksView(
+                                                                            item.value,
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    {item.label}
+                                                                </button>
+                                                            ),
+                                                        )}
+                                                    </span>
+                                                </span>
+                                                {stocksView === 'impact' && (
+                                                    <>
+                                                        <span
+                                                            className={
+                                                                styles.stockTableColumn
+                                                            }
+                                                        >
+                                                            貢獻（點）
+                                                        </span>
+                                                        <span
+                                                            className={
+                                                                styles.stockTableColumn
+                                                            }
+                                                        >
+                                                            漲跌幅
+                                                        </span>
+                                                    </>
+                                                )}
+                                            </div>
+                                            {stocksView === 'sides' ? (
+                                                <div
+                                                    className={
+                                                        styles.sideColumns
+                                                    }
+                                                >
+                                                    <ContributionSideColumn
+                                                        side='up'
+                                                        entries={
+                                                            positiveDrivers
+                                                        }
+                                                        scale={sideBarScale}
+                                                        stockByCode={
+                                                            stockByCode
+                                                        }
+                                                        namesPending={
+                                                            stockDetailsPending
+                                                        }
+                                                        subscriptionPending={
+                                                            contributionPending
+                                                        }
+                                                        onPick={onPick}
+                                                    />
+                                                    <div
+                                                        className={
+                                                            styles.sideColumnDivider
+                                                        }
+                                                    />
+                                                    <ContributionSideColumn
+                                                        side='down'
+                                                        entries={
+                                                            negativeDrivers
+                                                        }
+                                                        scale={sideBarScale}
+                                                        stockByCode={
+                                                            stockByCode
+                                                        }
+                                                        namesPending={
+                                                            stockDetailsPending
+                                                        }
+                                                        subscriptionPending={
+                                                            contributionPending
+                                                        }
+                                                        onPick={onPick}
+                                                    />
+                                                </div>
+                                            ) : (
+                                            <div className={styles.list}>
+                                                {impactDrivers.map((entry, idx) => (
+                                                    <button
+                                                        key={`${entry.code}-${idx}`}
+                                                        className={
+                                                            styles.impactRow[
+                                                                direction(
+                                                                    entry.points,
+                                                                )
+                                                            ]
+                                                        }
+                                                        style={
+                                                            {
+                                                                '--bar-color':
+                                                                    entry.points >
+                                                                    0
+                                                                        ? vars
+                                                                              .color
+                                                                              .up
+                                                                        : vars
+                                                                              .color
+                                                                              .down,
+                                                                '--bar-size': `${(
+                                                                    Math.min(
+                                                                        1,
+                                                                        Math.abs(
+                                                                            entry.points,
+                                                                        ) /
+                                                                            sideBarScale,
+                                                                    ) *
+                                                                    IMPACT_BAR_MAX_REM
+                                                                ).toFixed(2)}rem`,
+                                                            } as CSSProperties
+                                                        }
+                                                        onClick={() =>
+                                                            onPick?.(entry.code)
+                                                        }
+                                                        title={driverTitle(
+                                                            entry,
+                                                        )}
+                                                    >
+                                                        <span
+                                                            className={styles.rank}
+                                                        >
+                                                            {idx + 1}
+                                                        </span>
+                                                        <span
+                                                            className={styles.code}
+                                                        >
+                                                            {entry.code}
+                                                            <small
+                                                                className={
+                                                                    styles.stockName
+                                                                }
+                                                            >
+                                                                {stockByCode.get(
+                                                                    entry.code,
+                                                                )?.name ??
+                                                                    (stockDetailsPending
+                                                                        ? '名稱載入中'
+                                                                        : '名稱未取得')}
+                                                            </small>
+                                                        </span>
+                                                        <span
+                                                            className={`${styles.points} ${panel.dirText[direction(entry.points)]}`}
+                                                        >
+                                                            {entry.points > 0
+                                                                ? '+'
+                                                                : ''}
+                                                            {entry.points.toFixed(
+                                                                2,
+                                                            )}
+                                                        </span>
+                                                        <span
+                                                            className={`${styles.pct} ${panel.dirText[direction(entry.pct_chg)]}`}
+                                                        >
+                                                            {entry.pct_chg > 0
+                                                                ? '+'
+                                                                : ''}
+                                                            {entry.pct_chg.toFixed(
+                                                                2,
+                                                            )}
+                                                            %
+                                                        </span>
+                                                    </button>
+                                                ))}
+                                                {impactDrivers.length === 0 && (
+                                                    <div
+                                                        className={styles.empty}
+                                                    >
+                                                        {contributionPending
+                                                            ? '訂閱中...'
+                                                            : '等待成分股貢獻資料'}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            )}
+                                        </>
+                                    ) : (
+                                        <>
+                                            <div
+                                                className={styles.sectionHeading}
+                                            >
+                                                <span
+                                                    className={
+                                                        styles.sectionHeadingTitle
+                                                    }
+                                                >
+                                                    貢獻傳導
+                                                    <span
+                                                        className={
+                                                            styles.headingToggleGroup
+                                                        }
+                                                    >
+                                                        <button
+                                                            className={
+                                                                styles
+                                                                    .headingToggle[
+                                                                    showFlowPercent
+                                                                        ? 'on'
+                                                                        : 'off'
+                                                                ]
+                                                            }
+                                                            aria-pressed={
+                                                                showFlowPercent
+                                                            }
+                                                            title="顯示或隱藏個股漲跌幅"
+                                                            onClick={() =>
+                                                                setShowFlowPercent(
+                                                                    (current) =>
+                                                                        !current,
+                                                                )
+                                                            }
+                                                        >
+                                                            漲跌幅
+                                                        </button>
+                                                    </span>
+                                                </span>
+                                                <span
+                                                    className={styles.areaLegend}
+                                                    title="流寬只反映指數貢獻點數的分解，不代表實際資金流向"
+                                                >
+                                                    流寬＝貢獻點數（非資金流）·
+                                                    各產業展開前 5 大個股
+                                                </span>
+                                            </div>
+                                            <ContributionSankey
+                                                stocks={flowStocks}
+                                                groups={flowGroups}
+                                                showPercent={showFlowPercent}
+                                                onPick={onPick}
+                                            />
+                                        </>
+                                    )}
+                                </section>
+                            </Fragment>
+                        ))}
+                    </div>
+                </>
+            ) : (
+                <>
+                    <div className={styles.controls}>
+                        <button
+                            className={
+                                styles.control[showSignalRules ? 'on' : 'off']
+                            }
+                            aria-expanded={showSignalRules}
+                            aria-haspopup='dialog'
+                            onClick={() => setShowSignalRules((open) => !open)}
+                        >
+                            <SlidersHorizontal size={11} /> 訊號{' '}
+                            {enabledSignalRules.length}/{ALL_SIGNAL_RULES.length}
+                            {' · '}市場 {enabledSignalExchanges.length}/
+                            {SIGNAL_EXCHANGES.length}
+                            <ChevronDown size={11} />
+                        </button>
+                        <button
+                            className={
+                                styles.control[autoFollowSignals ? 'on' : 'off']
+                            }
+                            title='新訊號抵達時連動未鎖定的行情面板'
+                            aria-pressed={autoFollowSignals}
+                            onClick={() =>
+                                setAutoFollowSignals((enabled) => !enabled)
+                            }
+                        >
+                            <Link2 size={11} /> 自動跟隨
+                        </button>
+                        <span className={styles.spacer} />
+                        <span className={styles.live}>
+                            <span
+                                className={
+                                    signalCoverage.ok === signalCoverage.total &&
+                                    signalCoverage.total > 0
+                                        ? styles.liveDot
+                                        : styles.liveDotPartial
+                                }
+                            />{' '}
+                            {signalCoverage.pending
+                                ? '訂閱中'
+                                : signalCoverage.total === 0
+                                  ? '未選擇訂閱'
+                                  : signalCoverage.ok === signalCoverage.total
+                                    ? `${signalCoverage.ok}/${signalCoverage.total} 訂閱正常`
+                                    : `${signalCoverage.ok}/${signalCoverage.total} 訂閱成功`}
+                        </span>
+                    </div>
+                    {showSignalRules && (
+                        <>
+                            <button
+                                className={styles.signalRuleBackdrop}
+                                aria-label='關閉訊號多選選單'
+                                onClick={() => setShowSignalRules(false)}
+                            />
+                            <div
+                                className={styles.signalRuleFilters}
+                                role='dialog'
+                                aria-label='訊號與市場篩選'
+                            >
+                                <div className={styles.signalRuleMenuHeader}>
+                                    <strong
+                                        className={styles.signalRuleMenuTitle}
+                                    >
+                                        訊號篩選
+                                    </strong>
+                                    <span
+                                        className={
+                                            styles.signalRuleMenuSummary
+                                        }
+                                    >
+                                        已選 {enabledSignalRules.length} 項
+                                    </span>
+                                    <button
+                                        type='button'
+                                        className={styles.signalRuleClear}
+                                        disabled={
+                                            enabledSignalRules.length === 0 &&
+                                            enabledSignalExchanges.length === 0
+                                        }
+                                        onClick={clearSignalFilters}
+                                    >
+                                        全部清除
+                                    </button>
+                                </div>
+                                <section className={styles.signalMarketSection}>
+                                    <button
+                                        type='button'
+                                        className={styles.signalSectionToggle}
+                                        aria-expanded={expandedSignalGroups.includes(
+                                            'market',
+                                        )}
+                                        onClick={() =>
+                                            toggleSignalGroup('market')
+                                        }
+                                    >
+                                        {expandedSignalGroups.includes(
+                                            'market',
+                                        ) ? (
+                                            <ChevronDown size={12} />
+                                        ) : (
+                                            <ChevronRight size={12} />
+                                        )}
+                                        <span>市場</span>
+                                        <small
+                                            className={styles.signalGroupCount}
+                                        >
+                                            {enabledSignalExchanges.length}/
+                                            {SIGNAL_EXCHANGES.length}
+                                        </small>
+                                    </button>
+                                    {expandedSignalGroups.includes(
+                                        'market',
+                                    ) && (
+                                        <div
+                                            className={
+                                                styles.signalMarketOptions
+                                            }
+                                        >
+                                            {SIGNAL_EXCHANGES.map((exchange) => (
+                                                <label
+                                                    key={exchange}
+                                                    className={
+                                                        styles.signalRuleOption
+                                                    }
+                                                >
+                                                    <input
+                                                        type='checkbox'
+                                                        className={
+                                                            styles.signalRuleCheckbox
+                                                        }
+                                                        checked={enabledSignalExchangeSet.has(
+                                                            exchange,
+                                                        )}
+                                                        onChange={() =>
+                                                            toggleSignalExchange(
+                                                                exchange,
+                                                            )
+                                                        }
+                                                    />
+                                                    <span>
+                                                        {
+                                                            EXCHANGE_LABELS[
+                                                                exchange
+                                                            ]
+                                                        }{' '}
+                                                        {exchange}
+                                                    </span>
+                                                </label>
+                                            ))}
+                                        </div>
+                                    )}
+                                </section>
+                                <div className={styles.signalRuleDivider} />
+                                <h4 className={styles.signalRulesHeading}>
+                                    訊號規則
+                                </h4>
+                                <div className={styles.signalRuleGrid}>
+                                    {SIGNAL_FAMILIES.map((family) => {
+                                        const familyRules =
+                                            FAMILY_RULES[family];
+                                        const enabledCount = familyRules.filter(
+                                            (rule) =>
+                                                enabledSignalRuleSet.has(rule),
+                                        ).length;
+                                        return (
+                                            <fieldset
+                                                key={family}
+                                                className={
+                                                    styles.signalRuleGroup
+                                                }
+                                            >
+                                                <legend
+                                                    className={
+                                                        styles.signalRuleLegend
+                                                    }
+                                                >
+                                                    <button
+                                                        type='button'
+                                                        className={
+                                                            styles.signalRuleCollapseToggle
+                                                        }
+                                                        aria-expanded={expandedSignalGroups.includes(
+                                                            family,
+                                                        )}
+                                                        onClick={() =>
+                                                            toggleSignalGroup(
+                                                                family,
+                                                            )
+                                                        }
+                                                    >
+                                                        {expandedSignalGroups.includes(
+                                                            family,
+                                                        ) ? (
+                                                            <ChevronDown
+                                                                size={12}
+                                                            />
+                                                        ) : (
+                                                            <ChevronRight
+                                                                size={12}
+                                                            />
+                                                        )}
+                                                        <span>
+                                                            {
+                                                                FAMILY_LABELS[
+                                                                    family
+                                                                ]
+                                                            }
+                                                        </span>
+                                                        <small
+                                                            className={
+                                                                styles.signalGroupCount
+                                                            }
+                                                        >
+                                                            {enabledCount}/
+                                                            {familyRules.length}
+                                                        </small>
+                                                    </button>
+                                                    <button
+                                                        type='button'
+                                                        className={
+                                                            styles.signalRuleGroupToggle
+                                                        }
+                                                        onClick={() =>
+                                                            toggleSignalFamily(
+                                                                family,
+                                                            )
+                                                        }
+                                                    >
+                                                        {enabledCount ===
+                                                        familyRules.length
+                                                            ? '清除'
+                                                            : '全選'}
+                                                    </button>
+                                                </legend>
+                                                {expandedSignalGroups.includes(
+                                                    family,
+                                                ) && (
+                                                    <div
+                                                        className={
+                                                            styles.signalRuleOptions
+                                                        }
+                                                    >
+                                                        {familyRules.map(
+                                                            (rule) => (
+                                                                <label
+                                                                    key={rule}
+                                                                    className={
+                                                                        styles.signalRuleOption
+                                                                    }
+                                                                >
+                                                                    <input
+                                                                        type='checkbox'
+                                                                        className={
+                                                                            styles.signalRuleCheckbox
+                                                                        }
+                                                                        checked={enabledSignalRuleSet.has(
+                                                                            rule,
+                                                                        )}
+                                                                        onChange={() =>
+                                                                            toggleSignalRule(
+                                                                                rule,
+                                                                            )
+                                                                        }
+                                                                    />
+                                                                    <span>
+                                                                        {
+                                                                            RULE_LABELS[
+                                                                                rule
+                                                                            ]
+                                                                        }
+                                                                    </span>
+                                                                </label>
+                                                            ),
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </fieldset>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        </>
+                    )}
+                    {pulse.gap && (
+                        <div className={styles.gap}>
+                            <AlertTriangle size={13} />
+                            串流重連期間遺漏 {pulse.gap.dropped_count} 筆訊號
+                        </div>
+                    )}
+                    <div className={styles.signalHeader}>
+                        <span>時間</span>
+                        <span>市場</span>
+                        <span>代碼</span>
+                        <span>訊號</span>
+                        <span>變化</span>
+                        <span>成交價</span>
+                    </div>
+                    <div className={styles.signalList}>
+                        {visibleSignals.map((signal) => {
+                            const close = Number(signal.quote.close ?? 0);
+                            return (
+                                <button
+                                    key={`${signal.exchange}-${signal.scanner}-${signal.quote.code}-${signal.quote.time}`}
+                                    className={styles.signalRow}
+                                    onClick={() => onPick?.(signal.quote.code)}
+                                >
+                                    <span className={styles.time}>
+                                        {signal.quote.time.slice(0, 8)}
+                                    </span>
+                                    <span className={styles.exchange}>
+                                        {signal.exchange}
+                                    </span>
+                                    <span className={styles.code}>
+                                        {signal.quote.code}
+                                    </span>
+                                    <span
+                                        className={
+                                            panel.dirText[
+                                                signalDirection(signal.scanner)
+                                            ]
+                                        }
+                                    >
+                                        {RULE_LABELS[signal.scanner]}
+                                    </span>
+                                    <span
+                                        className={`${styles.detail} ${panel.dirText[signalDirection(signal.scanner)]}`}
+                                    >
+                                        {signalDetail(
+                                            signal.scanner,
+                                            signal.extra,
+                                        )}
+                                    </span>
+                                    <span className={styles.price}>
+                                        {close > 0
+                                            ? close.toLocaleString('en-US')
+                                            : '--'}
+                                    </span>
+                                </button>
+                            );
+                        })}
+                        {visibleSignals.length === 0 && (
+                            <div className={styles.empty}>等待盤中訊號</div>
+                        )}
+                    </div>
+                </>
+            )}
+        </div>
+    );
+}
+
+export function MarketSignalPanel({
+    onPick,
+}: {
+    onPick?: (code: string) => void;
+}) {
+    return <MarketPulsePanel onPick={onPick} fixedView="signals" />;
+}

@@ -1,0 +1,22 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Project Money — 決策到期與學習</title>
+<style>body{margin:0;background:#101722;color:#e4edf8;font:14px system-ui}main{max-width:1450px;margin:auto;padding:22px;box-sizing:border-box}a{color:#7bc7ff}header{display:flex;gap:20px;align-items:center;flex-wrap:wrap}h1{font-size:24px}section{margin-top:18px;padding:16px;background:#182331;border:1px solid #304256;border-radius:8px;min-width:0}.table-wrap{overflow:auto}table{border-collapse:collapse;min-width:1050px;width:100%}td,th{text-align:left;padding:10px;border-bottom:1px solid #304256;vertical-align:top}td{max-width:260px;overflow-wrap:anywhere}.muted{color:#a7b5c8}pre{white-space:pre-wrap;overflow-wrap:anywhere}button{background:#283f59;border:1px solid #7bc7ff;color:white;padding:8px;border-radius:5px}#error{color:#ffbb75}.badge{font-weight:700;color:#8fdaab}*{box-sizing:border-box}</style></head><body><main>
+<header><a href="/">← 工作站</a><h1>決策到期與學習</h1><span class="badge">PAPER ONLY · READ ONLY</span><button id="refresh">刷新</button></header>
+<p class="muted">NO_TRADE 是正式決策，不是成交。到期不等於完成評估；沒有後續可用證據就保留待評估，不製造績效。</p>
+<p id="error" role="alert"></p><section><h2>當前案件</h2><p id="summary">讀取中</p><p id="status-time" class="muted"></p><div class="table-wrap"><table id="cases-table"><thead><tr><th>標的／案件</th><th>動作</th><th>狀態</th><th>觀察期限（UTC）</th><th>評估狀態</th><th>分析基線</th><th>不交易損益</th><th>已套用教訓</th></tr></thead><tbody id="cases"></tbody></table></div><p id="empty" hidden>目前沒有可讀回案件；這不是驗收通過。</p></section>
+<section><h2>已記錄教訓</h2><pre id="lessons">尚無資料</pre></section><section><h2>案件原始證據</h2><p class="muted">點選案件列，查看 Main CIO provenance 與 outcome。此頁沒有下單能力。</p><pre id="detail">未選取案件</pre></section>
+</main><script>
+const el=id=>document.getElementById(id);
+const show=value=>value===null||value===undefined?'N/A':typeof value==='object'?JSON.stringify(value):String(value);
+async function refresh(){
+ try{ const r=await fetch('/api/paper/cio/learning-cases',{cache:'no-store'});if(!r.ok)throw new Error('案件讀回失敗 HTTP '+r.status);const data=await r.json();
+  el('error').textContent='';el('summary').textContent='正式案件 '+data.total_case_count+' 筆；顯示 '+data.returned_case_count+' 筆。'+JSON.stringify(data.evaluation_counts);
+  el('status-time').textContent='資料取得：'+data.as_of+'；來源：'+data.source_status;
+  el('cases').replaceChildren();el('empty').hidden=data.cases.length!==0;
+  for(const c of data.cases){const tr=document.createElement('tr');tr.dataset.caseId=c.case_id;
+   for(const value of [c.symbol+' / '+c.case_id,c.action,c.status,c.observation_deadline,c.evaluation_status,c.analysis_reference,c.no_trade_pnl,c.applied_lesson_ids]){const td=document.createElement('td');td.textContent=show(value);tr.appendChild(td);}
+   tr.addEventListener('click',()=>el('detail').textContent=JSON.stringify(c,null,2));el('cases').appendChild(tr);
+  }el('lessons').textContent=data.lessons.length?JSON.stringify(data.lessons,null,2):'尚無已記錄教訓；自然觀察尚未成熟時不預造結果。';
+ }catch(e){el('error').textContent=e.message;el('summary').textContent='資料不可用，不能視為零案件或通過。';}
+}
+el('refresh').addEventListener('click',refresh);refresh();setInterval(refresh,15000);
+</script></body></html>

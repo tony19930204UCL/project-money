@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PublicResearchEvidence",
+  "description": "Public-only verified research evidence schema for CIO decision evaluation. Fixtures, simulated items, and unverified narratives are strictly rejected.",
+  "type": "object",
+  "properties": {
+    "research_id": {
+      "type": "string",
+      "description": "Unique deterministic identifier for the research piece (e.g. nvda-repurchase-20260928-official)"
+    },
+    "symbol": {
+      "type": "string",
+      "description": "Authoritative instrument symbol (e.g. NVDA, 2330.TW)"
+    },
+    "source_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Publicly resolvable HTTPS/HTTP URL of the primary source"
+    },
+    "source_tier": {
+      "type": "string",
+      "enum": ["official_company_ir", "regulatory_filing", "official_filing", "official_exchange", "audited_financials", "secondary_cross_check", "peer_reference"],
+      "description": "Tier ranking of the source. Unverified community sources are rejected."
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp of when this evidence was retrieved"
+    },
+    "published_at": {
+      "type": "string",
+      "description": "Publication date string (e.g. 2026-09-28)"
+    },
+    "is_fixture": {
+      "type": "boolean",
+      "const": false,
+      "description": "Must be false for production evidence. Labeled fixtures are strictly rejected."
+    },
+    "verification_status": {
+      "type": "string",
+      "const": "verified",
+      "description": "Must be 'verified'. Unverified narratives or speculations are strictly rejected."
+    },
+    "verified_facts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "description": "List of verifiable factual claims extracted directly from the source"
+    },
+    "research_scope": {
+      "type": "string",
+      "description": "Explicit scope boundary (e.g. event_input_only_not_order)"
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Explicit gaps, timing discrepancies, or non-inferences"
+    },
+    "raw_metadata": {
+      "type": "object",
+      "description": "Supplemental non-authoritative metadata"
+    }
+  },
+  "required": [
+    "research_id",
+    "symbol",
+    "source_url",
+    "source_tier",
+    "observed_at",
+    "is_fixture",
+    "verification_status",
+    "verified_facts"
+  ]
+}

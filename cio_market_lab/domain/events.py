@@ -1,0 +1,43 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Dict
+from pydantic import BaseModel, Field
+import uuid
+
+
+class EventType(str, Enum):
+    BAR_OBSERVED = "BAR_OBSERVED"
+    SIGNAL_GENERATED = "SIGNAL_GENERATED"
+    ORDER_CREATED = "ORDER_CREATED"
+    ORDER_REJECTED = "ORDER_REJECTED"
+    ORDER_FILLED = "ORDER_FILLED"
+    POSITION_UPDATED = "POSITION_UPDATED"
+    PORTFOLIO_SNAPSHOT = "PORTFOLIO_SNAPSHOT"
+    STRATEGY_REGISTERED = "STRATEGY_REGISTERED"
+    STRATEGY_ACTIVATED = "STRATEGY_ACTIVATED"
+    STRATEGY_PAUSED = "STRATEGY_PAUSED"
+    KILL_SWITCH_TRIGGERED = "KILL_SWITCH_TRIGGERED"
+    RESEARCH_ITEM_ADDED = "RESEARCH_ITEM_ADDED"
+    ORDER_PREVIEWED = "ORDER_PREVIEWED"
+    ORDER_CANCELLED = "ORDER_CANCELLED"
+    ORDER_REPLACED = "ORDER_REPLACED"
+    RISK_LIMIT_UPDATED = "RISK_LIMIT_UPDATED"
+    EXPERIMENT_CONFIGURED = "EXPERIMENT_CONFIGURED"
+    LLM_REVIEW_RECORDED = "LLM_REVIEW_RECORDED"
+    AUTOMATION_EXIT_TRIGGERED = "AUTOMATION_EXIT_TRIGGERED"
+    CIO_DECISION_RECORDED = "CIO_DECISION_RECORDED"
+    CIO_OUTCOME_EVALUATED = "CIO_OUTCOME_EVALUATED"
+    CIO_LESSON_RECORDED = "CIO_LESSON_RECORDED"
+    CIO_DECISION_BLOCKED = "CIO_DECISION_BLOCKED"
+    CORPORATE_ACTION_APPLIED = "CORPORATE_ACTION_APPLIED"
+    DERIVATIVE_ACCOUNT_REVIEW_RECORDED = "DERIVATIVE_ACCOUNT_REVIEW_RECORDED"
+
+
+class EventEnvelope(BaseModel):
+    event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    event_type: EventType
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    aggregate_id: str  # e.g. symbol, portfolio:swing, strategy:vcp_1
+    payload: Dict[str, Any]

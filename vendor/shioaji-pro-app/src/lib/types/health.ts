@@ -1,0 +1,30 @@
+// src/lib/types/health.ts
+
+export interface Health {
+    status: string;
+    version: string;
+    timestamp: string;
+    token_expires_in_seconds: number;
+    token_stale: boolean;
+    // Contract V2 loads lazily, so newer servers may omit the old eager-load
+    // count from their health response.
+    contract_count?: number;
+    next_maintenance: string;
+    // 1.7.2+
+    ca_expires_in_days?: number;
+    ca_expired?: boolean;
+    agent_harness?: {
+        enabled: boolean;
+        bootstrap?: string;
+        mode: 'off' | 'production' | 'all';
+        capability_version: number;
+        capability_header: string;
+        digest_scheme: string;
+        audience: string | null;
+        max_ttl_seconds: number;
+    };
+    // 1.7.3+ — Solace（行情/交易後端）session 斷線自癒狀態；恢復中時
+    // 資料端點會回 SessionNotEstablished 500，但 health 本身仍可回應
+    session_recovering?: boolean;
+    session_recovery_attempts?: number;
+}

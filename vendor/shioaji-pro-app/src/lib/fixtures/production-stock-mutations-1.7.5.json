@@ -1,0 +1,198 @@
+[
+  {
+    "state": "StockOrder",
+    "data": {
+      "StockOrder": {
+        "operation": {
+          "op_type": "Cancel",
+          "op_code": "00",
+          "op_msg": ""
+        },
+        "order": {
+          "id": "fixture-1",
+          "seqno": "fixture-2",
+          "ordno": "fixture-3",
+          "account": {
+            "account_type": "S",
+            "person_id": "",
+            "broker_id": "fixture",
+            "account_id": "fixture",
+            "signed": true,
+            "username": ""
+          },
+          "action": "Buy",
+          "price": 42.45,
+          "quantity": 1,
+          "order_type": "ROD",
+          "price_type": "LMT",
+          "order_cond": "Cash",
+          "order_lot": "Common",
+          "custom_field": ""
+        },
+        "status": {
+          "id": "fixture-1",
+          "exchange_ts": 1700000000.0,
+          "modified_price": 0.0,
+          "cancel_quantity": 1,
+          "order_quantity": 0,
+          "web_id": "fixture-4"
+        },
+        "contract": {
+          "exchange": "TSE",
+          "code": "2890",
+          "security_type": "STK",
+          "symbol": "",
+          "name": "",
+          "currency": "TWD"
+        }
+      }
+    }
+  },
+  {
+    "state": "StockOrder",
+    "data": {
+      "StockOrder": {
+        "operation": {
+          "op_type": "New",
+          "op_code": "00",
+          "op_msg": ""
+        },
+        "order": {
+          "id": "fixture-5",
+          "seqno": "fixture-6",
+          "ordno": "fixture-7",
+          "account": {
+            "account_type": "S",
+            "person_id": "",
+            "broker_id": "fixture",
+            "account_id": "fixture",
+            "signed": true,
+            "username": ""
+          },
+          "action": "Buy",
+          "price": 42.8,
+          "quantity": 3,
+          "order_type": "ROD",
+          "price_type": "LMT",
+          "order_cond": "Cash",
+          "order_lot": "Common",
+          "custom_field": ""
+        },
+        "status": {
+          "id": "fixture-5",
+          "exchange_ts": 1700000010.0,
+          "modified_price": 0.0,
+          "cancel_quantity": 0,
+          "order_quantity": 3,
+          "web_id": "fixture-4"
+        },
+        "contract": {
+          "exchange": "TSE",
+          "code": "2890",
+          "security_type": "STK",
+          "symbol": "",
+          "name": "",
+          "currency": "TWD"
+        }
+      }
+    }
+  },
+  {
+    "state": "StockOrder",
+    "data": {
+      "StockOrder": {
+        "operation": {
+          "op_type": "UpdatePrice",
+          "op_code": "00",
+          "op_msg": ""
+        },
+        "order": {
+          "id": "fixture-5",
+          "seqno": "fixture-6",
+          "ordno": "fixture-7",
+          "account": {
+            "account_type": "S",
+            "person_id": "",
+            "broker_id": "fixture",
+            "account_id": "fixture",
+            "signed": true,
+            "username": ""
+          },
+          "action": "Buy",
+          "price": 42.5,
+          "quantity": 3,
+          "order_type": "ROD",
+          "price_type": "LMT",
+          "order_cond": "Cash",
+          "order_lot": "Common",
+          "custom_field": ""
+        },
+        "status": {
+          "id": "fixture-5",
+          "exchange_ts": 1700000020.0,
+          "modified_price": 42.5,
+          "cancel_quantity": 0,
+          "order_quantity": 3,
+          "web_id": "fixture-4"
+        },
+        "contract": {
+          "exchange": "TSE",
+          "code": "2890",
+          "security_type": "STK",
+          "symbol": "",
+          "name": "",
+          "currency": "TWD"
+        }
+      }
+    }
+  },
+  {
+    "state": "StockOrder",
+    "data": {
+      "StockOrder": {
+        "operation": {
+          "op_type": "UpdateQty",
+          "op_code": "00",
+          "op_msg": ""
+        },
+        "order": {
+          "id": "fixture-5",
+          "seqno": "fixture-6",
+          "ordno": "fixture-7",
+          "account": {
+            "account_type": "S",
+            "person_id": "",
+            "broker_id": "fixture",
+            "account_id": "fixture",
+            "signed": true,
+            "username": ""
+          },
+          "action": "Buy",
+          "price": 42.5,
+          "quantity": 3,
+          "order_type": "ROD",
+          "price_type": "LMT",
+          "order_cond": "Cash",
+          "order_lot": "Common",
+          "custom_field": ""
+        },
+        "status": {
+          "id": "fixture-5",
+          "exchange_ts": 1700000030.0,
+          "modified_price": 0.0,
+          "cancel_quantity": 1,
+          "order_quantity": 2,
+          "web_id": "fixture-4"
+        },
+        "contract": {
+          "exchange": "TSE",
+          "code": "2890",
+          "security_type": "STK",
+          "symbol": "",
+          "name": "",
+          "currency": "TWD"
+        }
+      }
+    }
+  }
+]

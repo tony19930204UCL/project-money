@@ -1,0 +1,26 @@
+id: volatility_contraction
+version: 1.0.0
+name: Volatility Contraction Pattern with Relative Volume
+markets:
+  - TW
+  - US
+horizons:
+  - swing
+required_fields:
+  - open
+  - high
+  - low
+  - close
+  - volume
+warmup_bars: 10
+session_rules:
+  regular_only: true
+  allow_extended: false
+default_config:
+  lookback_bars: 10
+  contraction_threshold: 0.7
+  rvol_threshold: 1.2
+  risk_per_trade_pct: 0.02
+risk_class: swing_growth
+author: Main CIO Research Lab
+created_at: "2026-09-23T09:00:00Z"

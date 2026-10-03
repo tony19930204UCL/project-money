@@ -1,0 +1,32 @@
+# Private runtime, credentials and machine state are never versioned.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.sqlite
+*.sqlite3
+*.db
+*.db-*
+*.log
+*.jsonl
+runtime/
+artifacts/
+logs/
+local_config/
+.venv/
+venv/
+node_modules/
+dist/
+build/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.gitcredentials
+.DS_Store
+# Unit-test JSON fixtures under application source are deliberate source files.

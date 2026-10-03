@@ -1,0 +1,4 @@
+range_bars: 4
+rvol_threshold: 1.2
+risk_per_trade_pct: 0.01
+max_shares: 500
