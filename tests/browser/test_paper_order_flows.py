@@ -9,9 +9,6 @@ import sys
 import httpx
 import pytest
 
-from tests.browser.conftest import PROJECT_ROOT, HELPER, run_helper_command
-
-
 def _page(browser, viewport=(1280, 720)):
     context = browser.new_context(viewport={"width": viewport[0], "height": viewport[1]})
     page = context.new_page()
@@ -54,6 +51,7 @@ def test_manual_ui_submit_cancel_replace_fill_and_restart(
     fresh_runtime,
     server_factory,
     tmp_path,
+    helper_command,
 ):
     control = tmp_path / "control-a"
     with server_factory(fresh_runtime, control, read_only=False) as server:
@@ -120,7 +118,7 @@ def test_manual_ui_submit_cancel_replace_fill_and_restart(
         finally:
             context.close()
 
-    advanced = run_helper_command("advance-manual", fresh_runtime)
+    advanced = helper_command("advance-manual", fresh_runtime)
     assert advanced["order_id"] == replacement_id
     assert advanced["status"] == "FILLED"
     assert advanced["fill_ids"]
@@ -176,8 +174,9 @@ def test_strategy_and_cio_authority_browser_readback_and_negative_gates(
     fresh_runtime,
     server_factory,
     tmp_path,
+    helper_command,
 ):
-    seeded = run_helper_command("seed-authorities", fresh_runtime)
+    seeded = helper_command("seed-authorities", fresh_runtime)
     assert seeded["strategy_order_id"]
     assert seeded["cio_order_id"]
     assert seeded["cio_case_id"] == "TEST_ONLY_browser_cio_case"

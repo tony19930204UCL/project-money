@@ -178,3 +178,7 @@ def run_helper_command(command: str, runtime_dir: Path) -> dict:
     )
     lines = [line for line in proc.stdout.splitlines() if line.strip()]
     return json.loads(lines[-1]) if lines else {}
+
+@pytest.fixture
+def helper_command():
+    return run_helper_command
