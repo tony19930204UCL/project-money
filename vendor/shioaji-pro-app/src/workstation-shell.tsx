@@ -122,7 +122,20 @@ function classify(value: unknown): LoadStatus {
     if (Array.isArray(value) && value.length === 0) return 'empty';
     if (value && typeof value === 'object') {
         const record = value as Record<string, unknown>;
-        if (record.is_stale === true || record.data_status === 'stale') return 'stale';
+        if (record.data_status === 'unavailable') return 'empty';
+        if (
+            record.is_stale === true ||
+            record.data_status === 'stale' ||
+            (Array.isArray(record.bars) &&
+                record.bars.some(
+                    (bar) =>
+                        bar &&
+                        typeof bar === 'object' &&
+                        (bar as Record<string, unknown>).is_stale === true,
+                ))
+        ) {
+            return 'stale';
+        }
     }
     return 'ok';
 }
