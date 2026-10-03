@@ -86,7 +86,7 @@ const VIEWS: ViewDefinition[] = [
         label: 'Replay',
         eyebrow: 'EXPERIMENT HISTORY',
         title: 'Replay',
-        endpoint: '/api/experiments',
+        endpoint: '/api/paper/experiments',
         description: 'Recorded replay/experiment summaries exposed by the existing experiments contract.',
     },
     {
@@ -194,6 +194,7 @@ function DataWorkspace({ definition }: { definition: ViewDefinition }) {
 export function WorkstationShell() {
     const [active, setActive] = useState<WorkspaceKey>('command-center');
     const [healthStatus, setHealthStatus] = useState<LoadStatus>('loading');
+    const [healthPayload, setHealthPayload] = useState<unknown>(null);
     const [terminalOpen, setTerminalOpen] = useState(false);
     useEffect(() => {
         const controller = new AbortController();
@@ -202,7 +203,10 @@ export function WorkstationShell() {
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 return response.json();
             })
-            .then(() => setHealthStatus('ok'))
+            .then((body) => {
+                setHealthPayload(body);
+                setHealthStatus('ok');
+            })
             .catch(() => {
                 if (!controller.signal.aborted) setHealthStatus('error');
             });
@@ -249,6 +253,13 @@ export function WorkstationShell() {
                                 The existing vendor trading terminal remains available, but observer
                                 navigation does not start its subscription/data POST traffic.
                             </p>
+                            <div className="pm-data-card" data-state-kind={healthStatus === 'loading' ? undefined : healthStatus}>
+                                <div className="pm-data-card-head">
+                                    <strong>/api/health</strong>
+                                    <span>Loaded from the local FastAPI contract.</span>
+                                </div>
+                                <pre>{summarize(healthPayload)}</pre>
+                            </div>
                             {!terminalOpen ? (
                                 <button
                                     type="button"
