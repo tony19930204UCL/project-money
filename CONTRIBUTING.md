@@ -18,14 +18,26 @@ Main opens issues without per-issue notifications. Before a batch handoff Main r
 
 Outage, inability to place orders, or wrong accounting requires immediate client notification. Several hours without a client reply authorizes urgent Antigravity repair, not routine implementation. The incident must have a concrete recorded escalation deadline, verified last-reply check, bounded executor, rollback and acceptance evidence. This document does not itself create a running escalation timer.
 
-## Baseline commands
+## Required source regression checks
+
+Pull requests run two GitHub Actions checks from `.github/workflows/source-regression.yml`:
+
+- `Source regression / frontend`: fresh Node 22 install, production frontend build, and Vitest.
+- `Source regression / backend`: fresh Python 3.13 install, frontend build required by backend contract tests, then the full Python pytest suite.
+
+The equivalent local commands are:
 
 ```sh
-.venv/bin/python -m pytest
+python -m venv .venv
+.venv/bin/python -m pip install -e '.[test]'
 cd vendor/shioaji-pro-app
 npm ci --ignore-scripts
 npm run build
 npm test
+cd ../..
+.venv/bin/python -m pytest
 ```
+
+Pending or skipped tests are reported separately and are not counted as passes.
 
 Attach concise command results and acceptance boundaries to the PR; do not attach private runtime artifacts. Main supplies any necessary private live validation outside GitHub.
