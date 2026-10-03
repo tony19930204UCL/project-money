@@ -18,14 +18,36 @@ Main opens issues without per-issue notifications. Before a batch handoff Main r
 
 Outage, inability to place orders, or wrong accounting requires immediate client notification. Several hours without a client reply authorizes urgent Antigravity repair, not routine implementation. The incident must have a concrete recorded escalation deadline, verified last-reply check, bounded executor, rollback and acceptance evidence. This document does not itself create a running escalation timer.
 
-## Baseline commands
+## Required source regression checks
+
+Pull requests run two GitHub Actions checks from `.github/workflows/source-regression.yml`:
+
+- `Source regression / frontend`: fresh Node 22 install, production frontend build, and Vitest.
+- `Source regression / backend`: fresh Python 3.13 install, frontend build required by backend contract tests, repeated subprocess restart/stream integration, then the full portable **source** pytest suite.
+
+The equivalent local commands are:
 
 ```sh
-.venv/bin/python -m pytest
+python -m venv .venv
+.venv/bin/python -m pip install -e '.[test]'
 cd vendor/shioaji-pro-app
 npm ci --ignore-scripts
 npm run build
 npm test
+cd ../..
+.venv/bin/python -m pytest
 ```
+
+The default `.venv/bin/python -m pytest` command is the full portable **source regression**. Installed-machine Hermes/ABI proofs are retained separately under `host_acceptance/` and are intentionally outside default `testpaths`.
+
+On the installed host, Main runs:
+
+```sh
+.venv/bin/python -m pytest host_acceptance
+```
+
+Those host tests keep their original assertions and are not replaced, skipped, or claimed by source CI. See `host_acceptance/README.md` for prerequisites and inventory.
+
+Pending or skipped tests are reported separately and are not counted as passes.
 
 Attach concise command results and acceptance boundaries to the PR; do not attach private runtime artifacts. Main supplies any necessary private live validation outside GitHub.
