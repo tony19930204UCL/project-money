@@ -181,6 +181,7 @@ function DataWorkspace({ definition }: { definition: ViewDefinition }) {
 export function WorkstationShell() {
     const [active, setActive] = useState<WorkspaceKey>('command-center');
     const [healthStatus, setHealthStatus] = useState<LoadStatus>('loading');
+    const [terminalOpen, setTerminalOpen] = useState(false);
     useEffect(() => {
         const controller = new AbortController();
         fetch('/api/health', { cache: 'no-store', signal: controller.signal })
@@ -231,11 +232,25 @@ export function WorkstationShell() {
                         <div className="pm-command-center-intro">
                             <span className="pm-eyebrow">TRADING TERMINAL</span>
                             <h1>Command Center</h1>
-                            <p>Existing vendor trading terminal, retained intact inside the workstation shell.</p>
+                            <p>
+                                The existing vendor trading terminal remains available, but observer
+                                navigation does not start its subscription/data POST traffic.
+                            </p>
+                            {!terminalOpen ? (
+                                <button
+                                    type="button"
+                                    className="pm-open-terminal"
+                                    onClick={() => setTerminalOpen(true)}
+                                >
+                                    Open Trading Terminal
+                                </button>
+                            ) : null}
                         </div>
-                        <div className="pm-existing-terminal">
-                            <App />
-                        </div>
+                        {terminalOpen ? (
+                            <div className="pm-existing-terminal">
+                                <App />
+                            </div>
+                        ) : null}
                     </section>
                 ) : (
                     <DataWorkspace definition={definition} />
