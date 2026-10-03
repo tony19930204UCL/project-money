@@ -2,47 +2,34 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
 PAGES = [
-    ("Command Center", "command-center"),
-    ("Markets", "markets"),
-    ("Chart", "chart"),
-    ("Paper Trade", "paper-trade"),
-    ("Portfolio", "portfolio"),
-    ("Strategy Lab", "strategy-lab"),
-    ("Research", "research"),
-    ("Replay", "replay"),
-    ("Risk", "risk"),
-    ("Diagnostics", "diagnostics"),
+    ("Command Center", "command-center", "/api/health", "ok", '"paper_only": true'),
+    ("Markets", "markets", "/api/watchlists", "ok", "2330.TW"),
+    ("Chart", "chart", "/api/market/bars/2330.TW?timeframe=1D&limit=20", "ok", "TEST_ONLY_BROWSER_ADAPTER"),
+    ("Paper Trade", "paper-trade", "/api/paper/orders", "ok", "TEST_ONLY_BROWSER_ORDER"),
+    ("Portfolio", "portfolio", "/api/portfolio", "ok", "TEST_ONLY_BROWSER_ORDER"),
+    ("Strategy Lab", "strategy-lab", "/api/strategies", "ok", "opening_range_breakout"),
+    ("Research", "research", "/api/research/inbox", "empty", "No records currently available."),
+    ("Replay", "replay", "/api/paper/experiments", "ok", "TEST_ONLY_BROWSER_EXPERIMENT"),
+    ("Risk", "risk", "/api/paper/risk-limits", "ok", "max_order_notional"),
+    ("Diagnostics", "diagnostics", "/api/diagnostics", "ok", "TEST_ONLY_fixture_normal"),
 ]
-VIEWPORTS = [(1280, 720), (1536, 864)]  # ABC C01/C02/C03/C09/B16 viewport corpus
+VIEWPORTS = [(1280, 720), (1536, 864)]
 
 
-@pytest.mark.parametrize("label,slug", PAGES, ids=[item[1] for item in PAGES])
-@pytest.mark.parametrize("viewport", VIEWPORTS, ids=["1280x720", "1536x864"])
-def test_workstation_page_viewport(
-    browser_server,
-    chromium,
-    evidence_dir: Path,
-    label: str,
-    slug: str,
-    viewport: tuple[int, int],
-):
-    base_url, _, _ = browser_server
-    width, height = viewport
-    context = chromium.new_context(viewport={"width": width, "height": height})
-    page = context.new_page()
+def _recorders(page):
     console_errors: list[str] = []
     page_errors: list[str] = []
     api_trace: list[dict] = []
-
     page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+
     def record_page_error(exc):
         detail = getattr(exc, "stack", None) or str(exc)
         page_errors.append(detail)
-        print(f"BROWSER_PAGE_ERROR: {detail}", flush=True)
 
     page.on("pageerror", record_page_error)
     page.on(
@@ -53,128 +40,238 @@ def test_workstation_page_viewport(
             "status": response.status,
         }) if "/api/" in response.url else None,
     )
+    return console_errors, page_errors, api_trace
 
+
+def _write_evidence(page, evidence_dir: Path, stem: str, payload: dict) -> None:
+    page.screenshot(path=str(evidence_dir / f"{stem}.png"), full_page=True)
+    (evidence_dir / f"{stem}.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def _wait_workspace(page, slug: str, expected_state: str):
+    view = page.locator(f'[data-workspace-view="{slug}"]')
+    view.wait_for(state="visible", timeout=5_000)
+    page.wait_for_function(
+        """([slug, state]) => {
+            const el = document.querySelector(`[data-workspace-view="${slug}"]`);
+            return el && el.getAttribute('data-api-status') === state;
+        }""",
+        arg=[slug, expected_state],
+        timeout=5_000,
+    )
+    return view
+
+
+def _assert_core_content(view, heading: str, expected_text: str) -> None:
+    assert view.get_by_role("heading", name=heading, exact=True).count() == 1
+    assert view.get_by_role("heading", name=heading, exact=True).is_visible()
+    data_card = view.locator(".pm-data-card")
+    assert data_card.count() == 1
+    assert data_card.locator("pre").count() == 1
+    assert expected_text in data_card.locator("pre").inner_text()
+
+
+def _matching_responses(api_trace: list[dict], endpoint: str) -> list[dict]:
+    target = endpoint.split("?", 1)[0]
+    return [
+        item for item in api_trace
+        if urlsplit(item["url"]).path == target and item["method"] == "GET"
+    ]
+
+
+@pytest.mark.parametrize(
+    "label,slug,endpoint,expected_state,expected_text",
+    PAGES,
+    ids=[item[1] for item in PAGES],
+)
+@pytest.mark.parametrize("viewport", VIEWPORTS, ids=["1280x720", "1536x864"])
+def test_workstation_page_viewport(
+    browser_server,
+    chromium,
+    evidence_dir: Path,
+    label: str,
+    slug: str,
+    endpoint: str,
+    expected_state: str,
+    expected_text: str,
+    viewport: tuple[int, int],
+):
+    base_url, _, _ = browser_server
+    width, height = viewport
+    context = chromium.new_context(viewport={"width": width, "height": height})
+    page = context.new_page()
+    console_errors, page_errors, api_trace = _recorders(page)
     stem = f"{slug}-{width}x{height}"
     try:
         response = page.goto(base_url, wait_until="domcontentloaded", timeout=15_000)
         assert response is not None and response.ok
-        page.locator("#root").wait_for(state="attached", timeout=5_000)
         health = page.request.get(f"{base_url}/api/health").json()
         assert health["paper_only"] is True
         assert health["broker_connected"] is False
 
         nav = page.get_by_role("button", name=label, exact=True)
         nav.wait_for(state="visible", timeout=5_000)
-        assert nav.count() == 1, f"missing actual SPA navigation control: {label}"
+        assert nav.count() == 1
         nav.click()
-        page.locator(f'[data-workspace-view="{slug}"]').wait_for(state="visible", timeout=5_000)
-        view = page.locator(f'[data-workspace-view="{slug}"]')
-        page.wait_for_function(
-            """(slug) => {
-                const el = document.querySelector(`[data-workspace-view="${slug}"]`);
-                return el && el.getAttribute('data-api-status') !== 'loading';
-            }""",
-            arg=slug,
-            timeout=5_000,
-        )
-        assert view.get_attribute("data-api-status") in {"ok", "empty", "stale", "error"}
+        view = _wait_workspace(page, slug, expected_state)
+        assert view.get_attribute("data-api-status") == expected_state
+        _assert_core_content(view, label, expected_text)
+
+        completed = _matching_responses(api_trace, endpoint)
+        assert completed, f"expected GET did not complete: {endpoint}"
+        assert completed[-1]["status"] == 200
+
         if slug == "command-center":
             assert page.get_by_role("button", name="Open Trading Terminal", exact=True).count() == 1
 
         overflow = page.evaluate(
             "() => document.documentElement.scrollWidth - document.documentElement.clientWidth"
         )
-        assert overflow <= 1, f"page-level horizontal overflow={overflow}px"
-        assert page.locator("body").is_visible()
+        assert overflow <= 1
         assert not page_errors
-
-        critical = [
-            item for item in api_trace
-            if item["status"] >= 400 and "/api/" in item["url"]
-        ]
-        assert not critical, f"fixture-critical API failures: {critical}"
-        assert not console_errors, f"console errors: {console_errors}"
+        assert not [item for item in api_trace if item["status"] >= 400]
+        assert not console_errors
     finally:
-        page.screenshot(path=str(evidence_dir / f"{stem}.png"), full_page=True)
-        (evidence_dir / f"{stem}.json").write_text(
-            json.dumps({
-                "page": label,
-                "viewport": [width, height],
-                "console_errors": console_errors,
-                "page_errors": page_errors,
-                "api_trace": api_trace,
-            }, indent=2),
-            encoding="utf-8",
+        _write_evidence(page, evidence_dir, stem, {
+            "page": label,
+            "viewport": [width, height],
+            "console_errors": console_errors,
+            "page_errors": page_errors,
+            "api_trace": api_trace,
+        })
+        context.close()
+
+
+def test_core_content_assertion_rejects_missing_heading_and_payload(browser_server, chromium):
+    """Mutation guard for Main's exact missing-h1 + missing-pre regression."""
+    base_url, _, _ = browser_server
+    context = chromium.new_context(viewport={"width": 1280, "height": 720})
+    page = context.new_page()
+    try:
+        page.goto(base_url, wait_until="domcontentloaded", timeout=15_000)
+        page.get_by_role("button", name="Markets", exact=True).click()
+        view = _wait_workspace(page, "markets", "ok")
+        _assert_core_content(view, "Markets", "2330.TW")
+        page.evaluate(
+            """() => {
+                const view = document.querySelector('[data-workspace-view="markets"]');
+                view?.querySelector('h1')?.remove();
+                view?.querySelector('pre')?.remove();
+            }"""
         )
+        with pytest.raises(AssertionError):
+            _assert_core_content(view, "Markets", "2330.TW")
+    finally:
         context.close()
 
 
 @pytest.mark.parametrize(
-    "market_mode,expected_state",
-    [
-        ("empty", "empty"),
-        ("stale", "stale"),
-        ("error", "error"),
-    ],
+    "market_mode,expected_state,expected_http",
+    [("empty", "empty", 200), ("stale", "stale", 200), ("error", "error", 500)],
     ids=["empty-response", "stale-response", "error-response"],
 )
 def test_smoke_negative_state_contracts(
     browser_server_factory,
     chromium,
+    evidence_dir: Path,
     market_mode,
     expected_state,
+    expected_http,
 ):
-    """Negative states must come through the real FastAPI + TEST_ONLY adapter."""
     with browser_server_factory(market_mode=market_mode) as server:
         base_url, _, _ = server
         context = chromium.new_context(viewport={"width": 1280, "height": 720})
         page = context.new_page()
+        console_errors, page_errors, api_trace = _recorders(page)
+        stem = f"negative-{market_mode}"
         try:
             page.goto(base_url, wait_until="domcontentloaded", timeout=15_000)
-            chart_nav = page.get_by_role("button", name="Chart", exact=True)
-            chart_nav.wait_for(state="visible", timeout=5_000)
-            chart_nav.click()
-            view = page.locator('[data-workspace-view="chart"]')
-            page.wait_for_function(
-                """(state) =>
-                    document.querySelector('[data-workspace-view="chart"]')
-                        ?.getAttribute('data-api-status') === state
-                """,
-                arg=expected_state,
-                timeout=5_000,
-            )
-            assert view.get_attribute("data-api-status") == expected_state
+            page.get_by_role("button", name="Chart", exact=True).click()
+            view = _wait_workspace(page, "chart", expected_state)
             assert view.locator(f'[data-state-kind="{expected_state}"]').count() == 1
+            assert view.get_by_role("heading", name="Chart", exact=True).is_visible()
+
+            completed = _matching_responses(
+                api_trace, "/api/market/bars/2330.TW?timeframe=1D&limit=20"
+            )
+            assert completed
+            assert completed[-1]["status"] == expected_http
+            unrelated = [
+                item for item in api_trace
+                if item["status"] >= 400
+                and not (
+                    market_mode == "error"
+                    and urlsplit(item["url"]).path == "/api/market/bars/2330.TW"
+                    and item["status"] == 500
+                )
+            ]
+            assert not unrelated
+            assert not page_errors
+            assert not console_errors
         finally:
+            _write_evidence(page, evidence_dir, stem, {
+                "market_mode": market_mode,
+                "expected_state": expected_state,
+                "console_errors": console_errors,
+                "page_errors": page_errors,
+                "api_trace": api_trace,
+            })
             context.close()
 
 
-def test_smoke_is_get_only_without_operator_actions(browser_server, chromium):
+def test_smoke_is_get_only_without_operator_actions(
+    browser_server,
+    chromium,
+    evidence_dir: Path,
+):
     base_url, _, _ = browser_server
     context = chromium.new_context(viewport={"width": 1280, "height": 720})
     page = context.new_page()
+    console_errors, page_errors, api_trace = _recorders(page)
     mutations: list[str] = []
     page.on(
         "request",
         lambda req: mutations.append(f"{req.method} {req.url}")
         if "/api/" in req.url and req.method in {"POST", "PUT", "DELETE", "PATCH"} else None,
     )
-    page.goto(base_url, wait_until="domcontentloaded", timeout=15_000)
-    page.get_by_role("button", name="Command Center", exact=True).wait_for(
-        state="visible", timeout=5_000
+    orders_before = page.request.get(f"{base_url}/api/paper/orders").json()
+    events_before = page.request.get(f"{base_url}/api/events?since_id=0&limit=1000").json()
+    assert any(
+        item.get("audit_metadata", {}).get("fixture_receipt") == "TEST_ONLY_BROWSER_ORDER"
+        for item in orders_before
     )
-    for label, slug in PAGES:
-        page.get_by_role("button", name=label, exact=True).click()
-        page.locator(f'[data-workspace-view="{slug}"]').wait_for(
-            state="visible", timeout=5_000
-        )
-        page.wait_for_function(
-            """(slug) => {
-                const el = document.querySelector(`[data-workspace-view="${slug}"]`);
-                return el && el.getAttribute('data-api-status') !== 'loading';
-            }""",
-            arg=slug,
-            timeout=5_000,
-        )
-    context.close()
-    assert not mutations, f"observer navigation emitted mutation requests: {mutations}"
+    try:
+        page.goto(base_url, wait_until="domcontentloaded", timeout=15_000)
+        health = page.request.get(f"{base_url}/api/health").json()
+        assert health["paper_only"] is True
+        assert health["broker_connected"] is False
+
+        for label, slug, endpoint, expected_state, expected_text in PAGES:
+            page.get_by_role("button", name=label, exact=True).click()
+            view = _wait_workspace(page, slug, expected_state)
+            _assert_core_content(view, label, expected_text)
+            assert _matching_responses(api_trace, endpoint), endpoint
+
+        orders_after = page.request.get(f"{base_url}/api/paper/orders").json()
+        events_after = page.request.get(f"{base_url}/api/events?since_id=0&limit=1000").json()
+        assert orders_after == orders_before
+        assert events_after == events_before
+        assert not mutations
+        assert not page_errors
+        assert not console_errors
+        assert all(item["method"] == "GET" for item in api_trace)
+    finally:
+        _write_evidence(page, evidence_dir, "get-only-full-traversal", {
+            "console_errors": console_errors,
+            "page_errors": page_errors,
+            "api_trace": api_trace,
+            "mutations": mutations,
+            "orders_before": orders_before,
+            "orders_after": locals().get("orders_after"),
+            "events_before_count": len(events_before.get("events", [])),
+            "events_after_count": len(locals().get("events_after", {}).get("events", [])),
+        })
+        context.close()
