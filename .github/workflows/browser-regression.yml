@@ -36,3 +36,12 @@ jobs:
         env:
           BROWSER_EVIDENCE_DIR: ${{ runner.temp }}/project-money-browser-evidence
         run: python -m pytest -q tests/browser/test_workstation_smoke.py
+
+      - name: Upload sanitized browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-smoke-${{ github.sha }}
+          path: ${{ runner.temp }}/project-money-browser-evidence
+          if-no-files-found: warn
+          retention-days: 7
