@@ -11,7 +11,8 @@ import socket
 import uvicorn
 
 from cio_market_lab.api.app import create_app
-from cio_market_lab.domain.models import Bar, Quote
+from cio_market_lab.domain.models import Bar, DecisionScope, OrderOrigin, OrderSide, OrderType, Quote
+from cio_market_lab.engine.paper_orders import PaperDataContext, PaperExperimentSettings, PaperOrderRequest
 
 
 class TestOnlyMarketAdapter:
@@ -122,7 +123,37 @@ async def serve(
             is_read_only=False,
             market_adapter=TestOnlyMarketAdapter(market_mode),
         )
-        initializer.state.app_state.runner.shutdown()
+        init_state = initializer.state.app_state
+        if market_mode == "normal":
+            init_state.runner.configure(PaperExperimentSettings(
+                strategy_id="TEST_ONLY_BROWSER_EXPERIMENT",
+                enabled=False,
+                universe=["2330.TW"],
+                initial_cash=500_000.0,
+            ))
+            if not init_state.paper_orders.all_orders():
+                init_state.paper_orders.submit(PaperOrderRequest(
+                    symbol="2330.TW",
+                    market="TW",
+                    bucket=DecisionScope.SWING,
+                    side=OrderSide.BUY,
+                    order_type=OrderType.MARKET,
+                    quantity=1.0,
+                    origin=OrderOrigin.MANUAL,
+                    reason="TEST_ONLY_BROWSER_ORDER",
+                    audit_metadata={
+                        "is_fixture": True,
+                        "fixture_receipt": "TEST_ONLY_BROWSER_ORDER",
+                    },
+                    data=PaperDataContext(
+                        source="fixture://TEST_ONLY_BROWSER_ORDER",
+                        last_price=100.0,
+                        is_stale=False,
+                        is_fallback=False,
+                    ),
+                ))
+            init_state.runner._persist_portfolios()
+        init_state.runner.shutdown()
 
     app = create_app(
         workspace_root=root,
