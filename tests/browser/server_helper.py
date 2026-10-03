@@ -19,19 +19,22 @@ class TestOnlyMarketAdapter:
 
     source_name = "TEST_ONLY_BROWSER_ADAPTER"
 
-    def __init__(self) -> None:
-        self.last_fetch_mode = "TEST_ONLY_fixture"
+    def __init__(self, mode: str = "normal") -> None:
+        self.mode = mode
+        self.last_fetch_mode = f"TEST_ONLY_fixture_{mode}"
         self.last_error = None
 
     def _now(self) -> datetime:
         return datetime.now(timezone.utc)
 
     def get_bars(self, symbol, start=None, end=None, timeframe="1D", limit=80):
-        if symbol == "ERROR.TW":
+        if self.mode == "error" or symbol == "ERROR.TW":
             self.last_error = "TEST_ONLY forced adapter error"
             raise RuntimeError(self.last_error)
+        if self.mode == "empty":
+            return []
         now = self._now()
-        stale = symbol == "STALE.TW"
+        stale = self.mode == "stale" or symbol == "STALE.TW"
         observed = now - (timedelta(hours=2) if stale else timedelta(seconds=5))
         return [
             Bar(
@@ -96,7 +99,14 @@ async def _watch_stop(server: uvicorn.Server, stop_file: Path) -> None:
         await asyncio.sleep(0.05)
 
 
-async def serve(root: Path, runtime: Path, ready_file: Path, stop_file: Path, writable: bool) -> None:
+async def serve(
+    root: Path,
+    runtime: Path,
+    ready_file: Path,
+    stop_file: Path,
+    writable: bool,
+    market_mode: str,
+) -> None:
     os.environ["CIO_MARKET_LAB_OFFLINE"] = "1"
     os.environ["HERMES_OFFLINE"] = "1"
     runtime.mkdir(parents=True, exist_ok=True)
@@ -109,7 +119,7 @@ async def serve(root: Path, runtime: Path, ready_file: Path, stop_file: Path, wr
             runtime_dir=runtime,
             fixture_mode=True,
             is_read_only=False,
-            market_adapter=TestOnlyMarketAdapter(),
+            market_adapter=TestOnlyMarketAdapter(market_mode),
         )
         initializer.state.app_state.runner.shutdown()
 
@@ -118,7 +128,7 @@ async def serve(root: Path, runtime: Path, ready_file: Path, stop_file: Path, wr
         runtime_dir=runtime,
         fixture_mode=True,
         is_read_only=not writable,
-        market_adapter=TestOnlyMarketAdapter(),
+        market_adapter=TestOnlyMarketAdapter(market_mode),
     )
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -146,8 +156,22 @@ def main() -> int:
     parser.add_argument("--ready-file", type=Path, required=True)
     parser.add_argument("--stop-file", type=Path, required=True)
     parser.add_argument("--writable", action="store_true")
+    parser.add_argument(
+        "--market-mode",
+        choices=("normal", "empty", "stale", "error"),
+        default="normal",
+    )
     args = parser.parse_args()
-    asyncio.run(serve(args.root, args.runtime, args.ready_file, args.stop_file, args.writable))
+    asyncio.run(
+        serve(
+            args.root,
+            args.runtime,
+            args.ready_file,
+            args.stop_file,
+            args.writable,
+            args.market_mode,
+        )
+    )
     return 0
 
 
