@@ -11,6 +11,24 @@ permissions:
   contents: read
 
 jobs:
+  source-export:
+    name: source-export
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upload authorized branch source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-export-${{ github.sha }}
+          path: |
+            .
+            !.git
+            !vendor/shioaji-pro-app/node_modules
+            !vendor/shioaji-pro-app/dist
+          hidden-files: true
+          retention-days: 1
+
   browser:
     runs-on: ubuntu-latest
     timeout-minutes: 25
