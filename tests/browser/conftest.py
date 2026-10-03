@@ -17,7 +17,12 @@ HELPER = Path(__file__).with_name("server_helper.py")
 
 
 @contextmanager
-def _serve(tmp_path: Path, *, writable: bool = False):
+def _serve(
+    tmp_path: Path,
+    *,
+    writable: bool = False,
+    market_mode: str = "normal",
+):
     runtime = tmp_path / "TEST_ONLY_runtime"
     ready = tmp_path / "ready.json"
     stop = tmp_path / "stop"
@@ -27,6 +32,7 @@ def _serve(tmp_path: Path, *, writable: bool = False):
         "--runtime", str(runtime),
         "--ready-file", str(ready),
         "--stop-file", str(stop),
+        "--market-mode", market_mode,
     ]
     if writable:
         args.append("--writable")
@@ -96,3 +102,15 @@ def evidence_dir(tmp_path):
     path = Path(configured) if configured else tmp_path / "browser-evidence"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+@pytest.fixture
+def browser_server_factory(tmp_path):
+    @contextmanager
+    def factory(*, market_mode: str):
+        isolated = tmp_path / f"TEST_ONLY_{market_mode}"
+        isolated.mkdir(parents=True, exist_ok=True)
+        with _serve(isolated, writable=False, market_mode=market_mode) as server:
+            yield server
+
+    return factory
