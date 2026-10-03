@@ -64,7 +64,7 @@ def test_workstation_page_viewport(
         page.locator(f'[data-workspace-view="{slug}"]').wait_for(state="visible", timeout=5_000)
         view = page.locator(f'[data-workspace-view="{slug}"]')
         page.wait_for_function(
-            "(slug) => { const el = document.querySelector('[data-workspace-view="' + slug + '"]'); return el && el.getAttribute('data-api-status') !== 'loading'; }",
+            "(slug) => { const el = document.querySelector('[data-workspace-view=\\"' + slug + '\\"]'); return el && el.getAttribute('data-api-status') !== 'loading'; }",
             slug,
             timeout=5_000,
         )
@@ -131,7 +131,7 @@ def test_smoke_negative_state_contracts(
         page.get_by_role("button", name="Markets", exact=True).click()
         view = page.locator('[data-workspace-view="markets"]')
         page.wait_for_function(
-            "(state) => document.querySelector('[data-workspace-view="markets"]')?.getAttribute('data-api-status') === state",
+            "(state) => document.querySelector('[data-workspace-view=\\"markets\\"]')?.getAttribute('data-api-status') === state",
             expected_state,
             timeout=5_000,
         )
