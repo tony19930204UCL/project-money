@@ -210,3 +210,15 @@
         padding-right: 0;
     }
 }
+
+
+.pm-open-terminal {
+    margin-top: 14px;
+    border: 1px solid #4f6b8a;
+    border-radius: 8px;
+    background: #203044;
+    color: #fff;
+    padding: 9px 13px;
+    font: inherit;
+    cursor: pointer;
+}
