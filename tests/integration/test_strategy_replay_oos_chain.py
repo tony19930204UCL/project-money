@@ -341,6 +341,23 @@ def test_oos_negative_inputs_fail_closed_or_report_unavailable(tmp_path):
             tmp_path / "feedback", allow_test_only=True,
         )
 
+    with pytest.raises(ValueError, match="FUTURE_TRAINING_INPUT_FORBIDDEN"):
+        validation_selected_oos(
+            bars,
+            "MSFT",
+            "USD",
+            10_000,
+            [{"fast": 2, "slow": 4}],
+            tmp_path / "future-training",
+            allow_test_only=True,
+            fit_inputs=[
+                {
+                    "kind": "TEST_ONLY_FUTURE_TRAINING_BAR_OR_LESSON",
+                    "available_at": bars[60].timestamp,
+                }
+            ],
+        )
+
     with pytest.raises(ValueError, match="FUTURE_SELECTION_INPUT_FORBIDDEN"):
         validation_selected_oos(
             bars,
