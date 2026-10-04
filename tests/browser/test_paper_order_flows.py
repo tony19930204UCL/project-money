@@ -324,8 +324,8 @@ def test_manual_ui_preview_confirm_cancel_replace_and_rejections(
         )["status"] == "PENDING"
 
         stable_count = len(noquote_after["orders"])
-        forbidden_baseline_fill_ids = [item["fill_id"] for item in replaced["fills"]]
-        forbidden_baseline_cash = replaced["portfolio"]["swing"]["cash"]
+        forbidden_baseline_fill_ids = [item["fill_id"] for item in noquote_after["fills"]]
+        forbidden_baseline_cash = noquote_after["portfolio"]["swing"]["cash"]
         _set_manual_form(page, quantity="0", reason="TEST_ONLY_INVALID_QUANTITY")
         page.get_by_role("button", name="Preview order", exact=True).click()
         page.get_by_role("status").filter(has_text="quantity").wait_for(timeout=5_000)
