@@ -53,7 +53,7 @@ def test_future_restart_dated_settlement_receipt_replay_has_no_duplicate_cash(tm
     cash_before=opened["cash"]
     settled=run(runtime,"future","settle")
     assert settled["changed"] is True
-    expected=cash_before+(20020-20001)*200
+    expected=cash_before+(1020-1001)*200
     assert settled["cash"]==expected
     ids=settled["event_ids"]
     duplicate=run(runtime,"future","settle")
@@ -63,7 +63,7 @@ def test_future_restart_dated_settlement_receipt_replay_has_no_duplicate_cash(tm
     restarted=run(runtime,"future","snapshot")
     assert restarted["cash"]==expected
     assert restarted["event_ids"]==ids
-    assert restarted["positions"]["TXF-TEST"]["assumptions"]["derivative_position"]["last_settlement_price"]==20020
+    assert restarted["positions"]["TXF-TEST"]["assumptions"]["derivative_position"]["last_settlement_price"]==1020
 
 def test_api_capability_quote_inventory_and_derivative_readback_remain_fail_closed(tmp_path):
     runtime=tmp_path/"api-runtime"
