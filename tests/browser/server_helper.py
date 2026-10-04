@@ -20,6 +20,7 @@ from cio_market_lab.domain.models import (
     Fill,
     OrderOrigin,
     OrderSide,
+    OrderStatus,
     OrderType,
     Quote,
 )
@@ -159,7 +160,10 @@ def _fixture_fill(state, order_id: str, quantity: float, fill_id: str, *, strate
     quote = state.market_adapter.get_latest_quote(order.symbol)
     if bar is None or quote is None:
         raise AssertionError("TEST_ONLY fixture requires bar + quote capability")
-    executable = order.model_copy(update={"quantity": quantity})
+    executable = order.model_copy(update={
+        "quantity": quantity,
+        "status": OrderStatus.PENDING,
+    })
     consumed = state.runner._consume_book(quote, bar, executable)
     if consumed is None:
         raise AssertionError("TEST_ONLY fixture quote was not executable under existing model")
