@@ -210,11 +210,19 @@ def test_manual_ui_preview_confirm_cancel_replace_and_rejections(
         assert "ORDER_REPLACED" in event_types
 
         assert not page_errors
-        unexpected_console = [
-            item for item in console_errors
-            if "/api/paper/orders/preview" not in item["url"]
+        validation_responses = [
+            item for item in api_trace
+            if urlsplit(item["url"]).path == "/api/paper/orders/preview"
+            and item["status"] >= 400
         ]
-        assert not unexpected_console
+        assert len(validation_responses) == 2
+        assert all(item["status"] == 422 for item in validation_responses)
+        assert all(
+            urlsplit(item["url"]).path == "/api/paper/orders/preview"
+            and "Failed to load resource" in item["text"]
+            and "422" in item["text"]
+            for item in console_errors
+        )
         completed = True
     finally:
         _write_evidence(page, evidence_dir, "paper-order-manual-flow", {
@@ -252,8 +260,13 @@ def test_strategy_and_main_cio_readback_and_authority_boundaries(
         assert strategy_orders
         assert cio_orders
         assert all(item["strategy_id"] == "opening_range_breakout" for item in strategy_orders)
-        assert all(item["strategy_version"] for item in strategy_orders)
+        assert all(item["strategy_version"] == "runner-v2" for item in strategy_orders)
+        assert all(item["status"] in {"PARTIALLY_FILLED", "FILLED"} for item in strategy_orders)
         assert all(item["strategy_version"] == "TEST_ONLY_CIO_V1" for item in cio_orders)
+        assert all(
+            item.get("audit_metadata", {}).get("case_id") == "TEST_ONLY_CIO_POSITIVE"
+            for item in cio_orders
+        )
 
         strategy_order_ids = {item["order_id"] for item in strategy_orders}
         cio_order_ids = {item["order_id"] for item in cio_orders}
@@ -376,6 +389,8 @@ def test_same_runtime_actual_process_restart_preserves_order_fill_case_and_nav(
             item["fill_id"] for item in first_snapshot["fills"]
         ]
         assert second_snapshot["case_ids"] == first_snapshot["case_ids"]
+        assert len(set(second_snapshot["case_ids"])) == len(second_snapshot["case_ids"])
+        assert second_snapshot["events"] == first_snapshot["events"]
         assert second_snapshot["portfolio"]["swing"]["cash"] == first_snapshot["portfolio"]["swing"]["cash"]
         assert second_snapshot["portfolio"]["swing"]["equity"] == first_snapshot["portfolio"]["swing"]["equity"]
         assert second_snapshot["portfolios"] == first_snapshot["portfolios"]
