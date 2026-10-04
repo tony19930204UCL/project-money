@@ -207,7 +207,7 @@ def test_official_shaped_producer_freeze_and_input_gaps(tmp_path, monkeypatch):
     )
     direct_packet = loader.load("MSFT", clock[0])
     direct_observation, direct_context = build_canonical_observation(
-        direct_packet, "MSFT", "TEST_ONLY_CHAIN_SESSION"
+        direct_packet, "MSFT", "project-money-main-cio"
     )
     scheduled = make_packet_observation_provider(
         producer.packet_root,
@@ -503,7 +503,7 @@ def test_full_research_decision_outcome_lesson_fresh_process_chain(tmp_path, mon
     record = result["record"]
     assert record["applied_lesson_ids"] == [lesson_id]
     assert record["decision_delta"]["lesson_id"] == lesson_id
-    assert record["conditions"]["delivered_lesson_ids"] == [lesson_id]
+    assert record["packet"]["conditions"]["delivered_lesson_ids"] == [lesson_id]
 
     cases = {item["case_id"]: item for item in result["readback"]["cases"]}
     first_readback = cases["TEST_ONLY_CHAIN_CASE_1"]
