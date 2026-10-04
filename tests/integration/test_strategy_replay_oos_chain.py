@@ -105,7 +105,11 @@ def test_durable_strategy_lifecycle_survives_fresh_process_and_preserves_externa
     provider_identity = id(adapter)
     provider_config = {"source": "TEST_ONLY_PROVIDER", "mode": "paper"}
 
-    pm = PortfolioManager(initial_cash_swing=10_000, initial_cash_intraday=10_000)
+    pm = PortfolioManager(
+        initial_cash_swing=10_000,
+        initial_cash_intraday=10_000,
+        currency="USD",
+    )
     service = PaperOrderService(pm, EventStore(":memory:"))
     seeded_order = service.submit(PaperOrderRequest(
         currency="USD",
