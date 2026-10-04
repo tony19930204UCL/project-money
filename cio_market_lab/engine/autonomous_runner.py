@@ -10,6 +10,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
@@ -440,13 +441,15 @@ class AutonomousPaperRunner:
                 saved_orders = []
                 for order_data in payload.get("orders", []):
                     persisted = Order.model_validate(order_data)
+                    persisted_status = persisted.status
+                    persisted_reason = persisted.rejection_reason
                     order = existing_orders.get(persisted.order_id)
                     if order is None:
-                        order = persisted
+                        order = persisted.model_copy(deep=True)
                         order.status = OrderStatus.PENDING
                         ledger.add_order(order)
                         existing_orders[order.order_id] = order
-                    saved_orders.append((order, persisted.status, persisted.rejection_reason))
+                    saved_orders.append((order, persisted_status, persisted_reason))
                 for fill_data in payload.get("fills", []):
                     fill = Fill.model_validate(fill_data)
                     if fill.fill_id in existing_fill_ids:
@@ -463,9 +466,11 @@ class AutonomousPaperRunner:
                 bucket = DecisionScope(bucket_value)
                 ledger = self.portfolio_manager.get_ledger(bucket)
                 prices = payload.get("latest_prices", {})
-                for sym, px in prices.items():
-                    ledger._latest_prices[sym] = float(px)
                 replay_persisted_receipts(ledger, payload)
+                for sym, px in prices.items():
+                    ledger.update_mark_to_market(
+                        SimpleNamespace(symbol=sym, close=float(px), last_price=float(px))
+                    )
                 ledger._recalculate_equity()
 
             for strategy_id, buckets in raw.get("strategies", {}).items():
@@ -478,9 +483,11 @@ class AutonomousPaperRunner:
                         settings.initial_cash if settings else None,
                     )
                     prices = payload.get("latest_prices", {})
-                    for sym, px in prices.items():
-                        ledger._latest_prices[sym] = float(px)
                     replay_persisted_receipts(ledger, payload)
+                    for sym, px in prices.items():
+                        ledger.update_mark_to_market(
+                            SimpleNamespace(symbol=sym, close=float(px), last_price=float(px))
+                        )
                     from cio_market_lab.domain.models import Position
                     for sym, pos_data in payload.get("derivative_positions", {}).items():
                         ledger.positions[sym] = Position.model_validate(pos_data)
