@@ -314,6 +314,45 @@ class PaperDerivativesEngine:
 
         return True, None
 
+    def _contract_metadata_match(
+        self, spec: ContractSpec, metadata: Dict[str, Any]
+    ) -> Tuple[bool, Optional[str]]:
+        """Validate optional exact-contract metadata without leaking conversion errors."""
+        meta = metadata or {}
+        try:
+            if meta.get("contract_authorized") is False:
+                return False, RejectionReason.CONTRACT_TARGET_MISMATCH.value
+            if meta.get("expiry") is not None:
+                if spec.expiry is None or not isinstance(meta.get("expiry"), (str, datetime)):
+                    return False, RejectionReason.CONTRACT_TARGET_MISMATCH.value
+                raw_expiry = meta["expiry"]
+                quoted_expiry = (
+                    raw_expiry
+                    if isinstance(raw_expiry, datetime)
+                    else datetime.fromisoformat(raw_expiry.replace("Z", "+00:00"))
+                )
+                if quoted_expiry.tzinfo is None or spec.expiry.tzinfo is None or quoted_expiry != spec.expiry:
+                    return False, RejectionReason.CONTRACT_TARGET_MISMATCH.value
+            if meta.get("strike") is not None:
+                raw_strike = meta["strike"]
+                if isinstance(raw_strike, bool) or isinstance(raw_strike, (dict, list, tuple, set)):
+                    return False, RejectionReason.CONTRACT_TARGET_MISMATCH.value
+                strike = float(raw_strike)
+                if spec.strike is None or not math.isfinite(strike) or strike != float(spec.strike):
+                    return False, RejectionReason.CONTRACT_TARGET_MISMATCH.value
+            if meta.get("contract_right") is not None:
+                if spec.option_right is None or not isinstance(meta["contract_right"], str):
+                    return False, RejectionReason.CONTRACT_TARGET_MISMATCH.value
+                right = meta["contract_right"].strip().upper()
+                if right not in {
+                    str(spec.option_right.value).upper(),
+                    str(spec.option_right).split(".")[-1].upper(),
+                }:
+                    return False, RejectionReason.CONTRACT_TARGET_MISMATCH.value
+        except (TypeError, ValueError, OverflowError, AttributeError):
+            return False, RejectionReason.CONTRACT_TARGET_MISMATCH.value
+        return True, None
+
     def option_chain_snapshot(
         self,
         spec: ContractSpec,
@@ -341,6 +380,8 @@ class PaperDerivativesEngine:
         }
         if spec.instrument_type != DerivativeInstrumentType.OPTION:
             return unavailable("OPTION_CONTRACT_REQUIRED")
+        if now.tzinfo is None:
+            return unavailable("AS_OF_TIMEZONE_REQUIRED")
         if spec.expiry is None or spec.expiry.tzinfo is None or spec.strike is None or spec.option_right is None:
             return unavailable("EXPIRY_AWARE_OPTION_SPEC_REQUIRED")
         if now >= spec.expiry:
@@ -353,19 +394,9 @@ class PaperDerivativesEngine:
         if quote.symbol != spec.symbol:
             return unavailable("CONTRACT_TARGET_MISMATCH")
         meta = quote.provenance or {}
-        if meta.get("strike") is not None and float(meta["strike"]) != float(spec.strike):
-            return unavailable("CONTRACT_TARGET_MISMATCH")
-        if meta.get("contract_right") is not None and str(meta["contract_right"]).upper() not in {
-            str(spec.option_right.value).upper(), str(spec.option_right).split(".")[-1].upper()
-        }:
-            return unavailable("CONTRACT_TARGET_MISMATCH")
-        if meta.get("expiry") is not None:
-            try:
-                observed_expiry = datetime.fromisoformat(str(meta["expiry"]).replace("Z", "+00:00"))
-            except ValueError:
-                return unavailable("CONTRACT_TARGET_MISMATCH")
-            if observed_expiry != spec.expiry:
-                return unavailable("CONTRACT_TARGET_MISMATCH")
+        metadata_ok, metadata_reason = self._contract_metadata_match(spec, meta)
+        if not metadata_ok:
+            return unavailable(metadata_reason or "CONTRACT_TARGET_MISMATCH")
         if underlying_price is None or not math.isfinite(underlying_price) or underlying_price <= 0:
             return unavailable("UNDERLYING_MARK_MISSING")
         if implied_volatility is None or not math.isfinite(implied_volatility) or implied_volatility <= 0:
@@ -517,8 +548,9 @@ class PaperDerivativesEngine:
         # Explicit contract-book authority constraints, when supplied by the source.
         # Missing metadata preserves legacy fixture compatibility; explicit refusal never upgrades.
         meta = quote.provenance or {}
-        if meta.get("contract_authorized") is False:
-            return ExecutionAttemptResult(success=False, rejection_reason=RejectionReason.CONTRACT_TARGET_MISMATCH.value)
+        metadata_ok, metadata_reason = self._contract_metadata_match(spec, meta)
+        if not metadata_ok:
+            return ExecutionAttemptResult(success=False, rejection_reason=metadata_reason)
         if meta.get("session_open") is False:
             return ExecutionAttemptResult(success=False, rejection_reason=RejectionReason.EXECUTION_SESSION_UNAUTHORIZED.value)
         displayed = meta.get("ask_size") if side == OrderSide.BUY else meta.get("bid_size")
@@ -529,20 +561,6 @@ class PaperDerivativesEngine:
                 displayed_qty = 0.0
             if not math.isfinite(displayed_qty) or displayed_qty < quantity:
                 return ExecutionAttemptResult(success=False, rejection_reason=RejectionReason.DISPLAYED_CAPACITY_INSUFFICIENT.value)
-        if meta.get("expiry") is not None and spec.expiry is not None:
-            try:
-                quoted_expiry = datetime.fromisoformat(str(meta["expiry"]).replace("Z", "+00:00"))
-            except ValueError:
-                return ExecutionAttemptResult(success=False, rejection_reason=RejectionReason.CONTRACT_TARGET_MISMATCH.value)
-            if quoted_expiry != spec.expiry:
-                return ExecutionAttemptResult(success=False, rejection_reason=RejectionReason.CONTRACT_TARGET_MISMATCH.value)
-        if meta.get("strike") is not None and spec.strike is not None and float(meta["strike"]) != float(spec.strike):
-            return ExecutionAttemptResult(success=False, rejection_reason=RejectionReason.CONTRACT_TARGET_MISMATCH.value)
-        if meta.get("contract_right") is not None and spec.option_right is not None:
-            right = str(meta["contract_right"]).upper()
-            if right not in {str(spec.option_right.value).upper(), str(spec.option_right).split(".")[-1].upper()}:
-                return ExecutionAttemptResult(success=False, rejection_reason=RejectionReason.CONTRACT_TARGET_MISMATCH.value)
-
         # 4. Tick size check
         if not self.validate_tick_size(raw_price, spec.tick_size):
             return ExecutionAttemptResult(
