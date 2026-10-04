@@ -301,6 +301,7 @@ def validation_selected_oos(
     train_fraction: float = 0.60,
     validation_fraction: float = 0.20,
     allow_test_only: bool = False,
+    fit_inputs: list[dict[str, Any]] | None = None,
     selection_inputs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Select on validation only, then evaluate untouched OOS exactly once.
@@ -370,6 +371,14 @@ def validation_selected_oos(
             "live_approved": False,
             "completion_claim_allowed": False,
         }
+
+    train_end_ts = train[-1].timestamp
+    for item in fit_inputs or []:
+        available_at = item.get("available_at")
+        if not isinstance(available_at, datetime) or available_at.tzinfo is None:
+            raise ValueError("FIT_INPUT_TIMESTAMP_REQUIRED")
+        if available_at > train_end_ts:
+            raise ValueError("FUTURE_TRAINING_INPUT_FORBIDDEN")
 
     validation_end_ts = validation[-1].timestamp
     for item in selection_inputs or []:
