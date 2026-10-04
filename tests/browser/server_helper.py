@@ -394,6 +394,13 @@ def _seed_order_flow_fixtures(state) -> dict:
         settings = state.paper_orders.experiments[strategy_id]
         state.paper_orders.experiments[strategy_id] = settings.model_copy(update={"enabled": False})
     state.runner.persist_settings()
+
+    # Persist an explicit canonical mark so restart readback can prove NAV/
+    # equity identity instead of losing valuation when no live source exists.
+    mark = state.market_adapter.get_latest_bar("2330.TW")
+    if mark is None:
+        raise AssertionError("TEST_ONLY order-flow fixture requires a valuation bar")
+    state.portfolio_manager.update_mark_to_market(mark)
     state.runner._persist_portfolios()
 
     result = {
@@ -493,6 +500,20 @@ async def serve(
         @app.get("/api/test-only/order-flow")
         def test_only_order_flow():
             return app.state.test_only_order_flow
+
+        # create_app mounts the SPA at "/" last in production. The helper-only
+        # route above is added afterwards, so keep the catch-all mount last or
+        # Starlette would serve the SPA 404 before this TEST_ONLY endpoint.
+        root_mount = next(
+            (
+                route for route in app.router.routes
+                if getattr(route, "path", None) == "/" and route.__class__.__name__ == "Mount"
+            ),
+            None,
+        )
+        if root_mount is not None:
+            app.router.routes.remove(root_mount)
+            app.router.routes.append(root_mount)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
