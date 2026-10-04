@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from cio_market_lab.api.app import create_app
@@ -14,6 +15,8 @@ def main() -> int:
     parser.add_argument("--runtime-dir", type=Path, required=True)
     args = parser.parse_args()
 
+    os.environ["CIO_MARKET_LAB_OFFLINE"] = "1"
+    os.environ.pop("CIO_MATERIAL_GATE_ENABLED", None)
     adapter = TestOnlyMarketAdapter()
     app = create_app(
         workspace_root=args.workspace_root,
