@@ -64,6 +64,18 @@ def test_expiry_aware_option_chain_greeks_and_fail_closed():
     expired=option(expiry=T0-timedelta(seconds=1))
     assert engine.option_chain_snapshot(expired,q(expired),underlying_price=20100,implied_volatility=.22,as_of=T0)["reason"]=="CONTRACT_EXPIRED"
 
+@pytest.mark.parametrize("bad_strike",[0,-1,float("nan"),float("inf")])
+def test_option_chain_invalid_normal_model_strike_is_bounded_unavailable(bad_strike):
+    fields=option().model_dump()
+    fields["strike"]=bad_strike
+    spec=ContractSpec.model_validate(fields)
+    result=PaperDerivativesEngine().option_chain_snapshot(
+        spec,q(spec),underlying_price=20100,implied_volatility=.22,as_of=T0)
+    assert result["status"]=="UNAVAILABLE"
+    assert result["reason"]=="INVALID_CONTRACT_SPEC"
+    assert "greeks" not in result
+
+
 @pytest.mark.parametrize("bad_meta",[
     {"strike":"not-a-number"},
     {"strike":{"bad":1}},
