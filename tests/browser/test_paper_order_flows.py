@@ -361,6 +361,13 @@ def test_strategy_and_main_cio_readback_and_authority_boundaries(
         assert "sign_cio_packet" not in bundle_text
         assert page.get_by_label("Order origin").count() == 0
 
+        page.get_by_role("button", name="Research", exact=True).click()
+        research = page.locator('[data-workspace-view="research"]')
+        research.wait_for(state="visible", timeout=5_000)
+        assert research.get_by_role("button", name="Preview order", exact=True).count() == 0
+        assert research.get_by_role("button", name="Confirm paper order", exact=True).count() == 0
+        assert research.get_by_label("Order origin").count() == 0
+
         assert not page_errors
         assert not console_errors
         completed = True
