@@ -344,7 +344,13 @@ def test_restore_preserves_global_and_strategy_order_metadata_and_is_idempotent(
     restored_global_order = next(
         order for order in restored_global.orders if order.order_id == global_order.order_id
     )
-    assert restored_global_order is event_global
+    canonical_global_order = next(
+        order for order in restored_pm.get_ledger(DecisionScope.SWING).orders
+        if order.order_id == global_order.order_id
+    )
+    assert canonical_global_order is event_global
+    assert restored_global_order is not canonical_global_order
+    assert restored_global_order.model_dump(mode="json") == canonical_global_order.model_dump(mode="json")
     assert restored_global_order.status == OrderStatus.FILLED
     assert restored_global_order.audit_metadata == global_order_before.audit_metadata
 
@@ -352,7 +358,15 @@ def test_restore_preserves_global_and_strategy_order_metadata_and_is_idempotent(
     restored_strategy_order = next(
         order for order in restored_strategy.orders if order.order_id == strategy_order.order_id
     )
-    assert restored_strategy_order is event_strategy
+    canonical_strategy_order = next(
+        order for order in restored_pm.get_strategy_ledger(
+            "desk-tw", DecisionScope.SWING
+        ).orders
+        if order.order_id == strategy_order.order_id
+    )
+    assert canonical_strategy_order is event_strategy
+    assert restored_strategy_order is not canonical_strategy_order
+    assert restored_strategy_order.model_dump(mode="json") == canonical_strategy_order.model_dump(mode="json")
     assert restored_strategy_order.status == OrderStatus.FILLED
     assert restored_strategy_order.audit_metadata == strategy_order_before.audit_metadata
 
