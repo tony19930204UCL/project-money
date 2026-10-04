@@ -430,19 +430,29 @@ class AutonomousPaperRunner:
 
             def replay_persisted_receipts(ledger, payload):
                 # Snapshot orders record their *final* status, not their status
-                # when each historical receipt arrived. Replay through pending
-                # copies so pre-cancellation fills retain quantity/cash checks,
-                # then reinstate terminal states. Live fill paths cannot use
-                # this private restart-only replay to revive canceled orders.
+                # when each historical receipt arrived. EventStore may already
+                # have reconstructed aggregate orders/fills before runner state
+                # is restored, so preserve identity instead of replaying the
+                # same receipt twice.
                 from cio_market_lab.domain.models import Order
+                existing_orders = {order.order_id: order for order in ledger.orders}
+                existing_fill_ids = {fill.fill_id for fill in ledger.fills}
                 saved_orders = []
                 for order_data in payload.get("orders", []):
-                    order = Order.model_validate(order_data)
-                    saved_orders.append((order, order.status, order.rejection_reason))
-                    order.status = OrderStatus.PENDING
-                    ledger.add_order(order)
+                    persisted = Order.model_validate(order_data)
+                    order = existing_orders.get(persisted.order_id)
+                    if order is None:
+                        order = persisted
+                        order.status = OrderStatus.PENDING
+                        ledger.add_order(order)
+                        existing_orders[order.order_id] = order
+                    saved_orders.append((order, persisted.status, persisted.rejection_reason))
                 for fill_data in payload.get("fills", []):
-                    ledger.apply_fill(Fill.model_validate(fill_data))
+                    fill = Fill.model_validate(fill_data)
+                    if fill.fill_id in existing_fill_ids:
+                        continue
+                    ledger.apply_fill(fill)
+                    existing_fill_ids.add(fill.fill_id)
                 for order, status, reason in saved_orders:
                     order.status = status
                     order.rejection_reason = reason
