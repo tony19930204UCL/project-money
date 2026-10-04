@@ -54,6 +54,7 @@ class TestOnlyMarketAdapter:
     def __init__(self, mode: str = "normal") -> None:
         self.mode = mode
         self.offline_mode = True
+        self.quote_enabled = True
         self.last_fetch_mode = f"TEST_ONLY_fixture_{mode}"
         self.last_error = None
 
@@ -111,6 +112,8 @@ class TestOnlyMarketAdapter:
         return bars[-1] if bars else None
 
     def get_latest_quote(self, symbol):
+        if not self.quote_enabled:
+            return None
         if symbol == "ERROR.TW":
             self.last_error = "TEST_ONLY forced quote error"
             return None
@@ -276,7 +279,11 @@ def _seed_order_flow_fixtures(state) -> dict:
             allowed_buckets=[DecisionScope.SWING],
         ))
         if not any(order.origin == OrderOrigin.STRATEGY and order.strategy_id == reg.id for order in state.paper_orders.all_orders()):
-            cycle = state.runner.run_one_cycle(reg.id, symbols=["2330.TW"])
+            state.market_adapter.quote_enabled = False
+            try:
+                cycle = state.runner.run_one_cycle(reg.id, symbols=["2330.TW"])
+            finally:
+                state.market_adapter.quote_enabled = True
             strategy_orders = [
                 order for order in state.paper_orders.all_orders()
                 if order.origin == OrderOrigin.STRATEGY and order.strategy_id == reg.id
@@ -284,15 +291,15 @@ def _seed_order_flow_fixtures(state) -> dict:
             if not strategy_orders:
                 raise AssertionError(f"TEST_ONLY strategy runner did not create order: {cycle}")
             strategy_order = strategy_orders[-1]
-            strategy_order.audit_metadata["fixture_receipt"] = "TEST_ONLY_STRATEGY_ORDER"
-            if not any(fill.order_id == strategy_order.order_id for fill in state.portfolio_manager.get_strategy_portfolio(reg.id, DecisionScope.SWING).fills):
-                _fixture_fill(
-                    state,
-                    strategy_order.order_id,
-                    min(1.0, strategy_order.quantity),
-                    "TEST_ONLY_FILL_STRATEGY",
-                    strategy_id=reg.id,
-                )
+            if any(fill.order_id == strategy_order.order_id for fill in state.portfolio_manager.get_strategy_portfolio(reg.id, DecisionScope.SWING).fills):
+                raise AssertionError("TEST_ONLY strategy runner unexpectedly filled without later quote")
+            _fixture_fill(
+                state,
+                strategy_order.order_id,
+                min(1.0, strategy_order.quantity),
+                "TEST_ONLY_FILL_STRATEGY",
+                strategy_id=reg.id,
+            )
 
     state.runner.configure(PaperExperimentSettings(
         strategy_id=DYNAMIC_DESK_ID,
