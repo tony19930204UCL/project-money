@@ -791,6 +791,13 @@ def create_app(
             },
             "swing": swing.model_dump(),
             "intraday": intraday.model_dump(),
+            "strategy_ledgers": {
+                strategy_id: {
+                    bucket.value: portfolio.model_dump(mode="json")
+                    for bucket, portfolio in st.portfolio_manager.get_all_strategy_portfolios(strategy_id).items()
+                }
+                for strategy_id in st.portfolio_manager.strategy_ids()
+            },
         }
 
     # --- Signals & Fills ---

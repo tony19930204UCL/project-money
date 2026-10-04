@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
-from cio_market_lab.engine.paper_derivatives import DerivativeQuote
+from cio_market_lab.engine.paper_derivatives import ContractSpec, DerivativeQuote, DerivativeInstrumentType
 
 BASE='https://mis.taifex.com.tw/futures/api/'
 ENDPOINTS={'TXF':'getQuoteList','TXO':'getQuoteListOption'}
@@ -91,6 +91,54 @@ def decode_quote_snapshot(response: dict, *, source_url: str, market_type: str,
         'scope':'CONTRACT_QUOTE_INTAKE_ONLY_NOT_DERIVATIVE_ACTIVATION',
         'remaining_gaps':['CERTIFIED_BOOK_TIMESTAMP_SEMANTICS','EXPIRY_AND_CONTRACT_REGISTRY',
             'SOURCE_ALIGNED_FEES_MARGIN_SETTLEMENT','MAIN_CIO_TRADE_APPROVAL','FULL_DERIVATIVE_LIFECYCLE_ACCEPTANCE']}
+
+
+def bind_test_only_quote_to_contract(quote_data: dict, contract_spec: dict, *, as_of: datetime) -> DerivativeQuote:
+    """Bind one decoded TEST_ONLY TAIFEX contract quote to an explicit registry spec.
+
+    This is fixture-only source/caller glue. It validates exact target metadata and
+    never upgrades the quote or contract to production/live authorization.
+    """
+    quote=DerivativeQuote.model_validate(quote_data)
+    spec=ContractSpec.model_validate(contract_spec)
+    if as_of.tzinfo is None:
+        raise ValueError('AS_OF_TIMEZONE_REQUIRED')
+    if not quote.is_fixture:
+        raise ValueError('TEST_ONLY_QUOTE_REQUIRED')
+    if spec.expiry is None or spec.expiry.tzinfo is None or as_of>=spec.expiry:
+        raise ValueError('CONTRACT_EXPIRED_OR_EXPIRY_UNAVAILABLE')
+    if quote.symbol!=spec.symbol:
+        raise ValueError('CONTRACT_TARGET_MISMATCH')
+    meta=dict(quote.provenance or {})
+    if spec.instrument_type==DerivativeInstrumentType.OPTION:
+        raw_strike=meta.get('strike')
+        try:
+            strike=float(raw_strike)
+        except (TypeError,ValueError,OverflowError):
+            raise ValueError('CONTRACT_TARGET_MISMATCH')
+        if spec.strike is None or not math.isfinite(strike) or strike!=float(spec.strike):
+            raise ValueError('CONTRACT_TARGET_MISMATCH')
+        raw_right=str(meta.get('contract_right') or '').strip().upper()
+        expected=str(spec.option_right.value).upper() if spec.option_right else ''
+        aliases={'CALL':{'CALL','C'},'PUT':{'PUT','P'}}
+        if expected not in aliases or raw_right not in aliases[expected]:
+            raise ValueError('CONTRACT_TARGET_MISMATCH')
+    meta.update({
+        'contract_authorized':True,
+        'session_open':True,
+        'expiry':spec.expiry.isoformat(),
+        'multiplier':spec.multiplier,
+        'tick_size':spec.tick_size,
+        'currency':spec.currency,
+        'initial_margin_per_contract':spec.initial_margin_per_contract,
+        'maintenance_margin_per_contract':spec.maintenance_margin_per_contract,
+        'registry_binding':'EXPLICIT_TEST_ONLY_CONTRACT_SPEC',
+    })
+    if spec.option_right is not None:
+        meta['contract_right']=spec.option_right.value
+    if spec.strike is not None:
+        meta['strike']=spec.strike
+    return quote.model_copy(update={'provenance':meta})
 
 
 class TaifexQuoteAdapter:

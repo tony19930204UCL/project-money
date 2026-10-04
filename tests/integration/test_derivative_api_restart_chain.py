@@ -1,0 +1,264 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+from fastapi.testclient import TestClient
+
+from cio_market_lab.api.app import create_app
+from cio_market_lab.data.taifex_derivatives import bind_test_only_quote_to_contract, decode_quote_snapshot
+from cio_market_lab.domain.events import EventType
+from cio_market_lab.domain.models import DecisionScope, OrderSide
+from cio_market_lab.engine.derivative_lifecycle import PaperDerivativeLifecycle
+from cio_market_lab.engine.paper_derivatives import ContractSpec
+from cio_market_lab.engine.paper_orders import PaperExperimentSettings, PaperOrderService
+from cio_market_lab.engine.portfolio import PortfolioManager
+from cio_market_lab.events.store import EventStore
+
+ROOT=Path(__file__).resolve().parents[2]
+HELPER=Path(__file__).with_name("derivative_restart_process_helper.py")
+SID="TEST_ONLY_DERIV_RESTART"
+
+def run(runtime,kind,action):
+    cp=subprocess.run([sys.executable,str(HELPER),str(runtime),kind,action],
+        cwd=ROOT,text=True,capture_output=True,check=True)
+    return json.loads(cp.stdout.strip().splitlines()[-1])
+
+def test_option_restart_missing_quote_then_real_fixture_close_is_idempotent(tmp_path):
+    runtime=tmp_path/"option-runtime"
+    first=run(runtime,"option","open")
+    assert first["changed"]["success"] is True
+    assert first["positions"]["TXO-TEST"]["quantity"]==1
+    cash_after_open=first["cash"]
+    missing=run(runtime,"option","review-missing")
+    assert missing["changed"]=="UNRESOLVED_EXECUTABLE_QUOTE"
+    assert missing["cash"]==cash_after_open
+    assert missing["positions"]["TXO-TEST"]["quantity"]==1
+    assert missing["equity"] is None
+    replay_missing=run(runtime,"option","review-missing")
+    assert replay_missing["cash"]==missing["cash"]
+    assert replay_missing["event_ids"]==missing["event_ids"]
+    closed=run(runtime,"option","review-close")
+    assert closed["changed"]=="PAPER_RISK_CLOSE_FILLED"
+    assert closed["positions"]["TXO-TEST"]["quantity"]==0
+    close_events=closed["event_ids"]
+    after=run(runtime,"option","snapshot")
+    assert after["cash"]==closed["cash"]
+    assert after["event_ids"]==close_events
+    assert after["positions"]["TXO-TEST"]["quantity"]==0
+
+def test_future_restart_dated_settlement_margin_review_and_legal_risk_exit(tmp_path):
+    runtime=tmp_path/"future-runtime"
+    opened=run(runtime,"future","open")
+    assert opened["changed"]["success"] is True
+    assert opened["margin_locked"]==100000
+    assert opened["available_cash"]==opened["cash"]-100000
+    cash_before=opened["cash"]
+
+    settled=run(runtime,"future","settle")
+    assert settled["changed"] is True
+    expected=cash_before+(1020-1001)*200
+    assert settled["cash"]==expected
+    assert settled["positions"]["TXF-TEST"]["assumptions"]["derivative_position"]["last_settlement_price"]==1020
+    settlement_ids=settled["event_ids"]
+
+    duplicate=run(runtime,"future","settle")
+    assert duplicate["changed"] is False
+    assert duplicate["cash"]==expected
+    assert duplicate["event_ids"]==settlement_ids
+
+    missing=run(runtime,"future","margin-missing")
+    assert missing["changed"]["status"]=="UNRESOLVED_ACCOUNT_NAV"
+    assert missing["cash"]==expected
+    assert missing["positions"]["TXF-TEST"]["quantity"]==1
+    missing_receipts=list(missing["review_receipts"])
+    assert {r["phase"] for r in missing_receipts if r["review_id"]=="MARGIN-MISSING"}=={
+        "MARGIN_REVIEW_STARTED","MARGIN_REVIEW_BASELINE","MARGIN_REVIEW_COMPLETED"}
+
+    unauthorized=run(runtime,"future","margin-unauthorized")
+    assert unauthorized["changed"]["status"]=="UNRESOLVED_MARGIN_EXECUTION"
+    assert unauthorized["changed"]["initial_maintenance_required"]==1100000
+    assert unauthorized["changed"]["unresolved"][0]["reason"]=="CONTRACT_TARGET_MISMATCH"
+    assert unauthorized["cash"]==expected
+    assert unauthorized["positions"]["TXF-TEST"]["quantity"]==1
+
+    closed=run(runtime,"future","margin-close")
+    assert closed["changed"]["status"]=="PAPER_MARGIN_CURED"
+    assert len(closed["changed"]["closed_positions"])==1
+    assert closed["positions"]["TXF-TEST"]["quantity"]==0
+    assert closed["margin_locked"]==0
+    assert closed["available_cash"]==closed["cash"]
+    close_cash=closed["cash"]
+    close_ids=list(closed["event_ids"])
+    close_receipts=list(closed["review_receipts"])
+
+    restarted=run(runtime,"future","snapshot")
+    assert restarted["cash"]==close_cash
+    assert restarted["event_ids"]==close_ids
+    assert restarted["review_receipts"]==close_receipts
+    assert restarted["positions"]["TXF-TEST"]["quantity"]==0
+
+    duplicate_close=run(runtime,"future","margin-close")
+    assert duplicate_close["cash"]==close_cash
+    assert duplicate_close["event_ids"]==close_ids
+    assert duplicate_close["review_receipts"]==close_receipts
+
+
+def test_option_expiry_without_trusted_cash_settlement_stays_unresolved_across_restart(tmp_path):
+    runtime=tmp_path/"option-expiry-runtime"
+    opened=run(runtime,"option","open")
+    assert opened["changed"]["success"] is True
+    before_cash=opened["cash"]
+
+    expired=run(runtime,"option","expiry-review")
+    assert expired["changed"]=="UNRESOLVED_EXPIRY_DELIVERY_UNSUPPORTED"
+    assert expired["cash"]==before_cash
+    assert expired["equity"] is None
+    assert expired["positions"]["TXO-TEST"]["quantity"]==1
+    expired_ids=list(expired["event_ids"])
+
+    replayed=run(runtime,"option","expiry-review")
+    assert replayed["cash"]==before_cash
+    assert replayed["event_ids"]==expired_ids
+    assert replayed["positions"]["TXO-TEST"]["quantity"]==1
+
+    invalid=run(runtime,"option","expiry-invalid-settlement")
+    assert invalid["changed"]["accepted"] is False
+    assert invalid["changed"]["reason"]=="SETTLEMENT_SOURCE_UNAVAILABLE"
+    assert invalid["cash"]==before_cash
+    assert invalid["positions"]["TXO-TEST"]["quantity"]==1
+    assert invalid["event_ids"]==expired_ids
+
+    final=run(runtime,"option","snapshot")
+    assert final["cash"]==before_cash
+    assert final["event_ids"]==expired_ids
+    assert final["positions"]["TXO-TEST"]["quantity"]==1
+
+def test_api_intake_caller_accounting_and_nonfixture_refusal(tmp_path):
+    runtime=tmp_path/"api-runtime"
+    runtime.mkdir()
+    observed=datetime(2026,10,5,1,0,tzinfo=timezone.utc)
+    expiry=datetime(2026,10,5,3,0,tzinfo=timezone.utc)
+    spec=ContractSpec(symbol="TXO-TEST",underlying_symbol="TX",instrument_type="OPTION",
+        option_right="CALL",strike=20000,expiry=expiry,multiplier=50,tick_size=1,
+        currency="TWD",pre_expiry_close_lead_seconds=3600)
+    raw={"RtCode":"0","RtData":{"QuoteList":[{
+        "SymbolID":"TXO-TEST","Status":"","CDate":"20261005","CTime":"090000",
+        "CBidPrice1":"100","CAskPrice1":"101","CBidSize1":"5","CAskSize1":"5",
+        "CLastPrice":"100.5","CP":"C","StrikePrice":"20000"
+    }]}}
+    snap=decode_quote_snapshot(raw,source_url="https://mis.taifex.com.tw/futures/api/getQuoteListOption",
+        market_type="1",observed_at=observed,is_fixture=True)
+    intake_quote=snap["quotes"][0]
+    bound=bind_test_only_quote_to_contract(intake_quote,spec.model_dump(mode="json"),as_of=observed)
+    assert bound.provenance["registry_binding"]=="EXPLICIT_TEST_ONLY_CONTRACT_SPEC"
+    assert bound.provenance["multiplier"]==50
+    assert bound.provenance["tick_size"]==1
+    assert bound.provenance["currency"]=="TWD"
+    assert bound.provenance["expiry"]==expiry.isoformat()
+    assert bound.provenance["initial_margin_per_contract"]==0
+    assert bound.provenance["maintenance_margin_per_contract"]==0
+
+    inventory={"schema_version":1,"status":"SOURCE_INVENTORY_OBSERVED","observed_at":observed.isoformat(),
+        "snapshots":[{"product":"TXO",**snap}],"failures":[],"quote_count":snap["quote_count"],
+        "fresh_quote_count":snap["fresh_quote_count"],"paper_only":True,
+        "broker_connected":False,"execution_enabled":False,
+        "scope":"CONTRACT_QUOTE_INTAKE_ONLY_NOT_DERIVATIVE_ACTIVATION"}
+    (runtime/"taifex_quote_inventory.json").write_text(json.dumps(inventory),encoding="utf-8")
+
+    app=create_app(workspace_root=ROOT,runtime_dir=runtime,fixture_mode=True,is_read_only=False)
+    state=app.state.app_state
+    state.portfolio_manager.register_strategy(SID,1_000_000,currency="TWD",unified_cash=True)
+    state.paper_orders.experiments[SID]=PaperExperimentSettings(strategy_id=SID,enabled=True,
+        initial_cash=1_000_000,base_currency="TWD",universe=[spec.symbol],
+        allowed_buckets=[DecisionScope.SWING],max_position_notional=10_000_000)
+    lifecycle=PaperDerivativeLifecycle(state.portfolio_manager,state.paper_orders,fixture_mode=True)
+    opened=lifecycle.execute(strategy_id=SID,bucket=DecisionScope.SWING,spec=spec,quote=bound,
+        side=OrderSide.BUY,quantity=1,order_id="INTAKE-OPEN",now=observed)
+    assert opened.success
+    ledger=state.portfolio_manager.get_strategy_ledger(SID,DecisionScope.SWING)
+    expected_cash=1_000_000-(101*50+opened.fee+opened.tax)
+    assert ledger.cash==expected_cash
+    assert ledger.positions[spec.symbol].quantity==1
+    assert ledger.equity==ledger.cash+101*50
+
+    events=[e for _,e in state.event_store.get_events(event_type=EventType.POSITION_UPDATED)]
+    derivative_events=[e for e in events if e.payload.get("paper_derivative")]
+    assert len(derivative_events)==1
+    assert derivative_events[0].payload["normalized_event_type"]=="DERIVATIVE_OPTION_OPENED"
+    assert derivative_events[0].payload["contract_spec"]["multiplier"]==50
+    event_id=derivative_events[0].event_id
+
+    with TestClient(app) as client:
+        caps=client.get("/api/paper/capabilities").json()
+        quotes=client.get("/api/paper/derivative-quotes").json()
+        readback=client.get("/api/paper/readback").json()
+        portfolio=client.get("/api/portfolio").json()
+        policy=client.get("/api/paper/automation/policy").json()
+
+    api_ledger=portfolio["strategy_ledgers"][SID]["swing"]
+    assert api_ledger["cash"]==expected_cash
+    assert api_ledger["equity"]==ledger.equity
+    assert api_ledger["positions"][spec.symbol]["quantity"]==1
+    assert readback["portfolios"]["strategies"][SID]["swing"]["positions"][spec.symbol]["quantity"]==1
+    assert caps["capabilities"]["LONG_PREMIUM_OPTIONS"]["status"]=="UNAVAILABLE"
+    assert quotes["execution_enabled"] is False and quotes["paper_only"] is True
+    assert policy["derivative_trading_supported"] is False and policy["broker_connected"] is False
+
+    wrong_spec=spec.model_copy(update={"strike":19900})
+    try:
+        bind_test_only_quote_to_contract(intake_quote,wrong_spec.model_dump(mode="json"),as_of=observed)
+        assert False,"mismatched intake must reject"
+    except ValueError as exc:
+        assert str(exc)=="CONTRACT_TARGET_MISMATCH"
+    expired_spec=spec.model_copy(update={"expiry":observed})
+    try:
+        bind_test_only_quote_to_contract(intake_quote,expired_spec.model_dump(mode="json"),as_of=observed)
+        assert False,"expired intake must reject"
+    except ValueError as exc:
+        assert str(exc)=="CONTRACT_EXPIRED_OR_EXPIRY_UNAVAILABLE"
+
+    nonruntime=tmp_path/"nonfixture-runtime"
+    nonruntime.mkdir()
+    (nonruntime/"taifex_quote_inventory.json").write_text(json.dumps(inventory),encoding="utf-8")
+    nonapp=create_app(workspace_root=ROOT,runtime_dir=nonruntime,fixture_mode=False,is_read_only=False)
+    nonstate=nonapp.state.app_state
+    nonstate.portfolio_manager.register_strategy(SID,1_000_000,currency="TWD",unified_cash=True)
+    nonstate.paper_orders.experiments[SID]=PaperExperimentSettings(strategy_id=SID,enabled=True,
+        initial_cash=1_000_000,base_currency="TWD",universe=[spec.symbol],
+        allowed_buckets=[DecisionScope.SWING],max_position_notional=10_000_000)
+    prod=PaperDerivativeLifecycle(nonstate.portfolio_manager,nonstate.paper_orders,fixture_mode=False)
+    try:
+        prod.execute(strategy_id=SID,bucket=DecisionScope.SWING,spec=spec,quote=bound,
+            side=OrderSide.BUY,quantity=1,order_id="PROD-BLOCKED",now=observed)
+        assert False,"ordinary runtime must reject derivative execution"
+    except ValueError as exc:
+        assert str(exc)=="DERIVATIVES_UNAVAILABLE_PENDING_ADAPTER_ACCEPTANCE"
+    assert nonstate.event_store.count()==0
+    assert nonstate.portfolio_manager.get_strategy_ledger(SID,DecisionScope.SWING).cash==1_000_000
+    with TestClient(nonapp) as client:
+        noncaps=client.get("/api/paper/capabilities").json()
+        nonquotes=client.get("/api/paper/derivative-quotes").json()
+    assert noncaps["capabilities"]["LONG_PREMIUM_OPTIONS"]["status"]=="UNAVAILABLE"
+    assert nonquotes["execution_enabled"] is False
+
+    # Fresh caller reconstruction from the same durable store, without mutating
+    # or replacing a runtime-restored ledger.
+    restart_store=EventStore(runtime/"events.db")
+    restart_pm=PortfolioManager()
+    restart_pm.register_strategy(SID,1_000_000,currency="TWD",unified_cash=True)
+    restart_orders=PaperOrderService(restart_pm,restart_store)
+    restart_orders.experiments[SID]=state.paper_orders.experiments[SID]
+    replay=PaperDerivativeLifecycle(restart_pm,restart_orders,fixture_mode=True)
+    assert replay.replay()==1
+    rledger=restart_pm.get_strategy_ledger(SID,DecisionScope.SWING)
+    assert rledger.cash==expected_cash
+    assert rledger.positions[spec.symbol].quantity==1
+    revents=[e for _,e in restart_store.get_events(event_type=EventType.POSITION_UPDATED)
+             if e.payload.get("paper_derivative")]
+    assert [e.event_id for e in revents]==[event_id]
+    assert replay.replay()==0
+    assert rledger.cash==expected_cash
