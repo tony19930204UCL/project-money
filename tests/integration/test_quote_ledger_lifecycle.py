@@ -238,7 +238,7 @@ def test_corporate_actions_native_cash_and_fx_fail_closed(tmp_path):
         ]:
             state.runner.configure(PaperExperimentSettings(
                 strategy_id=sid,
-                enabled=False,
+                enabled=True,
                 market=market,
                 base_currency=currency,
                 reporting_currency="TWD",
@@ -398,7 +398,7 @@ def test_pending_partial_completed_http_readback_survives_real_process_restart(t
         state.runner.allow_fixture_quotes = True
         state.runner.configure(PaperExperimentSettings(
             strategy_id="TEST_ONLY_RESTART_STATES",
-            enabled=False,
+            enabled=True,
             market="TW",
             base_currency="TWD",
             reporting_currency="TWD",
