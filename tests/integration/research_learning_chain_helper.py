@@ -159,15 +159,16 @@ def run_next(args) -> dict:
             as_of=now + timedelta(seconds=1),
             symbols=["MSFT"],
         )
+        request = executor.last_request
         prior_ids = [
-            item.get("lesson_id") for item in executor.last_request.prior_lessons
+            item.get("lesson_id") for item in request.prior_lessons
             if isinstance(item, dict)
-        ]
+        ] if request is not None else []
         return {
             "decision_action": getattr(decision, "action", None),
             "executor_calls": executor.call_count,
             "prior_lesson_ids": prior_ids,
-            "verified_research": executor.last_request.verified_research,
+            "verified_research": request.verified_research if request is not None else [],
             "record": record.model_dump(mode="json") if record else None,
             "readback": snapshot,
         }
