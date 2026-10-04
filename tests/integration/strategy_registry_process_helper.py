@@ -60,6 +60,28 @@ def main() -> int:
             for bucket in state.portfolio_manager.get_all_portfolios().values()
             for fill in bucket.fills
         ],
+        "strategy_ledgers": {
+            strategy_id: {
+                bucket.value: {
+                    "cash": portfolio.cash,
+                    "equity": portfolio.equity,
+                    "positions": {
+                        symbol: position.model_dump(mode="json")
+                        for symbol, position in portfolio.positions.items()
+                    },
+                    "orders": [
+                        order.model_dump(mode="json") for order in portfolio.orders
+                    ],
+                    "fills": [
+                        fill.model_dump(mode="json") for fill in portfolio.fills
+                    ],
+                }
+                for bucket, portfolio in state.portfolio_manager.get_all_strategy_portfolios(
+                    strategy_id
+                ).items()
+            }
+            for strategy_id in state.portfolio_manager.strategy_ids()
+        },
     }
     print(json.dumps(payload, sort_keys=True))
     state.runner.shutdown()
