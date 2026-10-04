@@ -97,9 +97,11 @@ def _fresh_registry(strategies_dir: Path, state_dir: Path) -> dict:
 def test_durable_strategy_lifecycle_survives_fresh_process_and_preserves_external_state(tmp_path):
     source = ROOT / "strategies" / "opening_range_breakout"
     strategies_dir = tmp_path / "strategies"
-    strategy_dir = strategies_dir / "opening_range_breakout"
+    v1_dir = strategies_dir / "v1" / "opening_range_breakout"
+    v2_dir = strategies_dir / "v2" / "opening_range_breakout"
     state_dir = tmp_path / "registry-state"
-    shutil.copytree(source, strategy_dir)
+    shutil.copytree(source, v1_dir)
+    shutil.copytree(source, v2_dir)
 
     adapter = object()
     provider_identity = id(adapter)
@@ -144,17 +146,17 @@ def test_durable_strategy_lifecycle_survives_fresh_process_and_preserves_externa
     position_snapshot = ledger_before.positions["MSFT"].model_dump(mode="json")
 
     registry = DurableStrategyRegistry(strategies_dir, state_dir)
-    v1 = registry.register_or_reload(strategy_dir)
+    v1 = registry.register_or_reload(v1_dir)
     registry.activate_strategy(v1.id, authority="Main CIO")
     assert registry.get_registered(v1.id).code_hash == v1.code_hash
 
-    manifest_path = strategy_dir / "manifest.yaml"
+    manifest_path = v2_dir / "manifest.yaml"
     manifest = yaml.safe_load(manifest_path.read_text())
     manifest["version"] = "2.0.0-TEST_ONLY"
     manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False))
-    with (strategy_dir / "strategy.py").open("a", encoding="utf-8") as fh:
+    with (v2_dir / "strategy.py").open("a", encoding="utf-8") as fh:
         fh.write("\n# TEST_ONLY_VERSION_2\n")
-    v2 = registry.register_or_reload(strategy_dir)
+    v2 = registry.register_or_reload(v2_dir)
     assert v2.code_hash != v1.code_hash
     assert v2.status.value == "CANDIDATE"
     assert registry.get_registered(v1.id).code_hash == v1.code_hash
