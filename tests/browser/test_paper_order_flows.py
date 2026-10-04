@@ -212,6 +212,19 @@ def test_manual_ui_preview_confirm_cancel_replace_and_rejections(
         page.get_by_role("button", name="Portfolio", exact=True).click()
         portfolio_view = page.locator('[data-workspace-view="portfolio"]')
         portfolio_view.wait_for(state="visible", timeout=5_000)
+        page.wait_for_function(
+            """() => {
+                const el = document.querySelector('[data-workspace-view="portfolio"]');
+                return el && el.getAttribute('data-api-status') === 'ok';
+            }""",
+            timeout=5_000,
+        )
+        partial_portfolio_ui = json.loads(portfolio_view.locator(".pm-data-card pre").inner_text())
+        assert "2330.TW" in partial_portfolio_ui["swing"]["positions"]
+        assert (
+            partial_portfolio_ui["swing"]["positions"]["2330.TW"]["quantity"]
+            == execution_position_before + 1.0
+        )
         page.get_by_role("button", name="Paper Trade", exact=True).click()
         view = page.locator('[data-workspace-view="paper-trade"]')
         view.wait_for(state="visible", timeout=5_000)
@@ -251,8 +264,19 @@ def test_manual_ui_preview_confirm_cancel_replace_and_rejections(
         page.get_by_role("button", name="Portfolio", exact=True).click()
         portfolio_view = page.locator('[data-workspace-view="portfolio"]')
         portfolio_view.wait_for(state="visible", timeout=5_000)
-        portfolio_text = portfolio_view.locator(".pm-data-card pre").inner_text()
-        assert "2330.TW" in portfolio_text
+        page.wait_for_function(
+            """() => {
+                const el = document.querySelector('[data-workspace-view="portfolio"]');
+                return el && el.getAttribute('data-api-status') === 'ok';
+            }""",
+            timeout=5_000,
+        )
+        portfolio_payload = json.loads(portfolio_view.locator(".pm-data-card pre").inner_text())
+        assert "2330.TW" in portfolio_payload["swing"]["positions"]
+        assert (
+            portfolio_payload["swing"]["positions"]["2330.TW"]["quantity"]
+            == execution_position_before + 2.0
+        )
         page.get_by_role("button", name="Paper Trade", exact=True).click()
         view = page.locator('[data-workspace-view="paper-trade"]')
         view.wait_for(state="visible", timeout=5_000)
