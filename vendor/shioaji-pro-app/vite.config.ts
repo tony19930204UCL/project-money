@@ -72,6 +72,16 @@ export default defineConfig(({ mode, command }) => {
                     codeSplitting: {
                         groups: [
                             {
+                                // Keep React and the CommonJS consumers that initialize
+                                // against it in one eager chunk. Splitting these across
+                                // generated vendor chunks creates a circular initializer
+                                // (React <-> react-resizable / prop-types) and can call an
+                                // imported CommonJS wrapper before its binding is ready.
+                                name: 'react-runtime',
+                                test: /node_modules[\\/](?:react|react-dom|scheduler|prop-types|react-resizable|react-grid-layout|react-draggable)[\\/]/,
+                                priority: 5,
+                            },
+                            {
                                 name: 'agent',
                                 test: /[\\/]modules[\\/]agent[\\/]/,
                                 priority: 4,

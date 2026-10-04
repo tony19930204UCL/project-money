@@ -10,6 +10,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
@@ -430,22 +431,56 @@ class AutonomousPaperRunner:
 
             def replay_persisted_receipts(ledger, payload):
                 # Snapshot orders record their *final* status, not their status
-                # when each historical receipt arrived. Replay through pending
-                # copies so pre-cancellation fills retain quantity/cash checks,
-                # then reinstate terminal states. Live fill paths cannot use
-                # this private restart-only replay to revive canceled orders.
+                # when each historical receipt arrived. EventStore may already
+                # have reconstructed aggregate orders/fills before runner state
+                # is restored, so preserve identity instead of replaying the
+                # same receipt twice.
                 from cio_market_lab.domain.models import Order
+                existing_orders = {order.order_id: order for order in ledger.orders}
+                existing_fill_ids = {fill.fill_id for fill in ledger.fills}
                 saved_orders = []
                 for order_data in payload.get("orders", []):
-                    order = Order.model_validate(order_data)
-                    saved_orders.append((order, order.status, order.rejection_reason))
-                    order.status = OrderStatus.PENDING
-                    ledger.add_order(order)
+                    persisted = Order.model_validate(order_data)
+                    persisted_status = persisted.status
+                    persisted_reason = persisted.rejection_reason
+                    persisted_audit_metadata = persisted.model_copy(deep=True).audit_metadata
+                    order = existing_orders.get(persisted.order_id)
+                    if order is None:
+                        order = persisted.model_copy(deep=True)
+                        order.status = OrderStatus.PENDING
+                        ledger.add_order(order)
+                        existing_orders[order.order_id] = order
+                    else:
+                        # EventStore reconstruction owns object identity; the
+                        # persisted portfolio snapshot owns canonical execution
+                        # metadata such as cumulative filled_quantity.
+                        if (
+                            order.symbol != persisted.symbol
+                            or order.bucket != persisted.bucket
+                            or order.side != persisted.side
+                            or order.quantity != persisted.quantity
+                        ):
+                            raise ValueError(
+                                f"PERSISTED_ORDER_IDENTITY_MISMATCH:{persisted.order_id}"
+                            )
+                    saved_orders.append(
+                        (
+                            order,
+                            persisted_status,
+                            persisted_reason,
+                            persisted_audit_metadata,
+                        )
+                    )
                 for fill_data in payload.get("fills", []):
-                    ledger.apply_fill(Fill.model_validate(fill_data))
-                for order, status, reason in saved_orders:
+                    fill = Fill.model_validate(fill_data)
+                    if fill.fill_id in existing_fill_ids:
+                        continue
+                    ledger.apply_fill(fill)
+                    existing_fill_ids.add(fill.fill_id)
+                for order, status, reason, audit_metadata in saved_orders:
                     order.status = status
                     order.rejection_reason = reason
+                    order.audit_metadata = audit_metadata
 
             for bucket_value, payload in aggregate.items():
                 if bucket_value not in {DecisionScope.SWING.value, DecisionScope.INTRADAY.value}:
@@ -453,9 +488,11 @@ class AutonomousPaperRunner:
                 bucket = DecisionScope(bucket_value)
                 ledger = self.portfolio_manager.get_ledger(bucket)
                 prices = payload.get("latest_prices", {})
-                for sym, px in prices.items():
-                    ledger._latest_prices[sym] = float(px)
                 replay_persisted_receipts(ledger, payload)
+                for sym, px in prices.items():
+                    ledger.update_mark_to_market(
+                        SimpleNamespace(symbol=sym, close=float(px), last_price=float(px))
+                    )
                 ledger._recalculate_equity()
 
             for strategy_id, buckets in raw.get("strategies", {}).items():
@@ -468,9 +505,11 @@ class AutonomousPaperRunner:
                         settings.initial_cash if settings else None,
                     )
                     prices = payload.get("latest_prices", {})
-                    for sym, px in prices.items():
-                        ledger._latest_prices[sym] = float(px)
                     replay_persisted_receipts(ledger, payload)
+                    for sym, px in prices.items():
+                        ledger.update_mark_to_market(
+                            SimpleNamespace(symbol=sym, close=float(px), last_price=float(px))
+                        )
                     from cio_market_lab.domain.models import Position
                     for sym, pos_data in payload.get("derivative_positions", {}).items():
                         ledger.positions[sym] = Position.model_validate(pos_data)
@@ -2311,7 +2350,14 @@ class AutonomousPaperRunner:
 
         # 1. Validate packet (excluding self from duplicate check if progressing an existing pending case)
         effective_processed = self.learning_store.processed_case_ids
-        if existing_rec is not None and (existing_rec.fill is None or (case_order is not None and case_order.status == OrderStatus.PARTIALLY_FILLED)):
+        if (
+            existing_rec is not None
+            and case_order is not None
+            and case_order.status in {OrderStatus.PENDING, OrderStatus.PARTIALLY_FILLED}
+        ):
+            # Existing non-terminal authorization is being progressed, not
+            # resubmitted as a new CIO decision. This must remain true after
+            # restart even when a prior partial fill is already recorded.
             effective_processed = effective_processed - {packet.case_id}
         is_valid, validation_err = validate_cio_packet(
             packet, now=now, processed_case_ids=effective_processed

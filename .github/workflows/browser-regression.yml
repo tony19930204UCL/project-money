@@ -1,0 +1,46 @@
+name: Browser regression
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - abc/batch1-browser-paper-flows
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install frontend
+        working-directory: vendor/shioaji-pro-app
+        run: npm ci --ignore-scripts
+      - name: Build SPA
+        working-directory: vendor/shioaji-pro-app
+        run: npm run build
+      - name: Install Python browser dependencies
+        run: python -m pip install -e ".[test,browser]"
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Run browser smoke and paper order flows
+        env:
+          BROWSER_EVIDENCE_DIR: ${{ runner.temp }}/project-money-browser-evidence
+        run: python -m pytest -q tests/browser/test_workstation_smoke.py tests/browser/test_paper_order_flows.py
+      - name: Upload sanitized browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-batch1-${{ github.sha }}
+          path: ${{ runner.temp }}/project-money-browser-evidence
+          if-no-files-found: warn
+          retention-days: 7

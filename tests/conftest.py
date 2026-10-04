@@ -132,3 +132,20 @@ def _prevent_real_model_subprocesses(monkeypatch):
         "cio_market_lab.integrations.hermes_chat.run_hermes_cli_chat",
         _guarded_hermes_chat,
     )
+
+
+def pytest_ignore_collect(collection_path, config):
+    """Keep browser acceptance opt-in while allowing explicit tests/browser collection."""
+    browser_root = (_PROJECT_ROOT / "tests" / "browser").resolve()
+    try:
+        candidate = Path(str(collection_path)).resolve()
+    except OSError:
+        return False
+    explicit_browser = any(
+        str(arg).replace("\\", "/").rstrip("/").startswith("tests/browser")
+        for arg in config.args
+        if isinstance(arg, str)
+    )
+    if candidate == browser_root or browser_root in candidate.parents:
+        return not explicit_browser
+    return False
