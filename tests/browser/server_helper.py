@@ -134,7 +134,15 @@ class TestOnlyMarketAdapter:
             is_stale=stale,
             quality="TEST_ONLY",
             is_synthetic=False,
-            source_capabilities={"is_fixture": True, "book": True},
+            source_capabilities={
+                "source": self.source_name,
+                "two_sided_book": True,
+                "size_backed": True,
+                "exchange_session_attested": True,
+                "entitlement_evidence_id": "TEST_ONLY_BROWSER_ENTITLEMENT",
+                "entitlement_status": "TEST_ONLY",
+                "supported_sessions": ["REGULAR"],
+            },
             quote_id=f"TEST_ONLY-{symbol}",
         )
 
