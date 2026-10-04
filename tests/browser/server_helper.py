@@ -369,6 +369,14 @@ def _seed_order_flow_fixtures(state) -> dict:
 
     after_fills = len(state.portfolio_manager.get_strategy_portfolio(DYNAMIC_DESK_ID, DecisionScope.SWING).fills)
     after_cash = state.portfolio_manager.get_strategy_portfolio(DYNAMIC_DESK_ID, DecisionScope.SWING).cash
+
+    # Browser acceptance observes a quiescent committed runtime. The runner is
+    # used above to create canonical TEST_ONLY records, then explicitly disarmed
+    # before uvicorn lifespan so no background cycle can mutate the ledger.
+    for strategy_id in list(state.paper_orders.experiments):
+        settings = state.paper_orders.experiments[strategy_id]
+        state.paper_orders.experiments[strategy_id] = settings.model_copy(update={"enabled": False})
+    state.runner.persist_settings()
     state.runner._persist_portfolios()
 
     result = {
