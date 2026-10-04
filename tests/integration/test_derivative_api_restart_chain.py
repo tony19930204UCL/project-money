@@ -9,9 +9,11 @@ import sys
 from fastapi.testclient import TestClient
 
 from cio_market_lab.api.app import create_app
-from cio_market_lab.data.taifex_derivatives import decode_quote_snapshot
-from cio_market_lab.domain.models import DecisionScope
+from cio_market_lab.data.taifex_derivatives import bind_test_only_quote_to_contract, decode_quote_snapshot
+from cio_market_lab.domain.events import EventType
+from cio_market_lab.domain.models import DecisionScope, OrderSide
 from cio_market_lab.engine.derivative_lifecycle import PaperDerivativeLifecycle
+from cio_market_lab.engine.paper_derivatives import ContractSpec
 from cio_market_lab.engine.paper_orders import PaperExperimentSettings
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -133,10 +135,14 @@ def test_option_expiry_without_trusted_cash_settlement_stays_unresolved_across_r
     assert final["event_ids"]==expired_ids
     assert final["positions"]["TXO-TEST"]["quantity"]==1
 
-def test_api_capability_quote_inventory_and_derivative_readback_remain_fail_closed(tmp_path):
+def test_api_intake_caller_accounting_and_nonfixture_refusal(tmp_path):
     runtime=tmp_path/"api-runtime"
     runtime.mkdir()
     observed=datetime(2026,10,5,1,0,tzinfo=timezone.utc)
+    expiry=datetime(2026,10,5,3,0,tzinfo=timezone.utc)
+    spec=ContractSpec(symbol="TXO-TEST",underlying_symbol="TX",instrument_type="OPTION",
+        option_right="CALL",strike=20000,expiry=expiry,multiplier=50,tick_size=1,
+        currency="TWD",pre_expiry_close_lead_seconds=3600)
     raw={"RtCode":"0","RtData":{"QuoteList":[{
         "SymbolID":"TXO-TEST","Status":"","CDate":"20261005","CTime":"090000",
         "CBidPrice1":"100","CAskPrice1":"101","CBidSize1":"5","CAskSize1":"5",
@@ -144,6 +150,16 @@ def test_api_capability_quote_inventory_and_derivative_readback_remain_fail_clos
     }]}}
     snap=decode_quote_snapshot(raw,source_url="https://mis.taifex.com.tw/futures/api/getQuoteListOption",
         market_type="1",observed_at=observed,is_fixture=True)
+    intake_quote=snap["quotes"][0]
+    bound=bind_test_only_quote_to_contract(intake_quote,spec.model_dump(mode="json"),as_of=observed)
+    assert bound.provenance["registry_binding"]=="EXPLICIT_TEST_ONLY_CONTRACT_SPEC"
+    assert bound.provenance["multiplier"]==50
+    assert bound.provenance["tick_size"]==1
+    assert bound.provenance["currency"]=="TWD"
+    assert bound.provenance["expiry"]==expiry.isoformat()
+    assert bound.provenance["initial_margin_per_contract"]==0
+    assert bound.provenance["maintenance_margin_per_contract"]==0
+
     inventory={"schema_version":1,"status":"SOURCE_INVENTORY_OBSERVED","observed_at":observed.isoformat(),
         "snapshots":[{"product":"TXO",**snap}],"failures":[],"quote_count":snap["quote_count"],
         "fresh_quote_count":snap["fresh_quote_count"],"paper_only":True,
@@ -151,29 +167,92 @@ def test_api_capability_quote_inventory_and_derivative_readback_remain_fail_clos
         "scope":"CONTRACT_QUOTE_INTAKE_ONLY_NOT_DERIVATIVE_ACTIVATION"}
     (runtime/"taifex_quote_inventory.json").write_text(json.dumps(inventory),encoding="utf-8")
 
-    run(runtime,"option","open")
     app=create_app(workspace_root=ROOT,runtime_dir=runtime,fixture_mode=True,is_read_only=False)
     state=app.state.app_state
+    state.portfolio_manager.register_strategy(SID,1_000_000,currency="TWD",unified_cash=True)
     state.paper_orders.experiments[SID]=PaperExperimentSettings(strategy_id=SID,enabled=True,
-        initial_cash=1_000_000,base_currency="TWD",universe=["TXO-TEST"],
+        initial_cash=1_000_000,base_currency="TWD",universe=[spec.symbol],
         allowed_buckets=[DecisionScope.SWING],max_position_notional=10_000_000)
     lifecycle=PaperDerivativeLifecycle(state.portfolio_manager,state.paper_orders,fixture_mode=True)
-    lifecycle.replay()
+    opened=lifecycle.execute(strategy_id=SID,bucket=DecisionScope.SWING,spec=spec,quote=bound,
+        side=OrderSide.BUY,quantity=1,order_id="INTAKE-OPEN",now=observed)
+    assert opened.success
+    ledger=state.portfolio_manager.get_strategy_ledger(SID,DecisionScope.SWING)
+    expected_cash=1_000_000-(101*50+opened.fee+opened.tax)
+    assert ledger.cash==expected_cash
+    assert ledger.positions[spec.symbol].quantity==1
+    assert ledger.equity==ledger.cash+101*50
+
+    events=[e for _,e in state.event_store.get_events(event_type=EventType.POSITION_UPDATED)]
+    derivative_events=[e for e in events if e.payload.get("paper_derivative")]
+    assert len(derivative_events)==1
+    assert derivative_events[0].payload["normalized_event_type"]=="DERIVATIVE_OPTION_OPENED"
+    assert derivative_events[0].payload["contract_spec"]["multiplier"]==50
+    event_id=derivative_events[0].event_id
 
     with TestClient(app) as client:
         caps=client.get("/api/paper/capabilities").json()
         quotes=client.get("/api/paper/derivative-quotes").json()
         readback=client.get("/api/paper/readback").json()
         portfolio=client.get("/api/portfolio").json()
+        policy=client.get("/api/paper/automation/policy").json()
 
+    api_ledger=portfolio["strategy_ledgers"][SID]["swing"]
+    assert api_ledger["cash"]==expected_cash
+    assert api_ledger["equity"]==ledger.equity
+    assert api_ledger["positions"][spec.symbol]["quantity"]==1
+    assert readback["portfolios"]["strategies"][SID]["swing"]["positions"][spec.symbol]["quantity"]==1
     assert caps["capabilities"]["LONG_PREMIUM_OPTIONS"]["status"]=="UNAVAILABLE"
-    assert caps["capabilities"]["FUTURES"]["status"]=="UNAVAILABLE"
-    assert quotes["execution_enabled"] is False
-    assert quotes["paper_only"] is True and quotes["broker_connected"] is False
-    assert quotes["snapshots"][0]["quotes"][0]["symbol"]=="TXO-TEST"
-    assert readback["paper_only"] is True and readback["broker_connected"] is False
-    assert readback["portfolios"]["strategies"][SID]["swing"]["positions"]["TXO-TEST"]["quantity"]==1
-    assert portfolio["paper_only"] is True
-    policy=client.get("/api/paper/automation/policy").json()
-    assert policy["derivative_trading_supported"] is False
-    assert policy["broker_connected"] is False
+    assert quotes["execution_enabled"] is False and quotes["paper_only"] is True
+    assert policy["derivative_trading_supported"] is False and policy["broker_connected"] is False
+
+    wrong_spec=spec.model_copy(update={"strike":19900})
+    try:
+        bind_test_only_quote_to_contract(intake_quote,wrong_spec.model_dump(mode="json"),as_of=observed)
+        assert False,"mismatched intake must reject"
+    except ValueError as exc:
+        assert str(exc)=="CONTRACT_TARGET_MISMATCH"
+    expired_spec=spec.model_copy(update={"expiry":observed})
+    try:
+        bind_test_only_quote_to_contract(intake_quote,expired_spec.model_dump(mode="json"),as_of=observed)
+        assert False,"expired intake must reject"
+    except ValueError as exc:
+        assert str(exc)=="CONTRACT_EXPIRED_OR_EXPIRY_UNAVAILABLE"
+
+    nonruntime=tmp_path/"nonfixture-runtime"
+    nonruntime.mkdir()
+    (nonruntime/"taifex_quote_inventory.json").write_text(json.dumps(inventory),encoding="utf-8")
+    nonapp=create_app(workspace_root=ROOT,runtime_dir=nonruntime,fixture_mode=False,is_read_only=False)
+    nonstate=nonapp.state.app_state
+    nonstate.portfolio_manager.register_strategy(SID,1_000_000,currency="TWD",unified_cash=True)
+    nonstate.paper_orders.experiments[SID]=PaperExperimentSettings(strategy_id=SID,enabled=True,
+        initial_cash=1_000_000,base_currency="TWD",universe=[spec.symbol],
+        allowed_buckets=[DecisionScope.SWING],max_position_notional=10_000_000)
+    prod=PaperDerivativeLifecycle(nonstate.portfolio_manager,nonstate.paper_orders,fixture_mode=False)
+    try:
+        prod.execute(strategy_id=SID,bucket=DecisionScope.SWING,spec=spec,quote=bound,
+            side=OrderSide.BUY,quantity=1,order_id="PROD-BLOCKED",now=observed)
+        assert False,"ordinary runtime must reject derivative execution"
+    except ValueError as exc:
+        assert str(exc)=="DERIVATIVES_UNAVAILABLE_PENDING_ADAPTER_ACCEPTANCE"
+    assert nonstate.event_store.count()==0
+    assert nonstate.portfolio_manager.get_strategy_ledger(SID,DecisionScope.SWING).cash==1_000_000
+    with TestClient(nonapp) as client:
+        noncaps=client.get("/api/paper/capabilities").json()
+        nonquotes=client.get("/api/paper/derivative-quotes").json()
+    assert noncaps["capabilities"]["LONG_PREMIUM_OPTIONS"]["status"]=="UNAVAILABLE"
+    assert nonquotes["execution_enabled"] is False
+
+    # Fresh fixture app reconstructs the same caller-created accounting event.
+    restarted=create_app(workspace_root=ROOT,runtime_dir=runtime,fixture_mode=True,is_read_only=False)
+    rs=restarted.state.app_state
+    rs.portfolio_manager.register_strategy(SID,1_000_000,currency="TWD",unified_cash=True)
+    rs.paper_orders.experiments[SID]=state.paper_orders.experiments[SID]
+    replay=PaperDerivativeLifecycle(rs.portfolio_manager,rs.paper_orders,fixture_mode=True)
+    replay.replay()
+    rledger=rs.portfolio_manager.get_strategy_ledger(SID,DecisionScope.SWING)
+    assert rledger.cash==expected_cash
+    assert rledger.positions[spec.symbol].quantity==1
+    revents=[e for _,e in rs.event_store.get_events(event_type=EventType.POSITION_UPDATED)
+             if e.payload.get("paper_derivative")]
+    assert [e.event_id for e in revents]==[event_id]
