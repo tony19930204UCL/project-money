@@ -8,6 +8,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+import json
+import subprocess
+import sys
 
 import httpx
 import pytest
@@ -32,10 +35,77 @@ from cio_market_lab.engine.paper_orders import (
     PaperExperimentSettings,
     PaperOrderRequest,
 )
-from tests.browser.server_helper import TestOnlyMarketAdapter, _fixture_fill
+from tests.browser.server_helper import TestOnlyMarketAdapter
 from tests.integration.test_process_restart_stream import _server
 from tests.test_c08_quote_cutoff_20261002 import setup_book
 from tests.test_source_aligned_next_bar import NOW, make_bar, make_order, packet, runner_harness
+
+
+PROCESS_HELPER = Path(__file__).with_name("pending_execution_process_helper.py")
+PROCESS_BASE = datetime(2026, 10, 1, 14, 0, tzinfo=timezone.utc)
+
+
+def _write_process_control(path: Path, *, now: datetime, quotes: dict, action_at: datetime | None = None) -> None:
+    payload = {
+        "now": now.isoformat(),
+        "quotes": quotes,
+        "action_at": (action_at or now).isoformat(),
+    }
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+
+
+def _run_process_helper(
+    root: Path,
+    runtime: Path,
+    control: Path,
+    command: str,
+    *flags: str,
+    check: bool = True,
+):
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(PROCESS_HELPER),
+            command,
+            "--workspace-root",
+            str(root),
+            "--runtime-dir",
+            str(runtime),
+            "--control",
+            str(control),
+            *flags,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if check and proc.returncode != 0:
+        raise AssertionError(
+            f"process helper failed rc={proc.returncode}: {proc.stderr}"
+        )
+    if proc.returncode != 0:
+        return proc
+    return json.loads(proc.stdout.splitlines()[-1])
+
+
+def _strategy_state(payload: dict, strategy_id: str) -> dict:
+    return payload["strategies"][strategy_id]
+
+
+def _assert_replay_idempotent(before: dict, after: dict) -> None:
+    for strategy_id in ("TEST_ONLY_RESTART_US", "TEST_ONLY_RESTART_TW"):
+        left = _strategy_state(before, strategy_id)
+        right = _strategy_state(after, strategy_id)
+        assert [f["fill_id"] for f in right["fills"]] == [
+            f["fill_id"] for f in left["fills"]
+        ]
+        assert right["cash"] == pytest.approx(left["cash"])
+        assert right["positions"] == left["positions"]
+        assert right["orders"] == left["orders"]
+    assert after["corporate_event_ids"] == before["corporate_event_ids"]
+    assert after["corporate_changed"] is False
+    assert after["decisions"] == []
 
 
 def _book_quote(
@@ -427,7 +497,7 @@ def test_bar_reference_only_never_becomes_book_through_real_caller(
     assert ledger.cash == 1000
 
 
-def test_corporate_actions_native_cash_and_fx_fail_closed(tmp_path):
+def test_corporate_actions_native_cash_and_fx_fail_closed(tmp_path, monkeypatch):
     runtime = tmp_path / "runtime"
     adapter = TestOnlyMarketAdapter()
     app = create_app(
@@ -439,8 +509,44 @@ def test_corporate_actions_native_cash_and_fx_fail_closed(tmp_path):
     )
     state = app.state.app_state
     try:
-        now = datetime(2026, 10, 1, 8, 0, tzinfo=timezone.utc)
+        clock = {"now": datetime(2026, 10, 1, 8, 0, tzinfo=timezone.utc)}
+        state.runner._now_fn = lambda: clock["now"]
+        state.paper_orders._now_fn = state.runner._now_fn
         state.runner.allow_fixture_quotes = True
+
+        def current_bar(symbol):
+            return Bar(
+                symbol=symbol,
+                timestamp=clock["now"] - timedelta(minutes=5),
+                observed_at=clock["now"],
+                open=100,
+                high=102,
+                low=99,
+                close=100,
+                volume=1000,
+                source="fixture://ISSUE7_CA_BAR",
+                quality="TEST_ONLY",
+                is_fixture=True,
+                is_synthetic=False,
+            )
+
+        quote_holder = {"value": None}
+        monkeypatch.setattr(
+            state.market_adapter,
+            "get_latest_quote",
+            lambda _symbol: quote_holder["value"],
+        )
+        monkeypatch.setattr(
+            state.market_adapter,
+            "get_latest_bar",
+            lambda symbol: current_bar(symbol),
+        )
+        monkeypatch.setattr(
+            state.market_adapter,
+            "get_bars",
+            lambda symbol, *args, **kwargs: [current_bar(symbol)],
+        )
+
         for sid, market, currency, symbol, cash in [
             ("TEST_ONLY_TW_BOOK", "TW", "TWD", "2330.TW", 100_000),
             ("TEST_ONLY_US_BOOK", "US", "USD", "MSFT", 10_000),
@@ -453,25 +559,78 @@ def test_corporate_actions_native_cash_and_fx_fail_closed(tmp_path):
                 reporting_currency="TWD",
                 initial_cash=cash,
                 universe=[symbol],
+                paper_execution_model="QUOTE_BOOK",
             ))
 
-        tw_order = state.paper_orders.submit(PaperOrderRequest(
-            currency="TWD",
-            symbol="2330.TW",
-            market="TW",
-            bucket=DecisionScope.SWING,
-            side=OrderSide.BUY,
-            order_type=OrderType.LIMIT,
+        p = CIODecisionPacket(
+            case_id="TEST_ONLY_CA_REAL_FILL",
+            as_of=clock["now"],
+            expiry=clock["now"] + timedelta(hours=1),
+            thesis="TEST_ONLY real pending caller corporate-action seed",
+            selected_instrument="2330.TW",
+            action="BUY",
             quantity=2,
-            limit_price=101,
-            origin=OrderOrigin.STRATEGY,
-            strategy_id="TEST_ONLY_TW_BOOK",
-            reason="TEST_ONLY corporate action seed",
-            data=PaperDataContext(source="fixture://ISSUE7", last_price=100),
-        ))
-        _fixture_fill(state, tw_order.order_id, 2, "TEST_ONLY_CA_FILL", strategy_id="TEST_ONLY_TW_BOOK")
-        tw = state.portfolio_manager.get_strategy_ledger("TEST_ONLY_TW_BOOK", DecisionScope.SWING)
-        us = state.portfolio_manager.get_strategy_ledger("TEST_ONLY_US_BOOK", DecisionScope.SWING)
+            strategy_version="TEST_ONLY_CA_V1",
+            is_fixture=True,
+            conditions={
+                "paper_execution_model": "QUOTE_BOOK",
+                "allow_partial_fills": True,
+                "allow_odd_lot": True,
+            },
+        )
+        p = sign_cio_packet(p, signer_id="fixture-test-signer")
+        submitted = state.runner.submit_cio_packet(
+            p, strategy_id="TEST_ONLY_TW_BOOK"
+        )
+        assert submitted.action == "BUY_PENDING"
+
+        clock["now"] += timedelta(seconds=2)
+        quote_holder["value"] = Quote(
+            symbol="2330.TW",
+            timestamp=clock["now"] - timedelta(seconds=1),
+            observed_at=clock["now"],
+            bid=100.0,
+            ask=100.1,
+            bid_size=2,
+            ask_size=2,
+            last_price=100.05,
+            source="fixture://ISSUE7_CA_BOOK",
+            quality="TEST_ONLY",
+            session="ODD_LOT",
+            quote_id="TEST_ONLY_CA_Q1",
+            is_stale=False,
+            is_synthetic=False,
+            source_capabilities={
+                "source": "fixture://ISSUE7_CA_BOOK",
+                "two_sided_book": True,
+                "size_backed": True,
+                "exchange_session_attested": True,
+                "entitlement_evidence_id": "TEST_ONLY_CA_EID",
+                "entitlement_status": "TEST_ONLY",
+                "supported_sessions": ["ODD_LOT"],
+                "odd_lot_book": True,
+            },
+        )
+        decisions = state.runner.process_pending_orders()
+        assert [d.action for d in decisions] == ["BUY_FILLED"]
+
+        tw_order = next(
+            order for order in state.paper_orders.all_orders()
+            if order.strategy_id == "TEST_ONLY_TW_BOOK"
+        )
+        assert tw_order.status == OrderStatus.FILLED
+        tw = state.portfolio_manager.get_strategy_ledger(
+            "TEST_ONLY_TW_BOOK", DecisionScope.SWING
+        )
+        us = state.portfolio_manager.get_strategy_ledger(
+            "TEST_ONLY_US_BOOK", DecisionScope.SWING
+        )
+        assert len(tw.fills) == 1
+        assert tw.fills[0].fill_price == pytest.approx(100.15005)
+        assert tw.fills[0].fee == pytest.approx(20)
+        assert tw.fills[0].tax == 0
+        assert tw.positions["2330.TW"].quantity == 2
+        assert tw.cash == pytest.approx(100_000 - 2 * 100.15005 - 20)
         tw_cash_before = tw.cash
         us_cash_before = us.cash
         now = tw.fills[0].timestamp
@@ -519,7 +678,6 @@ def test_corporate_actions_native_cash_and_fx_fail_closed(tmp_path):
         )
         assert applied is True
         assert tw.positions["2330.TW"].quantity == 4
-        # ask=100.1, 5 bps slippage => 100.15005 fill; 2-for-1 halves basis/share.
         assert tw.positions["2330.TW"].average_entry_price == pytest.approx(50.075025)
         assert tw.positions["2330.TW"].current_price is None
         assert tw.positions["2330.TW"].unrealized_pnl is None
@@ -636,62 +794,100 @@ def test_corporate_actions_native_cash_and_fx_fail_closed(tmp_path):
         state.runner.shutdown()
 
 
-def test_pending_partial_completed_http_readback_survives_real_process_restart(tmp_path):
+def test_pending_execution_and_corporate_action_survive_real_process_restart(tmp_path):
     root = Path(__file__).resolve().parents[2]
     runtime = tmp_path / "runtime"
-    control = tmp_path / "control"
-    adapter = TestOnlyMarketAdapter()
-    app = create_app(
-        workspace_root=root,
-        runtime_dir=runtime,
-        fixture_mode=True,
-        is_read_only=False,
-        market_adapter=adapter,
+    control = tmp_path / "process-control.json"
+    action_at = PROCESS_BASE + timedelta(seconds=2)
+
+    _write_process_control(
+        control,
+        now=PROCESS_BASE,
+        quotes={},
+        action_at=action_at,
     )
-    state = app.state.app_state
-    try:
-        state.runner.allow_fixture_quotes = True
-        state.runner.configure(PaperExperimentSettings(
-            strategy_id="TEST_ONLY_RESTART_STATES",
-            enabled=True,
-            market="TW",
-            base_currency="TWD",
-            reporting_currency="TWD",
-            initial_cash=100_000,
-            universe=["2330.TW"],
-        ))
-        orders = []
-        for receipt, qty in [
-            ("TEST_ONLY_PENDING", 1),
-            ("TEST_ONLY_PARTIAL", 2),
-            ("TEST_ONLY_FILLED", 2),
-        ]:
-            orders.append(state.paper_orders.submit(PaperOrderRequest(
-                currency="TWD",
-                symbol="2330.TW",
-                market="TW",
-                bucket=DecisionScope.SWING,
-                side=OrderSide.BUY,
-                order_type=OrderType.LIMIT,
-                quantity=qty,
-                limit_price=101,
-                origin=OrderOrigin.STRATEGY,
-                strategy_id="TEST_ONLY_RESTART_STATES",
-                reason=receipt,
-                audit_metadata={"fixture_receipt": receipt},
-                data=PaperDataContext(source="fixture://ISSUE7_RESTART", last_price=100),
-            )))
-        _fixture_fill(
-            state, orders[1].order_id, 1, "TEST_ONLY_RESTART_PARTIAL_FILL",
-            strategy_id="TEST_ONLY_RESTART_STATES",
-        )
-        _fixture_fill(
-            state, orders[2].order_id, 2, "TEST_ONLY_RESTART_FULL_FILL",
-            strategy_id="TEST_ONLY_RESTART_STATES",
-        )
-        state.runner._persist_portfolios()
-    finally:
-        state.runner.shutdown()
+    seeded = _run_process_helper(root, runtime, control, "seed")
+    assert _strategy_state(seeded, "TEST_ONLY_RESTART_US")["orders"][0]["status"] == "PENDING"
+    assert _strategy_state(seeded, "TEST_ONLY_RESTART_TW")["orders"][0]["status"] == "PENDING"
+    assert not _strategy_state(seeded, "TEST_ONLY_RESTART_US")["fills"]
+    assert not _strategy_state(seeded, "TEST_ONLY_RESTART_TW")["fills"]
+
+    q1 = {
+        "MSFT": {"quote_id": "TEST_ONLY_US_Q1", "session": "REGULAR", "size": 1},
+        "2330.TW": {"quote_id": "TEST_ONLY_TW_Q1", "session": "ODD_LOT", "size": 2},
+    }
+    _write_process_control(
+        control,
+        now=PROCESS_BASE + timedelta(seconds=3),
+        quotes=q1,
+        action_at=action_at,
+    )
+    first = _run_process_helper(
+        root, runtime, control, "advance", "--apply-action"
+    )
+    us_first = _strategy_state(first, "TEST_ONLY_RESTART_US")
+    tw_first = _strategy_state(first, "TEST_ONLY_RESTART_TW")
+    assert [d["action"] for d in first["decisions"]] == [
+        "BUY_PARTIALLY_FILLED",
+        "BUY_FILLED",
+    ]
+    assert us_first["orders"][0]["status"] == "PARTIALLY_FILLED"
+    assert us_first["orders"][0]["audit_metadata"]["filled_quantity"] == 1
+    assert len(us_first["fills"]) == 1
+    assert us_first["fills"][0]["fill_price"] == pytest.approx(101.0505)
+    assert us_first["fills"][0]["fee"] == pytest.approx(1)
+    assert us_first["cash"] == pytest.approx(10_000 - 101.0505 - 1)
+    assert us_first["positions"]["MSFT"]["quantity"] == 1
+    assert tw_first["orders"][0]["status"] == "FILLED"
+    assert len(tw_first["fills"]) == 1
+    assert tw_first["fills"][0]["fill_price"] == pytest.approx(101.0505)
+    assert tw_first["fills"][0]["fee"] == pytest.approx(20)
+    assert tw_first["cash"] == pytest.approx(
+        100_000 - 2 * 101.0505 - 20 + 4
+    )
+    assert tw_first["positions"]["2330.TW"]["quantity"] == 2
+    assert first["corporate_changed"] is True
+    assert len(first["corporate_event_ids"]) == 2
+
+    replay = _run_process_helper(
+        root, runtime, control, "advance", "--apply-action"
+    )
+    _assert_replay_idempotent(first, replay)
+
+    _write_process_control(
+        control,
+        now=PROCESS_BASE + timedelta(seconds=6),
+        quotes={
+            "MSFT": {
+                "quote_id": "TEST_ONLY_US_Q2",
+                "session": "REGULAR",
+                "size": 1,
+            },
+            "2330.TW": q1["2330.TW"],
+        },
+        action_at=action_at,
+    )
+    completed = _run_process_helper(
+        root, runtime, control, "advance", "--apply-action"
+    )
+    us_done = _strategy_state(completed, "TEST_ONLY_RESTART_US")
+    tw_done = _strategy_state(completed, "TEST_ONLY_RESTART_TW")
+    assert [d["action"] for d in completed["decisions"]] == ["BUY_FILLED"]
+    assert us_done["orders"][0]["status"] == "FILLED"
+    assert us_done["orders"][0]["audit_metadata"]["filled_quantity"] == 2
+    assert len(us_done["fills"]) == 2
+    assert len({fill["fill_id"] for fill in us_done["fills"]}) == 2
+    assert {
+        fill["consumed_quote"]["source_quote_id"] for fill in us_done["fills"]
+    } == {"TEST_ONLY_US_Q1", "TEST_ONLY_US_Q2"}
+    assert us_done["cash"] == pytest.approx(
+        10_000 - 2 * 101.0505 - 2
+    )
+    assert us_done["positions"]["MSFT"]["quantity"] == 2
+    assert tw_done["cash"] == pytest.approx(tw_first["cash"])
+    assert tw_done["positions"] == tw_first["positions"]
+    assert completed["corporate_changed"] is False
+    assert completed["corporate_event_ids"] == first["corporate_event_ids"]
 
     def snapshot(base_url: str):
         with httpx.Client(timeout=5) as client:
@@ -701,19 +897,94 @@ def test_pending_partial_completed_http_readback_survives_real_process_restart(t
                 "portfolio": client.get(f"{base_url}/api/portfolio").json(),
             }
 
-    with _server(root, runtime, control, read_only=True) as first:
-        first_pid = first.pid
-        before = snapshot(first.base_url)
-        status_by_reason = {o["reason"]: o["status"] for o in before["orders"]}
-        assert status_by_reason["TEST_ONLY_PENDING"] == "PENDING"
-        assert status_by_reason["TEST_ONLY_PARTIAL"] == "PARTIALLY_FILLED"
-        assert status_by_reason["TEST_ONLY_FILLED"] == "FILLED"
-        fill_ids = [f["fill_id"] for f in before["readback"]["fills"]]
-        assert len(fill_ids) == len(set(fill_ids)) == 2
+    server_control = tmp_path / "server-control"
+    with _server(root, runtime, server_control, read_only=True) as first_server:
+        first_pid = first_server.pid
+        before = snapshot(first_server.base_url)
+    with _server(root, runtime, server_control, read_only=True) as second_server:
+        assert second_server.pid != first_pid
+        after = snapshot(second_server.base_url)
+    assert after == before
+    readback_ids = [fill["fill_id"] for fill in after["readback"]["fills"]]
+    assert len(readback_ids) == len(set(readback_ids))
+    assert set(readback_ids) >= {
+        fill["fill_id"] for fill in us_done["fills"]
+    }
 
-    with _server(root, runtime, control, read_only=True) as second:
-        assert second.pid != first_pid
-        after = snapshot(second.base_url)
-        assert after == before
-        fill_ids = [f["fill_id"] for f in after["readback"]["fills"]]
-        assert len(fill_ids) == len(set(fill_ids)) == 2
+
+def test_restart_chain_non_vacuity_requires_pending_caller_and_quote_dedup(tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    control = tmp_path / "control.json"
+    action_at = PROCESS_BASE + timedelta(seconds=2)
+
+    blocked_runtime = tmp_path / "blocked-runtime"
+    _write_process_control(
+        control, now=PROCESS_BASE, quotes={}, action_at=action_at
+    )
+    _run_process_helper(root, blocked_runtime, control, "seed")
+    _write_process_control(
+        control,
+        now=PROCESS_BASE + timedelta(seconds=3),
+        quotes={
+            "MSFT": {
+                "quote_id": "TEST_ONLY_BLOCKED_Q1",
+                "session": "REGULAR",
+                "size": 1,
+            },
+            "2330.TW": {
+                "quote_id": "TEST_ONLY_BLOCKED_TW_Q1",
+                "session": "ODD_LOT",
+                "size": 2,
+            },
+        },
+        action_at=action_at,
+    )
+    blocked = _run_process_helper(
+        root,
+        blocked_runtime,
+        control,
+        "advance",
+        "--break-pending",
+        check=False,
+    )
+    assert blocked.returncode != 0
+    assert "TEST_ONLY_PENDING_EXECUTION_BLOCKED" in blocked.stderr
+
+    dedup_runtime = tmp_path / "dedup-runtime"
+    _write_process_control(
+        control, now=PROCESS_BASE, quotes={}, action_at=action_at
+    )
+    _run_process_helper(root, dedup_runtime, control, "seed")
+    _write_process_control(
+        control,
+        now=PROCESS_BASE + timedelta(seconds=3),
+        quotes={
+            "MSFT": {
+                "quote_id": "TEST_ONLY_DEDUP_Q1",
+                "session": "REGULAR",
+                "size": 1,
+            },
+            "2330.TW": {
+                "quote_id": "TEST_ONLY_DEDUP_TW_Q1",
+                "session": "ODD_LOT",
+                "size": 2,
+            },
+        },
+        action_at=action_at,
+    )
+    first = _run_process_helper(
+        root, dedup_runtime, control, "advance", "--apply-action"
+    )
+    broken_replay = _run_process_helper(
+        root,
+        dedup_runtime,
+        control,
+        "advance",
+        "--apply-action",
+        "--break-dedup",
+    )
+    with pytest.raises(AssertionError):
+        _assert_replay_idempotent(first, broken_replay)
+    us_broken = _strategy_state(broken_replay, "TEST_ONLY_RESTART_US")
+    assert len(us_broken["fills"]) == 2
+    assert us_broken["cash"] < _strategy_state(first, "TEST_ONLY_RESTART_US")["cash"]
