@@ -176,14 +176,15 @@ function PaperTradeWorkspace({ definition }: { definition: ViewDefinition }) {
     const refresh = async () => {
         const [ordersResponse, fillsResponse, portfolioResponse] = await Promise.all([
             fetch('/api/paper/orders', { cache: 'no-store' }),
-            fetch('/api/fills', { cache: 'no-store' }),
+            fetch('/api/paper/readback', { cache: 'no-store' }),
             fetch('/api/portfolio', { cache: 'no-store' }),
         ]);
         if (!ordersResponse.ok || !fillsResponse.ok || !portfolioResponse.ok) {
             throw new Error('Paper readback unavailable');
         }
         const nextOrders = await ordersResponse.json() as PaperOrderRow[];
-        const nextFills = await fillsResponse.json() as PaperFillRow[];
+        const readback = await fillsResponse.json() as { fills: PaperFillRow[] };
+        const nextFills = readback.fills;
         const nextPortfolio = await portfolioResponse.json();
         setOrders(nextOrders);
         setFills(nextFills);
@@ -388,7 +389,7 @@ function PaperTradeWorkspace({ definition }: { definition: ViewDefinition }) {
 
             <div className="pm-data-card" data-state-kind={status === 'loading' ? undefined : status}>
                 <div className="pm-data-card-head">
-                    <strong>/api/paper/orders + /api/fills + /api/portfolio</strong>
+                    <strong>/api/paper/orders + /api/paper/readback + /api/portfolio</strong>
                     <span>Canonical paper-only readback.</span>
                 </div>
                 <pre>{summarize({ orders, fills, portfolio })}</pre>
