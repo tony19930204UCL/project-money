@@ -32,15 +32,15 @@ jobs:
         run: python -m pip install -e ".[test,browser]"
       - name: Install Chromium
         run: python -m playwright install --with-deps chromium
-      - name: Run browser smoke
+      - name: Run browser smoke and paper order flows
         env:
           BROWSER_EVIDENCE_DIR: ${{ runner.temp }}/project-money-browser-evidence
-        run: python -m pytest -q tests/browser/test_workstation_smoke.py
+        run: python -m pytest -q tests/browser/test_workstation_smoke.py tests/browser/test_paper_order_flows.py
       - name: Upload sanitized browser evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: browser-smoke-${{ github.sha }}
+          name: browser-batch1-${{ github.sha }}
           path: ${{ runner.temp }}/project-money-browser-evidence
           if-no-files-found: warn
           retention-days: 7
