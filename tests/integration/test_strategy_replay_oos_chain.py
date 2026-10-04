@@ -19,6 +19,7 @@ from cio_market_lab.domain.models import (
     Bar,
     CIODecisionPacket,
     DecisionScope,
+    Fill,
     OrderOrigin,
     OrderSide,
     OrderType,
@@ -119,8 +120,24 @@ def test_durable_strategy_lifecycle_survives_fresh_process_and_preserves_externa
         reason="TEST_ONLY lifecycle continuity",
         data=PaperDataContext(source="fixture://ISSUE8", last_price=50),
     ))
-    order_snapshot = seeded_order.model_dump(mode="json")
-    cash_snapshot = pm.get_ledger(DecisionScope.SWING).cash
+    pm.apply_fill(Fill(
+        fill_id="TEST_ONLY_LIFECYCLE_FILL",
+        order_id=seeded_order.order_id,
+        currency="USD",
+        symbol="MSFT",
+        bucket=DecisionScope.SWING,
+        side=OrderSide.BUY,
+        quantity=1,
+        fill_price=50,
+        fee=1,
+        tax=0,
+        slippage=0,
+        timestamp=BASE,
+    ))
+    order_snapshot = service.find_order(seeded_order.order_id).model_dump(mode="json")
+    ledger_before = pm.get_ledger(DecisionScope.SWING)
+    cash_snapshot = ledger_before.cash
+    position_snapshot = ledger_before.positions["MSFT"].model_dump(mode="json")
 
     registry = DurableStrategyRegistry(strategies_dir, state_dir)
     v1 = registry.register_or_reload(strategy_dir)
@@ -148,6 +165,7 @@ def test_durable_strategy_lifecycle_survives_fresh_process_and_preserves_externa
     assert provider_config == {"source": "TEST_ONLY_PROVIDER", "mode": "paper"}
     assert service.find_order(seeded_order.order_id).model_dump(mode="json") == order_snapshot
     assert pm.get_ledger(DecisionScope.SWING).cash == cash_snapshot
+    assert pm.get_ledger(DecisionScope.SWING).positions["MSFT"].model_dump(mode="json") == position_snapshot
 
     fresh_v2 = _fresh_registry(strategies_dir, state_dir)[v1.id]
     assert fresh_v2["active_code_hash"] == v2.code_hash
@@ -164,6 +182,7 @@ def test_durable_strategy_lifecycle_survives_fresh_process_and_preserves_externa
     assert any(item["action"] == "ROLLED_BACK" for item in fresh_v1["audit_log"])
     assert service.find_order(seeded_order.order_id).model_dump(mode="json") == order_snapshot
     assert pm.get_ledger(DecisionScope.SWING).cash == cash_snapshot
+    assert pm.get_ledger(DecisionScope.SWING).positions["MSFT"].model_dump(mode="json") == position_snapshot
 
 
 def test_frozen_replay_and_real_paper_next_bar_path_align_on_economics(tmp_path):
