@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from cio_market_lab.api.app import create_app
+from cio_market_lab.domain.models import Quote
 from cio_market_lab.engine.daily_research_plan import DailyResearchPlanProducer
 from cio_market_lab.engine.decision_learning import CIODecisionLearningStore
 from cio_market_lab.engine.learning_readback import read_learning_snapshot
