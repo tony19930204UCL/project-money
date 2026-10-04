@@ -25,7 +25,7 @@ from cio_market_lab.domain.models import (
     Quote,
 )
 from cio_market_lab.engine.cio_packet import sign_cio_packet
-from cio_market_lab.engine.corporate_actions import CorporateAction
+from cio_market_lab.engine.corporate_actions import CorporateAction, PaperCorporateActions
 from cio_market_lab.engine.historical_fx import FxRateReceipt, FxReportingBlocked
 from cio_market_lab.engine.paper_orders import (
     PaperDataContext,
@@ -142,6 +142,7 @@ def test_quote_capacity_partial_then_fresh_quote_completes_once(
     quote.observed_at = clock["now"]
     first_decisions = runner.process_pending_orders()
     assert [item.action for item in first_decisions] == ["BUY_PARTIALLY_FILLED"]
+    order = service.find_order(order.order_id)
     assert order.status == OrderStatus.PARTIALLY_FILLED
     assert order.filled_quantity == 1
     assert order.remaining_quantity == 1
@@ -168,6 +169,7 @@ def test_quote_capacity_partial_then_fresh_quote_completes_once(
     clock["now"] = quote.timestamp
     decisions = runner.process_pending_orders()
     assert [d.action for d in decisions] == ["BUY_FILLED"]
+    order = service.find_order(order.order_id)
     assert order.remaining_quantity == 0
     assert order.status == OrderStatus.FILLED
     assert len(ledger.fills) == 2
@@ -272,7 +274,10 @@ def test_partial_cancel_replace_terminates_old_remainder_and_links_new_order(
             "source_capabilities": {},
         }),
         lambda q: q.model_copy(update={"is_stale": True}),
-        lambda q: q.model_copy(update={"source": "fallback://TEST_ONLY", "source_capabilities": {}}),
+        lambda q: q.model_copy(update={
+            "source": "fallback://TEST_ONLY",
+            "source_capabilities": {},
+        }),
         lambda q: q.model_copy(update={
             "source_capabilities": {
                 **q.source_capabilities,
@@ -282,20 +287,35 @@ def test_partial_cancel_replace_terminates_old_remainder_and_links_new_order(
     ],
     ids=["last-only", "stale", "fallback", "no-bbo-capability"],
 )
-def test_non_executable_quote_capabilities_never_promote_bar_or_last_to_book(
+def test_non_executable_quote_capabilities_fail_closed_through_real_caller(
     tmp_path, monkeypatch, mutator
 ):
     runner, pm, service, cfg, clock, data, quote = setup_book(
         tmp_path, monkeypatch, session="REGULAR", size=2
     )
     runner.allow_fixture_quotes = True
+    quote.timestamp = clock["now"] - timedelta(seconds=1)
+    quote.observed_at = clock["now"]
+    p = packet("TEST_ONLY_BAD_CAP", NOW, paper_execution_model="QUOTE_BOOK")
+    p = sign_cio_packet(p, signer_id="fixture-test-signer")
+    submitted = runner.submit_cio_packet(p, strategy_id="TEST_ONLY_native")
+    assert submitted.action == "BUY_PENDING"
+    order = next(o for o in service.all_orders() if o.strategy_id == "TEST_ONLY_native")
+    assert order.status == OrderStatus.PENDING
+
+    clock["now"] += timedelta(seconds=2)
     bad = mutator(quote)
+    bad.timestamp = clock["now"] - timedelta(seconds=1)
+    bad.observed_at = clock["now"]
     monkeypatch.setattr(runner.market_adapter, "get_latest_quote", lambda _symbol: bad)
-    order = make_order(created_at=NOW)
-    decision = packet("TEST_ONLY_BAD_CAP", NOW, paper_execution_model="QUOTE_BOOK")
-    result = runner._resolve_cio_execution(cfg, decision, data["bar"], order)
-    assert result is None
-    assert not pm.get_strategy_ledger("TEST_ONLY_native", DecisionScope.SWING).fills
+    assert runner.process_pending_orders() == []
+    order = service.find_order(order.order_id)
+    assert order.status == OrderStatus.PENDING
+    assert order.filled_quantity == 0
+    assert order.remaining_quantity == 2
+    ledger = pm.get_strategy_ledger("TEST_ONLY_native", DecisionScope.SWING)
+    assert not ledger.fills
+    assert ledger.cash == 1000
 
 
 @pytest.mark.parametrize(
@@ -305,62 +325,106 @@ def test_non_executable_quote_capabilities_never_promote_bar_or_last_to_book(
         ("ODD_LOT", "2330.TW", "TW", "TWD"),
     ],
 )
-def test_non_regular_session_requires_explicit_packet_authorization(
+def test_non_regular_session_without_packet_authorization_stays_pending_end_to_end(
     tmp_path, monkeypatch, session, symbol, market, currency
 ):
-    runner, pm, service, cfg, clock, data, quote = setup_book(
+    runner, pm, service, base_cfg, clock, data, quote = setup_book(
         tmp_path, monkeypatch, session=session, size=2
     )
+    cfg = base_cfg.model_copy(update={
+        "strategy_id": f"TEST_ONLY_NEG_{market}_{session}",
+        "market": market,
+        "base_currency": currency,
+        "reporting_currency": currency,
+        "universe": [symbol],
+        "paper_execution_model": "QUOTE_BOOK",
+    })
+    runner.configure(cfg)
     runner.allow_fixture_quotes = True
     data["bar"] = data["bar"].model_copy(update={"symbol": symbol})
     quote.symbol = symbol
     quote.timestamp = clock["now"] - timedelta(seconds=1)
     quote.observed_at = clock["now"]
-    order = make_order(
-        symbol=symbol,
-        market=market,
-        currency=currency,
-        created_at=NOW,
-    )
     p = packet("TEST_ONLY_SESSION_NEGATIVE", NOW, paper_execution_model="QUOTE_BOOK")
     p.selected_instrument = symbol
     p = sign_cio_packet(p, signer_id="fixture-test-signer")
-    assert runner._resolve_cio_execution(cfg, p, data["bar"], order) is None
-    assert not pm.get_strategy_ledger("TEST_ONLY_native", DecisionScope.SWING).fills
+    submitted = runner.submit_cio_packet(p, strategy_id=cfg.strategy_id)
+    assert submitted.action == "BUY_PENDING"
+    order = next(o for o in service.all_orders() if o.strategy_id == cfg.strategy_id)
+
+    clock["now"] += timedelta(seconds=2)
+    quote.timestamp = clock["now"] - timedelta(seconds=1)
+    quote.observed_at = clock["now"]
+    assert runner.process_pending_orders() == []
+    order = service.find_order(order.order_id)
+    assert order.status == OrderStatus.PENDING
+    assert order.filled_quantity == 0
+    ledger = pm.get_strategy_ledger(cfg.strategy_id, DecisionScope.SWING)
+    assert not ledger.fills
 
 
-def test_quote_source_timeout_fails_closed_without_bar_promotion(tmp_path, monkeypatch):
+def test_quote_source_timeout_fails_closed_through_submit_and_process(
+    tmp_path, monkeypatch
+):
     runner, pm, service, cfg, clock, data, quote = setup_book(
         tmp_path, monkeypatch, session="REGULAR", size=2
     )
     runner.allow_fixture_quotes = True
+    quote.timestamp = clock["now"] - timedelta(seconds=1)
+    quote.observed_at = clock["now"]
+    p = packet("TEST_ONLY_TIMEOUT", NOW, paper_execution_model="QUOTE_BOOK")
+    p = sign_cio_packet(p, signer_id="fixture-test-signer")
+    assert runner.submit_cio_packet(p, strategy_id="TEST_ONLY_native").action == "BUY_PENDING"
+    order = next(o for o in service.all_orders() if o.strategy_id == "TEST_ONLY_native")
 
     def timeout(_symbol):
         raise TimeoutError("TEST_ONLY quote source timeout")
 
+    clock["now"] += timedelta(seconds=2)
     monkeypatch.setattr(runner.market_adapter, "get_latest_quote", timeout)
-    order = make_order(created_at=NOW)
-    p = packet("TEST_ONLY_TIMEOUT", NOW, paper_execution_model="QUOTE_BOOK")
-    assert runner._resolve_cio_execution(cfg, p, data["bar"], order) is None
-    assert not pm.get_strategy_ledger("TEST_ONLY_native", DecisionScope.SWING).fills
+    assert runner.process_pending_orders() == []
+    order = service.find_order(order.order_id)
+    assert order.status == OrderStatus.PENDING
+    assert order.filled_quantity == 0
+    ledger = pm.get_strategy_ledger("TEST_ONLY_native", DecisionScope.SWING)
+    assert not ledger.fills
+    assert ledger.cash == 1000
 
 
-def test_bar_reference_only_never_becomes_executable_book(tmp_path, monkeypatch):
-    runner, pm, service = runner_harness(
-        tmp_path,
-        {"now": NOW + timedelta(minutes=2)},
-        {"bar": make_bar()},
-    )
+def test_bar_reference_only_never_becomes_book_through_real_caller(
+    tmp_path, monkeypatch
+):
+    clock = {"now": NOW}
+    data = {
+        "bar": make_bar(
+            timestamp=NOW - timedelta(minutes=1),
+            observed_at=NOW,
+        )
+    }
+    runner, pm, service = runner_harness(tmp_path, clock, data)
     runner.allow_fixture_quotes = True
-    monkeypatch.setattr(runner.market_adapter, "get_latest_quote", lambda _symbol: None)
-    order = make_order(created_at=NOW)
-    p = packet("TEST_ONLY_BAR_ONLY", NOW, paper_execution_model="QUOTE_BOOK")
     cfg = service.experiment_for("TEST_ONLY_native").model_copy(
         update={"paper_execution_model": "QUOTE_BOOK"}
     )
     runner.configure(cfg)
-    assert runner._resolve_cio_execution(cfg, p, make_bar(), order) is None
-    assert not pm.get_strategy_ledger("TEST_ONLY_native", DecisionScope.SWING).fills
+    monkeypatch.setattr(runner.market_adapter, "get_latest_quote", lambda _symbol: None)
+    p = packet("TEST_ONLY_BAR_ONLY", NOW, paper_execution_model="QUOTE_BOOK")
+    p = sign_cio_packet(p, signer_id="fixture-test-signer")
+    assert runner.submit_cio_packet(p, strategy_id="TEST_ONLY_native").action == "BUY_PENDING"
+    order = next(o for o in service.all_orders() if o.strategy_id == "TEST_ONLY_native")
+
+    clock["now"] += timedelta(minutes=2)
+    data["bar"] = make_bar(
+        timestamp=NOW + timedelta(minutes=1),
+        observed_at=clock["now"],
+    )
+    assert runner.process_pending_orders() == []
+    order = service.find_order(order.order_id)
+    assert order.status == OrderStatus.PENDING
+    assert order.filled_quantity == 0
+    ledger = pm.get_strategy_ledger("TEST_ONLY_native", DecisionScope.SWING)
+    assert not ledger.fills
+    assert ledger.cash == 1000
 
 
 def test_corporate_actions_native_cash_and_fx_fail_closed(tmp_path):
@@ -422,6 +486,30 @@ def test_corporate_actions_native_cash_and_fx_fail_closed(tmp_path):
             ratio=2,
             is_fixture=True,
             provenance={"TEST_ONLY": True},
+        )
+        events_before = state.event_store.count()
+        qty_before = tw.positions["2330.TW"].quantity
+        cash_before_gate = tw.cash
+        state.runner.corporate_actions = PaperCorporateActions(
+            state.portfolio_manager,
+            state.event_store,
+            fixture_mode=False,
+        )
+        with pytest.raises(ValueError, match="FIXTURE_ACTION_FORBIDDEN"):
+            state.runner.apply_corporate_action(
+                split,
+                strategy_id="TEST_ONLY_TW_BOOK",
+                bucket=DecisionScope.SWING,
+                now=now + timedelta(days=1),
+            )
+        assert state.event_store.count() == events_before
+        assert tw.positions["2330.TW"].quantity == qty_before
+        assert tw.cash == cash_before_gate
+
+        state.runner.corporate_actions = PaperCorporateActions(
+            state.portfolio_manager,
+            state.event_store,
+            fixture_mode=True,
         )
         applied = state.runner.apply_corporate_action(
             split,
