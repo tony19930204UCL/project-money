@@ -191,6 +191,20 @@ def _fixture_fill(state, order_id: str, quantity: float, fill_id: str, *, strate
     ))
 
 
+class TestOnlyCIOExecutor:
+    """Server-side TEST_ONLY packet producer; no paid model or browser signing material."""
+
+    def is_available(self) -> bool:
+        return True
+
+    def request_decision(self, _context=None) -> CIODecisionPacket:
+        packet = _packet(
+            "TEST_ONLY_CIO_POSITIVE",
+            expiry=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+        return sign_cio_packet(packet, signer_id="fixture-test-signer")
+
+
 def _packet(case_id: str, *, expiry: datetime, actor_role: str = "CHIEF_INVESTMENT_OFFICER") -> CIODecisionPacket:
     now = datetime.now(timezone.utc)
     return CIODecisionPacket(
@@ -317,11 +331,9 @@ def _seed_order_flow_fixtures(state) -> dict:
     positive_case = "TEST_ONLY_CIO_POSITIVE"
     positive_record = state.runner.learning_store.get_record(positive_case)
     if positive_record is None:
-        packet = _packet(
-            positive_case,
-            expiry=datetime.now(timezone.utc) + timedelta(hours=1),
-        )
-        sign_cio_packet(packet, signer_id="fixture-test-signer")
+        executor = TestOnlyCIOExecutor()
+        state.runner.set_cio_executor(executor)
+        packet = executor.request_decision()
         positive_decision = state.runner.submit_cio_packet(packet, strategy_id=DYNAMIC_DESK_ID)
         positive = positive_decision.model_dump(mode="json")
     else:
