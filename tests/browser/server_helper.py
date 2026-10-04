@@ -342,8 +342,14 @@ def _seed_order_flow_fixtures(state) -> dict:
         executor = TestOnlyCIOExecutor()
         state.runner.set_cio_executor(executor)
         packet = executor.request_decision()
-        positive_decision = state.runner.submit_cio_packet(packet, strategy_id=DYNAMIC_DESK_ID)
+        state.market_adapter.quote_enabled = False
+        try:
+            positive_decision = state.runner.submit_cio_packet(packet, strategy_id=DYNAMIC_DESK_ID)
+        finally:
+            state.market_adapter.quote_enabled = True
         positive = positive_decision.model_dump(mode="json")
+        if positive_decision.action != "BUY_PENDING":
+            raise AssertionError(f"TEST_ONLY signed CIO packet did not remain pending without quote: {positive}")
     else:
         positive = {
             "action": "RESTORED",
