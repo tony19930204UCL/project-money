@@ -22,10 +22,13 @@ def _serve(
     *,
     writable: bool = False,
     market_mode: str = "normal",
+    order_flow_fixtures: bool = False,
 ):
     runtime = tmp_path / "TEST_ONLY_runtime"
     ready = tmp_path / "ready.json"
     stop = tmp_path / "stop"
+    ready.unlink(missing_ok=True)
+    stop.unlink(missing_ok=True)
     args = [
         sys.executable, str(HELPER),
         "--root", str(ROOT),
@@ -36,6 +39,8 @@ def _serve(
     ]
     if writable:
         args.append("--writable")
+    if order_flow_fixtures:
+        args.append("--order-flow-fixtures")
     proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     deadline = time.monotonic() + 15
     port = None
@@ -111,6 +116,37 @@ def browser_server_factory(tmp_path):
         isolated = tmp_path / f"TEST_ONLY_{market_mode}"
         isolated.mkdir(parents=True, exist_ok=True)
         with _serve(isolated, writable=False, market_mode=market_mode) as server:
+            yield server
+
+    return factory
+
+
+@pytest.fixture
+def order_flow_server(tmp_path):
+    isolated = tmp_path / "TEST_ONLY_order_flow"
+    isolated.mkdir(parents=True, exist_ok=True)
+    with _serve(
+        isolated,
+        writable=True,
+        market_mode="normal",
+        order_flow_fixtures=True,
+    ) as server:
+        yield server
+
+
+@pytest.fixture
+def order_flow_restart_factory(tmp_path):
+    isolated = tmp_path / "TEST_ONLY_order_flow_restart"
+    isolated.mkdir(parents=True, exist_ok=True)
+
+    @contextmanager
+    def factory():
+        with _serve(
+            isolated,
+            writable=True,
+            market_mode="normal",
+            order_flow_fixtures=True,
+        ) as server:
             yield server
 
     return factory
