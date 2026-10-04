@@ -14,7 +14,9 @@ from cio_market_lab.domain.events import EventType
 from cio_market_lab.domain.models import DecisionScope, OrderSide
 from cio_market_lab.engine.derivative_lifecycle import PaperDerivativeLifecycle
 from cio_market_lab.engine.paper_derivatives import ContractSpec
-from cio_market_lab.engine.paper_orders import PaperExperimentSettings
+from cio_market_lab.engine.paper_orders import PaperExperimentSettings, PaperOrderService
+from cio_market_lab.engine.portfolio import PortfolioManager
+from cio_market_lab.events.store import EventStore
 
 ROOT=Path(__file__).resolve().parents[2]
 HELPER=Path(__file__).with_name("derivative_restart_process_helper.py")
@@ -243,16 +245,20 @@ def test_api_intake_caller_accounting_and_nonfixture_refusal(tmp_path):
     assert noncaps["capabilities"]["LONG_PREMIUM_OPTIONS"]["status"]=="UNAVAILABLE"
     assert nonquotes["execution_enabled"] is False
 
-    # Fresh fixture app reconstructs the same caller-created accounting event.
-    restarted=create_app(workspace_root=ROOT,runtime_dir=runtime,fixture_mode=True,is_read_only=False)
-    rs=restarted.state.app_state
-    rs.portfolio_manager.register_strategy(SID,1_000_000,currency="TWD",unified_cash=True)
-    rs.paper_orders.experiments[SID]=state.paper_orders.experiments[SID]
-    replay=PaperDerivativeLifecycle(rs.portfolio_manager,rs.paper_orders,fixture_mode=True)
-    replay.replay()
-    rledger=rs.portfolio_manager.get_strategy_ledger(SID,DecisionScope.SWING)
+    # Fresh caller reconstruction from the same durable store, without mutating
+    # or replacing a runtime-restored ledger.
+    restart_store=EventStore(runtime/"events.db")
+    restart_pm=PortfolioManager()
+    restart_pm.register_strategy(SID,1_000_000,currency="TWD",unified_cash=True)
+    restart_orders=PaperOrderService(restart_pm,restart_store)
+    restart_orders.experiments[SID]=state.paper_orders.experiments[SID]
+    replay=PaperDerivativeLifecycle(restart_pm,restart_orders,fixture_mode=True)
+    assert replay.replay()==1
+    rledger=restart_pm.get_strategy_ledger(SID,DecisionScope.SWING)
     assert rledger.cash==expected_cash
     assert rledger.positions[spec.symbol].quantity==1
-    revents=[e for _,e in rs.event_store.get_events(event_type=EventType.POSITION_UPDATED)
+    revents=[e for _,e in restart_store.get_events(event_type=EventType.POSITION_UPDATED)
              if e.payload.get("paper_derivative")]
     assert [e.event_id for e in revents]==[event_id]
+    assert replay.replay()==0
+    assert rledger.cash==expected_cash
