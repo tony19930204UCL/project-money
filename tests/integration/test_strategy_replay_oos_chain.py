@@ -15,7 +15,9 @@ import sys
 
 import pytest
 import yaml
+from fastapi.testclient import TestClient
 
+from cio_market_lab.api.app import create_app
 from cio_market_lab.domain.models import (
     Bar,
     CIODecisionPacket,
@@ -38,6 +40,7 @@ from cio_market_lab.engine.replay_lab import (
 from cio_market_lab.engine.paper_orders import PaperOrderService
 from cio_market_lab.events.store import EventStore
 from cio_market_lab.strategies.durable_registry import DurableStrategyRegistry
+from tests.browser.server_helper import TestOnlyMarketAdapter, _fixture_fill
 from tests.test_source_aligned_next_bar import runner_harness
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -77,79 +80,35 @@ def _oos_bars(count: int = 90) -> list[Bar]:
     return result
 
 
-def _fresh_registry(strategies_dir: Path, state_dir: Path) -> dict:
+def _fresh_app(workspace_root: Path, runtime_dir: Path) -> dict:
     proc = subprocess.run(
         [
             sys.executable,
             str(HELPER),
-            "--strategies-dir",
-            str(strategies_dir),
-            "--state-dir",
-            str(state_dir),
+            "--workspace-root",
+            str(workspace_root),
+            "--runtime-dir",
+            str(runtime_dir),
         ],
         check=True,
         capture_output=True,
         text=True,
-        timeout=20,
+        timeout=30,
     )
     return json.loads(proc.stdout.splitlines()[-1])
 
 
-def test_durable_strategy_lifecycle_survives_fresh_process_and_preserves_external_state(tmp_path):
+def test_durable_strategy_version_hot_swap_and_rollback_preserve_execution_state(
+    tmp_path, monkeypatch
+):
     source = ROOT / "strategies" / "opening_range_breakout"
-    strategies_dir = tmp_path / "strategies"
-    v1_dir = strategies_dir / "v1" / "opening_range_breakout"
-    v2_dir = strategies_dir / "v2" / "opening_range_breakout"
-    state_dir = tmp_path / "registry-state"
+    workspace = tmp_path / "workspace"
+    strategies_dir = workspace / "strategies"
+    v1_dir = strategies_dir / "opening_range_breakout"
+    v2_dir = tmp_path / "candidate-v2" / "opening_range_breakout"
+    runtime = tmp_path / "runtime"
     shutil.copytree(source, v1_dir)
     shutil.copytree(source, v2_dir)
-
-    adapter = object()
-    provider_identity = id(adapter)
-    provider_config = {"source": "TEST_ONLY_PROVIDER", "mode": "paper"}
-
-    pm = PortfolioManager(
-        initial_cash_swing=10_000,
-        initial_cash_intraday=10_000,
-        currency="USD",
-    )
-    service = PaperOrderService(pm, EventStore(":memory:"))
-    seeded_order = service.submit(PaperOrderRequest(
-        currency="USD",
-        symbol="MSFT",
-        market="US",
-        bucket=DecisionScope.SWING,
-        side=OrderSide.BUY,
-        order_type=OrderType.LIMIT,
-        quantity=1,
-        limit_price=50,
-        origin=OrderOrigin.MANUAL,
-        reason="TEST_ONLY lifecycle continuity",
-        data=PaperDataContext(source="fixture://ISSUE8", last_price=50),
-    ))
-    pm.apply_fill(Fill(
-        fill_id="TEST_ONLY_LIFECYCLE_FILL",
-        order_id=seeded_order.order_id,
-        currency="USD",
-        symbol="MSFT",
-        bucket=DecisionScope.SWING,
-        side=OrderSide.BUY,
-        quantity=1,
-        fill_price=50,
-        fee=1,
-        tax=0,
-        slippage=0,
-        timestamp=BASE,
-    ))
-    order_snapshot = service.find_order(seeded_order.order_id).model_dump(mode="json")
-    ledger_before = pm.get_ledger(DecisionScope.SWING)
-    cash_snapshot = ledger_before.cash
-    position_snapshot = ledger_before.positions["MSFT"].model_dump(mode="json")
-
-    registry = DurableStrategyRegistry(strategies_dir, state_dir)
-    v1 = registry.register_or_reload(v1_dir)
-    registry.activate_strategy(v1.id, authority="Main CIO")
-    assert registry.get_registered(v1.id).code_hash == v1.code_hash
 
     manifest_path = v2_dir / "manifest.yaml"
     manifest = yaml.safe_load(manifest_path.read_text())
@@ -157,39 +116,167 @@ def test_durable_strategy_lifecycle_survives_fresh_process_and_preserves_externa
     manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False))
     with (v2_dir / "strategy.py").open("a", encoding="utf-8") as fh:
         fh.write("\n# TEST_ONLY_VERSION_2\n")
-    v2 = registry.register_or_reload(v2_dir)
-    assert v2.code_hash != v1.code_hash
-    assert v2.status.value == "CANDIDATE"
-    assert registry.get_registered(v1.id).code_hash == v1.code_hash
 
-    with pytest.raises(PermissionError):
-        registry.hot_swap_strategy(v1.id, v2.code_hash, authority="worker")
-    assert registry.get_registered(v1.id).code_hash == v1.code_hash
+    adapter = TestOnlyMarketAdapter()
+    app = create_app(
+        workspace_root=workspace,
+        runtime_dir=runtime,
+        fixture_mode=False,
+        is_read_only=False,
+        market_adapter=adapter,
+    )
+    state = app.state.app_state
+    state.runner.allow_fixture_quotes = True
+    client = TestClient(app, base_url="http://127.0.0.1:21322")
 
-    registry.hot_swap_strategy(v1.id, v2.code_hash, authority="Main CIO")
-    assert registry.get_registered(v1.id).code_hash == v2.code_hash
-    assert id(adapter) == provider_identity
-    assert provider_config == {"source": "TEST_ONLY_PROVIDER", "mode": "paper"}
-    assert service.find_order(seeded_order.order_id).model_dump(mode="json") == order_snapshot
-    assert pm.get_ledger(DecisionScope.SWING).cash == cash_snapshot
-    assert pm.get_ledger(DecisionScope.SWING).positions["MSFT"].model_dump(mode="json") == position_snapshot
+    try:
+        assert state.runner.market_adapter is state.market_adapter
+        assert state.runner.cio_executor is state.cio_executor
+        adapter_identity = id(state.market_adapter)
+        executor_identity = id(state.cio_executor)
+        provider_snapshot = (
+            state.cio_executor.provider_id,
+            state.cio_executor.model_id,
+            state.cio_executor.session_id,
+        )
 
-    fresh_v2 = _fresh_registry(strategies_dir, state_dir)[v1.id]
-    assert fresh_v2["active_code_hash"] == v2.code_hash
-    assert fresh_v2["code_hash"] == v2.code_hash
-    assert fresh_v2["version"] == "2.0.0-TEST_ONLY"
-    assert any(item["action"] == "HOT_SWAPPED" for item in fresh_v2["audit_log"])
+        v1 = state.registry.get_registered("opening_range_breakout")
+        assert v1 is not None
+        activate = client.post(
+            f"/api/strategies/{v1.id}/activate",
+            json={"authority": "Main CIO"},
+        )
+        assert activate.status_code == 200
+        v1 = state.registry.get_registered(v1.id)
+        assert v1.status.value == "PAPER_ACTIVE"
+        assert state.registry._active_version[v1.id] == v1.code_hash
 
-    restored = DurableStrategyRegistry(strategies_dir, state_dir)
-    restored.rollback_strategy(v1.id, v1.code_hash, authority="Main CIO")
-    assert restored.get_registered(v1.id).code_hash == v1.code_hash
-    fresh_v1 = _fresh_registry(strategies_dir, state_dir)[v1.id]
-    assert fresh_v1["active_code_hash"] == v1.code_hash
-    assert fresh_v1["code_hash"] == v1.code_hash
-    assert any(item["action"] == "ROLLED_BACK" for item in fresh_v1["audit_log"])
-    assert service.find_order(seeded_order.order_id).model_dump(mode="json") == order_snapshot
-    assert pm.get_ledger(DecisionScope.SWING).cash == cash_snapshot
-    assert pm.get_ledger(DecisionScope.SWING).positions["MSFT"].model_dump(mode="json") == position_snapshot
+        pending = state.paper_orders.submit(PaperOrderRequest(
+            currency="TWD",
+            symbol="2330.TW",
+            market="TW",
+            bucket=DecisionScope.SWING,
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            quantity=2,
+            limit_price=101,
+            origin=OrderOrigin.MANUAL,
+            reason="TEST_ONLY lifecycle partial continuity",
+            data=PaperDataContext(source="fixture://ISSUE8_CONNECTED", last_price=100),
+        ))
+        _fixture_fill(
+            state,
+            pending.order_id,
+            1,
+            "TEST_ONLY_CONNECTED_PARTIAL_FILL",
+        )
+        pending = state.paper_orders.find_order(pending.order_id)
+        assert pending.status.value == "PARTIALLY_FILLED"
+        assert pending.filled_quantity == 1
+        assert pending.remaining_quantity == 1
+        ledger = state.portfolio_manager.get_ledger(DecisionScope.SWING)
+        order_snapshot = pending.model_dump(mode="json")
+        cash_snapshot = ledger.cash
+        position_snapshot = ledger.positions["2330.TW"].model_dump(mode="json")
+        fill_ids_snapshot = [fill.fill_id for fill in ledger.fills]
+
+        v2 = state.registry.register_or_reload(v2_dir)
+        assert v2.code_hash != v1.code_hash
+        assert v2.status.value == "CANDIDATE"
+        assert state.registry.get_registered(v1.id).code_hash == v1.code_hash
+
+        denied = client.post(
+            f"/api/strategies/{v1.id}/hot-swap",
+            json={"code_hash": v2.code_hash, "authority": "worker"},
+        )
+        assert denied.status_code == 400
+        assert state.registry.get_registered(v1.id).code_hash == v1.code_hash
+
+        swapped = client.post(
+            f"/api/strategies/{v1.id}/hot-swap",
+            json={"code_hash": v2.code_hash, "authority": "Main CIO"},
+        )
+        assert swapped.status_code == 200
+        active_v2 = state.registry.get_registered(v1.id)
+        assert active_v2.code_hash == v2.code_hash
+        assert active_v2.version == "2.0.0-TEST_ONLY"
+        assert active_v2.status.value == "PAPER_ACTIVE"
+        assert state.registry._active_version[v1.id] == v2.code_hash
+
+        assert id(state.market_adapter) == adapter_identity
+        assert id(state.cio_executor) == executor_identity
+        assert state.runner.market_adapter is state.market_adapter
+        assert state.runner.cio_executor is state.cio_executor
+        assert (
+            state.cio_executor.provider_id,
+            state.cio_executor.model_id,
+            state.cio_executor.session_id,
+        ) == provider_snapshot
+        current = state.paper_orders.find_order(pending.order_id)
+        assert current.model_dump(mode="json") == order_snapshot
+        assert ledger.cash == cash_snapshot
+        assert ledger.positions["2330.TW"].model_dump(mode="json") == position_snapshot
+        assert [fill.fill_id for fill in ledger.fills] == fill_ids_snapshot
+
+        state.runner._persist_portfolios()
+        fresh_v2 = _fresh_app(workspace, runtime)
+        fresh_reg_v2 = fresh_v2["registry"][v1.id]
+        assert fresh_reg_v2["active_code_hash"] == v2.code_hash
+        assert fresh_reg_v2["code_hash"] == v2.code_hash
+        assert fresh_reg_v2["version"] == "2.0.0-TEST_ONLY"
+        assert fresh_v2["adapter"]["runner_same_adapter"] is True
+        assert fresh_v2["provider"]["runner_same_executor"] is True
+        assert (
+            fresh_v2["provider"]["provider_id"],
+            fresh_v2["provider"]["model_id"],
+            fresh_v2["provider"]["session_id"],
+        ) == provider_snapshot
+        fresh_partial = next(
+            item for item in fresh_v2["orders"] if item["order_id"] == pending.order_id
+        )
+        assert fresh_partial["status"] == "PARTIALLY_FILLED"
+        assert fresh_partial["audit_metadata"]["filled_quantity"] == 1
+        assert [f["fill_id"] for f in fresh_v2["fills"]] == fill_ids_snapshot
+
+        rolled = client.post(
+            f"/api/strategies/{v1.id}/rollback",
+            json={"code_hash": v1.code_hash, "authority": "Main CIO"},
+        )
+        assert rolled.status_code == 200
+        active_v1 = state.registry.get_registered(v1.id)
+        assert active_v1.code_hash == v1.code_hash
+        assert active_v1.status.value == "PAPER_ACTIVE"
+        assert state.registry._active_version[v1.id] == v1.code_hash
+
+        assert id(state.market_adapter) == adapter_identity
+        assert id(state.cio_executor) == executor_identity
+        assert (
+            state.cio_executor.provider_id,
+            state.cio_executor.model_id,
+            state.cio_executor.session_id,
+        ) == provider_snapshot
+        current = state.paper_orders.find_order(pending.order_id)
+        assert current.model_dump(mode="json") == order_snapshot
+        assert ledger.cash == cash_snapshot
+        assert ledger.positions["2330.TW"].model_dump(mode="json") == position_snapshot
+        assert [fill.fill_id for fill in ledger.fills] == fill_ids_snapshot
+
+        state.runner._persist_portfolios()
+        fresh_v1 = _fresh_app(workspace, runtime)
+        fresh_reg_v1 = fresh_v1["registry"][v1.id]
+        assert fresh_reg_v1["active_code_hash"] == v1.code_hash
+        assert fresh_reg_v1["code_hash"] == v1.code_hash
+        assert any(
+            item["action"] == "ROLLED_BACK" for item in fresh_reg_v1["audit_log"]
+        )
+        fresh_partial = next(
+            item for item in fresh_v1["orders"] if item["order_id"] == pending.order_id
+        )
+        assert fresh_partial["status"] == "PARTIALLY_FILLED"
+        assert fresh_partial["audit_metadata"]["filled_quantity"] == 1
+        assert [f["fill_id"] for f in fresh_v1["fills"]] == fill_ids_snapshot
+    finally:
+        state.runner.shutdown()
 
 
 def test_frozen_replay_and_real_paper_next_bar_path_align_on_economics(tmp_path):
@@ -265,6 +352,9 @@ def test_frozen_replay_and_real_paper_next_bar_path_align_on_economics(tmp_path)
     assert paper_fill.tax == pytest.approx(replay_buy.tax)
     assert paper_ledger.positions["MSFT"].quantity == replay_ledger.positions["MSFT"].quantity
     assert paper_ledger.cash == pytest.approx(replay_ledger.cash)
+    paper_ledger.update_mark_to_market(bars[-1])
+    assert paper_ledger.positions["MSFT"].current_price == replay_ledger.positions["MSFT"].current_price == bars[-1].close
+    assert paper_ledger._latest_prices["MSFT"] == replay_ledger._latest_prices["MSFT"] == bars[-1].close
     assert paper_ledger.equity == pytest.approx(replay_ledger.equity)
 
     replay_types = [
