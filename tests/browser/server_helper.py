@@ -302,9 +302,12 @@ def _seed_order_flow_fixtures(state) -> dict:
         ))
         if not any(order.origin == OrderOrigin.STRATEGY and order.strategy_id == reg.id for order in state.paper_orders.all_orders()):
             state.market_adapter.quote_enabled = False
+            prior_require_cio = state.runner.require_cio_provider
+            state.runner.require_cio_provider = False
             try:
                 cycle = state.runner.run_one_cycle(reg.id, symbols=["2330.TW"])
             finally:
+                state.runner.require_cio_provider = prior_require_cio
                 state.market_adapter.quote_enabled = True
             strategy_orders = [
                 order for order in state.paper_orders.all_orders()
