@@ -113,7 +113,13 @@ def test_manual_ui_preview_confirm_cancel_replace_and_rejections(
 
         before = _canonical(page, base_url)
         before_count = len(before["orders"])
-        assert before["portfolio"]["swing"]["positions"]["2330.TW"]["quantity"] == 4.0
+        expected_qty = sum(
+            (fill["quantity"] if fill["side"] == "BUY" else -fill["quantity"])
+            for fill in before["fills"]
+            if fill["symbol"] == "2330.TW" and fill["bucket"] == "swing"
+        )
+        assert expected_qty > 0
+        assert before["portfolio"]["swing"]["positions"]["2330.TW"]["quantity"] == expected_qty
         assert before["portfolio"]["swing"]["cash"] < before["portfolio"]["swing"]["initial_cash"]
 
         _set_manual_form(page, reason="TEST_ONLY_UI_PENDING_CANCEL")
