@@ -99,6 +99,8 @@ def test_manual_ui_preview_confirm_cancel_replace_and_rejections(
     page = context.new_page()
     console_errors, page_errors, api_trace = _recorders(page)
     completed = False
+    canonical_after = None
+    action_order_ids: dict[str, str] = {}
     try:
         view = _open_paper_trade(page, base_url)
         readback = view.locator(".pm-data-card pre").inner_text()
@@ -130,6 +132,7 @@ def test_manual_ui_preview_confirm_cancel_replace_and_rejections(
         submitted = _canonical(page, base_url)
         assert len(submitted["orders"]) == before_count + 1
         manual = next(item for item in submitted["orders"] if item["reason"] == "TEST_ONLY_UI_PENDING_CANCEL")
+        action_order_ids["confirmed_then_cancelled"] = manual["order_id"]
         assert manual["origin"] == "MANUAL"
         assert manual["status"] == "PENDING"
         row = page.locator(f'tr[data-order-id="{manual["order_id"]}"]')
@@ -152,6 +155,8 @@ def test_manual_ui_preview_confirm_cancel_replace_and_rejections(
         replaced = _canonical(page, base_url)
         old_after = next(item for item in replaced["orders"] if item["order_id"] == old["order_id"])
         replacement = next(item for item in replaced["orders"] if item["reason"] == "TEST_ONLY_UI_REPLACEMENT")
+        action_order_ids["replaced_old"] = old["order_id"]
+        action_order_ids["replacement_new"] = replacement["order_id"]
         assert old_after["status"] == "CANCELLED"
         assert replacement["status"] == "PENDING"
         assert replacement["quantity"] == 2
@@ -223,10 +228,28 @@ def test_manual_ui_preview_confirm_cancel_replace_and_rejections(
             and "422" in item["text"]
             for item in console_errors
         )
+        canonical_after = forbidden_after
         completed = True
     finally:
         _write_evidence(page, evidence_dir, "paper-order-manual-flow", {
             "completed": completed,
+            "action_order_ids": action_order_ids,
+            "canonical_order_statuses": (
+                {item["order_id"]: item["status"] for item in canonical_after["orders"]}
+                if canonical_after is not None else None
+            ),
+            "canonical_fill_ids": (
+                [item["fill_id"] for item in canonical_after["fills"]]
+                if canonical_after is not None else None
+            ),
+            "canonical_swing_cash": (
+                canonical_after["portfolio"]["swing"]["cash"]
+                if canonical_after is not None else None
+            ),
+            "canonical_event_types": (
+                [item["event"]["event_type"] for item in canonical_after["events"]["events"]]
+                if canonical_after is not None else None
+            ),
             "console_errors": console_errors,
             "page_errors": page_errors,
             "api_trace": api_trace,
@@ -244,6 +267,9 @@ def test_strategy_and_main_cio_readback_and_authority_boundaries(
     page = context.new_page()
     console_errors, page_errors, api_trace = _recorders(page)
     completed = False
+    authority_payload = None
+    strategy_order_ids: set[str] = set()
+    cio_order_ids: set[str] = set()
     try:
         view = _open_paper_trade(page, base_url)
         readback = view.locator(".pm-data-card pre").inner_text()
@@ -341,6 +367,19 @@ def test_strategy_and_main_cio_readback_and_authority_boundaries(
     finally:
         _write_evidence(page, evidence_dir, "paper-order-authority-flow", {
             "completed": completed,
+            "strategy_order_ids": sorted(strategy_order_ids),
+            "cio_order_ids": sorted(cio_order_ids),
+            "negative_reasons": (
+                {
+                    key: value["reason"]
+                    for key, value in authority_payload["negative"].items()
+                }
+                if authority_payload is not None else None
+            ),
+            "negative_invariants": (
+                authority_payload["negative_invariants"]
+                if authority_payload is not None else None
+            ),
             "console_errors": console_errors,
             "page_errors": page_errors,
             "api_trace": api_trace,
