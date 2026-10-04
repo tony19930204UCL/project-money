@@ -797,7 +797,7 @@ def test_pending_execution_and_corporate_action_survive_real_process_restart(tmp
     root = Path(__file__).resolve().parents[2]
     runtime = tmp_path / "runtime"
     control = tmp_path / "process-control.json"
-    action_at = PROCESS_BASE + timedelta(seconds=2)
+    action_at = PROCESS_BASE + timedelta(seconds=3)
 
     _write_process_control(
         control,
@@ -906,7 +906,7 @@ def test_pending_execution_and_corporate_action_survive_real_process_restart(tmp
 def test_restart_chain_non_vacuity_requires_pending_caller_and_quote_dedup(tmp_path):
     root = Path(__file__).resolve().parents[2]
     control = tmp_path / "control.json"
-    action_at = PROCESS_BASE + timedelta(seconds=2)
+    action_at = PROCESS_BASE + timedelta(seconds=3)
 
     blocked_runtime = tmp_path / "blocked-runtime"
     _write_process_control(
