@@ -111,11 +111,17 @@ def test_manual_ui_preview_confirm_cancel_replace_and_rejections(
 
         before = _canonical(page, base_url)
         before_count = len(before["orders"])
+        assert before["portfolio"]["swing"]["positions"]["2330.TW"]["quantity"] == 4.0
+        assert before["portfolio"]["swing"]["cash"] < before["portfolio"]["swing"]["initial_cash"]
 
         _set_manual_form(page, reason="TEST_ONLY_UI_PENDING_CANCEL")
         preview = _preview(page)
         assert '"status": "APPROVED"' in preview
         assert '"data_status": "FRESH_NON_FALLBACK"' in preview
+        after_preview = _canonical(page, base_url)
+        assert after_preview["orders"] == before["orders"]
+        assert after_preview["fills"] == before["fills"]
+        assert after_preview["portfolio"]["swing"]["cash"] == before["portfolio"]["swing"]["cash"]
         confirm = page.get_by_role("button", name="Confirm paper order", exact=True)
         assert confirm.is_enabled()
         confirm.click()
@@ -152,6 +158,8 @@ def test_manual_ui_preview_confirm_cancel_replace_and_rejections(
         assert replacement["audit_metadata"]["replaced_order_id"] == old["order_id"]
 
         stable_count = len(replaced["orders"])
+        forbidden_baseline_fill_ids = [item["fill_id"] for item in replaced["fills"]]
+        forbidden_baseline_cash = replaced["portfolio"]["swing"]["cash"]
         _set_manual_form(page, quantity="0", reason="TEST_ONLY_INVALID_QUANTITY")
         page.get_by_role("button", name="Preview order", exact=True).click()
         page.get_by_role("status").filter(has_text="quantity").wait_for(timeout=5_000)
@@ -188,7 +196,18 @@ def test_manual_ui_preview_confirm_cancel_replace_and_rejections(
             data_state="noquote",
         )
         assert "MISSING_REFERENCE_PRICE" in _preview(page)
-        assert len(_canonical(page, base_url)["orders"]) == stable_count
+        forbidden_after = _canonical(page, base_url)
+        assert len(forbidden_after["orders"]) == stable_count
+        assert [item["fill_id"] for item in forbidden_after["fills"]] == forbidden_baseline_fill_ids
+        assert forbidden_after["portfolio"]["swing"]["cash"] == forbidden_baseline_cash
+
+        event_types = [
+            item["event"]["event_type"]
+            for item in forbidden_after["events"]["events"]
+        ]
+        assert "ORDER_CREATED" in event_types
+        assert "ORDER_CANCELLED" in event_types
+        assert "ORDER_REPLACED" in event_types
 
         assert not page_errors
         unexpected_console = [
@@ -236,11 +255,30 @@ def test_strategy_and_main_cio_readback_and_authority_boundaries(
         assert all(item["strategy_version"] for item in strategy_orders)
         assert all(item["strategy_version"] == "TEST_ONLY_CIO_V1" for item in cio_orders)
 
+        strategy_order_ids = {item["order_id"] for item in strategy_orders}
+        cio_order_ids = {item["order_id"] for item in cio_orders}
         strategy_fill_ids = {
             fill["fill_id"] for fill in canonical["fills"]
-            if fill["order_id"] in {item["order_id"] for item in strategy_orders}
+            if fill["order_id"] in strategy_order_ids
         }
         assert "TEST_ONLY_FILL_STRATEGY" in strategy_fill_ids
+
+        canonical_events = canonical["events"]["events"]
+        assert any(
+            item["event"]["event_type"] == "ORDER_CREATED"
+            and item["event"]["aggregate_id"] in strategy_order_ids
+            for item in canonical_events
+        )
+        assert any(
+            item["event"]["event_type"] == "ORDER_FILLED"
+            and item["event"]["aggregate_id"] in strategy_order_ids
+            for item in canonical_events
+        )
+        assert any(
+            item["event"]["event_type"] == "ORDER_CREATED"
+            and item["event"]["aggregate_id"] in cio_order_ids
+            for item in canonical_events
+        )
 
         authority = page.request.get(f"{base_url}/api/test-only/order-flow")
         assert authority.status == 200
