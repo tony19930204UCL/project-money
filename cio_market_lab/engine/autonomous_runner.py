@@ -2321,7 +2321,14 @@ class AutonomousPaperRunner:
 
         # 1. Validate packet (excluding self from duplicate check if progressing an existing pending case)
         effective_processed = self.learning_store.processed_case_ids
-        if existing_rec is not None and (existing_rec.fill is None or (case_order is not None and case_order.status == OrderStatus.PARTIALLY_FILLED)):
+        if (
+            existing_rec is not None
+            and case_order is not None
+            and case_order.status in {OrderStatus.PENDING, OrderStatus.PARTIALLY_FILLED}
+        ):
+            # Existing non-terminal authorization is being progressed, not
+            # resubmitted as a new CIO decision. This must remain true after
+            # restart even when a prior partial fill is already recorded.
             effective_processed = effective_processed - {packet.case_id}
         is_valid, validation_err = validate_cio_packet(
             packet, now=now, processed_case_ids=effective_processed
