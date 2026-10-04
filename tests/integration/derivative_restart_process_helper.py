@@ -65,7 +65,7 @@ svc,pm,store=build(args.runtime,args.kind)
 s=spec(args.kind)
 changed=None
 if args.action=="open":
-    q=quote(s.symbol,T0,100,101) if args.kind=="option" else quote(s.symbol,T0,19999,20001)
+    q=quote(s.symbol,T0,100,101) if args.kind=="option" else quote(s.symbol,T0,999,1001)
     r=svc.execute(strategy_id=SID,bucket=BUCKET,spec=s,quote=q,side=OrderSide.BUY,quantity=1,
                   order_id=f"{args.kind}-open",now=T0)
     changed={"success":r.success,"rejection_reason":r.rejection_reason}
@@ -76,7 +76,7 @@ elif args.action=="review-close":
                        quote=quote(s.symbol,T0+timedelta(hours=1,minutes=30),120,121))
 elif args.action=="settle":
     changed=svc.settle_futures_daily(strategy_id=SID,bucket=BUCKET,symbol=s.symbol,
-        settlement_price=20020,settlement_date="2026-10-05",
-        quote=quote(s.symbol,T0+timedelta(hours=1),20019,20021),now=T0+timedelta(hours=1))
+        settlement_price=1020,settlement_date="2026-10-05",
+        quote=quote(s.symbol,T0+timedelta(hours=1),1019,1021),now=T0+timedelta(hours=1))
 out=snapshot(pm,store);out["changed"]=changed
 print(json.dumps(out,sort_keys=True))
