@@ -278,7 +278,9 @@ def test_full_research_decision_outcome_lesson_fresh_process_chain(tmp_path, mon
     clock = [T0]
     store = CIODecisionLearningStore(runtime)
     producer, reader = _producer(tmp_path, monkeypatch, clock, store)
-    producer.refresh("MSFT", now=clock[0])
+    initial_refresh = producer.refresh("MSFT", now=clock[0])
+    old_plan = Path(initial_refresh["plan_path"])
+    old_hash = _sha(old_plan)
 
     adapter = ChainMarketAdapter(clock[0], price=100.0)
     app = create_app(
@@ -425,9 +427,48 @@ def test_full_research_decision_outcome_lesson_fresh_process_chain(tmp_path, mon
             )
         }
 
+        superseded_packet = executor.request_decision(executor.last_request).model_copy(update={
+            "case_id": "TEST_ONLY_SUPERSEDED_FILTER",
+            "as_of": due - timedelta(minutes=2),
+            "expiry": due + timedelta(hours=1),
+        })
+        runner.learning_store.record_decision(superseded_packet, {}, {})
+        runner.learning_store.record_outcome(
+            superseded_packet.case_id,
+            {
+                "realized_pnl": 0,
+                "no_fill": True,
+                "no_trade_pnl": True,
+                "as_of": (due - timedelta(minutes=1)).isoformat(),
+            },
+            lessons=["TEST_ONLY superseded integration lesson"],
+            as_of=due - timedelta(minutes=1),
+        )
+        replacement_packet = superseded_packet.model_copy(update={
+            "case_id": "TEST_ONLY_SUPERSEDING_CASE",
+            "as_of": due,
+            "expiry": due + timedelta(hours=1),
+        })
+        runner.learning_store.version_hypothesis(
+            superseded_packet.case_id,
+            replacement_packet,
+            "TEST_ONLY supersession filter",
+        )
+        eligible_ids = {
+            item["lesson_id"]
+            for item in runner.learning_store.retrieve_context_lessons(
+                "MSFT", due + timedelta(minutes=1)
+            )
+        }
+        assert lesson_id in eligible_ids
+        assert not any(
+            item["case_id"] == "TEST_ONLY_SUPERSEDED_FILTER"
+            for item in runner.learning_store.retrieve_context_lessons(
+                "MSFT", due + timedelta(minutes=1)
+            )
+        )
+
         # Refresh only the new session input; prior frozen receipt remains immutable.
-        old_plan = Path(producer.refresh("MSFT", now=T0)["plan_path"])
-        old_hash = _sha(old_plan)
         clock[0] = due + timedelta(minutes=1)
         adapter.set_now(clock[0])
         producer.refresh("MSFT", now=clock[0])
