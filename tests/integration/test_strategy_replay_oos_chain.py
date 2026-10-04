@@ -25,11 +25,13 @@ from cio_market_lab.domain.models import (
     Fill,
     OrderOrigin,
     OrderSide,
+    OrderStatus,
     OrderType,
+    Quote,
 )
 from cio_market_lab.engine.cio_packet import sign_cio_packet
 from cio_market_lab.engine.execution import ExecutionCostConfig
-from cio_market_lab.engine.paper_orders import PaperDataContext, PaperOrderRequest
+from cio_market_lab.engine.paper_orders import PaperDataContext, PaperExperimentSettings, PaperOrderRequest
 from cio_market_lab.engine.portfolio import PortfolioManager
 from cio_market_lab.engine.replay_lab import (
     FrozenMACrossover,
@@ -40,7 +42,7 @@ from cio_market_lab.engine.replay_lab import (
 from cio_market_lab.engine.paper_orders import PaperOrderService
 from cio_market_lab.events.store import EventStore
 from cio_market_lab.strategies.durable_registry import DurableStrategyRegistry
-from tests.browser.server_helper import TestOnlyMarketAdapter, _fixture_fill
+from tests.browser.server_helper import TestOnlyMarketAdapter
 from tests.test_source_aligned_next_bar import runner_harness
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -155,33 +157,121 @@ def test_durable_strategy_version_hot_swap_and_rollback_preserve_execution_state
         assert v1.status.value == "PAPER_ACTIVE"
         assert state.registry._active_version[v1.id] == v1.code_hash
 
-        pending = state.paper_orders.submit(PaperOrderRequest(
-            currency="TWD",
-            symbol="2330.TW",
-            market="TW",
-            bucket=DecisionScope.SWING,
-            side=OrderSide.BUY,
-            order_type=OrderType.LIMIT,
-            quantity=2,
-            limit_price=101,
-            origin=OrderOrigin.MANUAL,
-            reason="TEST_ONLY lifecycle partial continuity",
-            data=PaperDataContext(source="fixture://ISSUE8_CONNECTED", last_price=100),
-        ))
-        _fixture_fill(
-            state,
-            pending.order_id,
-            1,
-            "TEST_ONLY_CONNECTED_PARTIAL_FILL",
+        clock = {"now": datetime(2026, 10, 1, 14, 0, tzinfo=timezone.utc)}
+        state.runner._now_fn = lambda: clock["now"]
+        state.paper_orders._now_fn = state.runner._now_fn
+
+        def lifecycle_bar(symbol):
+            return Bar(
+                symbol=symbol,
+                timestamp=clock["now"] - timedelta(minutes=5),
+                observed_at=clock["now"],
+                open=100,
+                high=102,
+                low=99,
+                close=100,
+                volume=1000,
+                source="fixture://ISSUE8_CONNECTED_BAR",
+                quality="TEST_ONLY",
+                is_fixture=True,
+                is_synthetic=False,
+            )
+
+        quote_holder = {"value": None}
+        monkeypatch.setattr(
+            state.market_adapter,
+            "get_latest_quote",
+            lambda _symbol: quote_holder["value"],
         )
+        monkeypatch.setattr(
+            state.market_adapter,
+            "get_latest_bar",
+            lambda symbol: lifecycle_bar(symbol),
+        )
+        monkeypatch.setattr(
+            state.market_adapter,
+            "get_bars",
+            lambda symbol, *args, **kwargs: [lifecycle_bar(symbol)],
+        )
+        state.runner.configure(PaperExperimentSettings(
+            strategy_id=v1.id,
+            enabled=True,
+            market="US",
+            base_currency="USD",
+            reporting_currency="USD",
+            initial_cash=10_000,
+            max_position_notional=5_000,
+            universe=["MSFT"],
+            paper_execution_model="QUOTE_BOOK",
+        ))
+        packet = CIODecisionPacket(
+            case_id="TEST_ONLY_CONNECTED_LIFECYCLE",
+            as_of=clock["now"],
+            expiry=clock["now"] + timedelta(hours=1),
+            thesis="TEST_ONLY AppState-connected hot-swap execution continuity",
+            selected_instrument="MSFT",
+            action="BUY",
+            quantity=2,
+            strategy_version=v1.version,
+            is_fixture=True,
+            conditions={
+                "paper_execution_model": "QUOTE_BOOK",
+                "allow_partial_fills": True,
+            },
+        )
+        packet = sign_cio_packet(packet, signer_id="fixture-test-signer")
+        submitted = state.runner.submit_cio_packet(packet, strategy_id=v1.id)
+        assert submitted.action == "BUY_PENDING"
+        pending = next(
+            order for order in state.paper_orders.all_orders()
+            if order.strategy_id == v1.id
+        )
+        assert pending.status == OrderStatus.PENDING
+
+        clock["now"] += timedelta(seconds=2)
+        quote_holder["value"] = Quote(
+            symbol="MSFT",
+            timestamp=clock["now"] - timedelta(seconds=1),
+            observed_at=clock["now"],
+            bid=100,
+            ask=101,
+            bid_size=1,
+            ask_size=1,
+            last_price=100.5,
+            source="fixture://ISSUE8_CONNECTED_BOOK",
+            quality="TEST_ONLY",
+            session="REGULAR",
+            quote_id="TEST_ONLY_CONNECTED_Q1",
+            is_stale=False,
+            is_synthetic=False,
+            source_capabilities={
+                "source": "fixture://ISSUE8_CONNECTED_BOOK",
+                "two_sided_book": True,
+                "size_backed": True,
+                "exchange_session_attested": True,
+                "entitlement_evidence_id": "TEST_ONLY_CONNECTED_EID",
+                "entitlement_status": "TEST_ONLY",
+                "supported_sessions": ["REGULAR"],
+            },
+        )
+        decisions = state.runner.process_pending_orders()
+        assert [decision.action for decision in decisions] == [
+            "BUY_PARTIALLY_FILLED"
+        ]
         pending = state.paper_orders.find_order(pending.order_id)
-        assert pending.status.value == "PARTIALLY_FILLED"
+        assert pending.status == OrderStatus.PARTIALLY_FILLED
         assert pending.filled_quantity == 1
         assert pending.remaining_quantity == 1
-        ledger = state.portfolio_manager.get_ledger(DecisionScope.SWING)
+        ledger = state.portfolio_manager.get_strategy_ledger(
+            v1.id, DecisionScope.SWING
+        )
+        assert len(ledger.fills) == 1
+        assert ledger.fills[0].consumed_quote.source_quote_id == "TEST_ONLY_CONNECTED_Q1"
+        assert ledger.fills[0].fill_price == pytest.approx(101.0505)
+        assert ledger.fills[0].fee == pytest.approx(1)
         order_snapshot = pending.model_dump(mode="json")
         cash_snapshot = ledger.cash
-        position_snapshot = ledger.positions["2330.TW"].model_dump(mode="json")
+        position_snapshot = ledger.positions["MSFT"].model_dump(mode="json")
         fill_ids_snapshot = [fill.fill_id for fill in ledger.fills]
 
         v2 = state.registry.register_or_reload(v2_dir)
@@ -219,7 +309,7 @@ def test_durable_strategy_version_hot_swap_and_rollback_preserve_execution_state
         current = state.paper_orders.find_order(pending.order_id)
         assert current.model_dump(mode="json") == order_snapshot
         assert ledger.cash == cash_snapshot
-        assert ledger.positions["2330.TW"].model_dump(mode="json") == position_snapshot
+        assert ledger.positions["MSFT"].model_dump(mode="json") == position_snapshot
         assert [fill.fill_id for fill in ledger.fills] == fill_ids_snapshot
 
         state.runner._persist_portfolios()
@@ -235,12 +325,16 @@ def test_durable_strategy_version_hot_swap_and_rollback_preserve_execution_state
             fresh_v2["provider"]["model_id"],
             fresh_v2["provider"]["session_id"],
         ) == provider_snapshot
+        fresh_ledger_v2 = fresh_v2["strategy_ledgers"][v1.id]["swing"]
         fresh_partial = next(
-            item for item in fresh_v2["orders"] if item["order_id"] == pending.order_id
+            item for item in fresh_ledger_v2["orders"]
+            if item["order_id"] == pending.order_id
         )
         assert fresh_partial["status"] == "PARTIALLY_FILLED"
         assert fresh_partial["audit_metadata"]["filled_quantity"] == 1
-        assert [f["fill_id"] for f in fresh_v2["fills"]] == fill_ids_snapshot
+        assert [f["fill_id"] for f in fresh_ledger_v2["fills"]] == fill_ids_snapshot
+        assert fresh_ledger_v2["cash"] == pytest.approx(cash_snapshot)
+        assert fresh_ledger_v2["positions"]["MSFT"] == position_snapshot
 
         rolled = client.post(
             f"/api/strategies/{v1.id}/rollback",
@@ -262,7 +356,7 @@ def test_durable_strategy_version_hot_swap_and_rollback_preserve_execution_state
         current = state.paper_orders.find_order(pending.order_id)
         assert current.model_dump(mode="json") == order_snapshot
         assert ledger.cash == cash_snapshot
-        assert ledger.positions["2330.TW"].model_dump(mode="json") == position_snapshot
+        assert ledger.positions["MSFT"].model_dump(mode="json") == position_snapshot
         assert [fill.fill_id for fill in ledger.fills] == fill_ids_snapshot
 
         state.runner._persist_portfolios()
@@ -273,12 +367,16 @@ def test_durable_strategy_version_hot_swap_and_rollback_preserve_execution_state
         assert any(
             item["action"] == "ROLLED_BACK" for item in fresh_reg_v1["audit_log"]
         )
+        fresh_ledger_v1 = fresh_v1["strategy_ledgers"][v1.id]["swing"]
         fresh_partial = next(
-            item for item in fresh_v1["orders"] if item["order_id"] == pending.order_id
+            item for item in fresh_ledger_v1["orders"]
+            if item["order_id"] == pending.order_id
         )
         assert fresh_partial["status"] == "PARTIALLY_FILLED"
         assert fresh_partial["audit_metadata"]["filled_quantity"] == 1
-        assert [f["fill_id"] for f in fresh_v1["fills"]] == fill_ids_snapshot
+        assert [f["fill_id"] for f in fresh_ledger_v1["fills"]] == fill_ids_snapshot
+        assert fresh_ledger_v1["cash"] == pytest.approx(cash_snapshot)
+        assert fresh_ledger_v1["positions"]["MSFT"] == position_snapshot
     finally:
         state.runner.shutdown()
 
