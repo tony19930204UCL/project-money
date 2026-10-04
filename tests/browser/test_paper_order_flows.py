@@ -62,9 +62,12 @@ def _canonical(page, base_url: str) -> dict:
     health = page.request.get(f"{base_url}/api/health").json()
     assert health["paper_only"] is True
     assert health["broker_connected"] is False
+    readback = page.request.get(f"{base_url}/api/paper/readback").json()
+    assert readback["paper_only"] is True
+    assert readback["broker_connected"] is False
     return {
         "orders": page.request.get(f"{base_url}/api/paper/orders").json(),
-        "fills": page.request.get(f"{base_url}/api/fills").json(),
+        "fills": readback["fills"],
         "portfolio": page.request.get(f"{base_url}/api/portfolio").json(),
         "events": page.request.get(f"{base_url}/api/events?since_id=0&limit=1000").json(),
     }
