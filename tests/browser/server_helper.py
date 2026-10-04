@@ -182,6 +182,9 @@ def _packet(case_id: str, *, expiry: datetime, actor_role: str = "CHIEF_INVESTME
 
 def _seed_order_flow_fixtures(state) -> dict:
     state.runner.allow_fixture_quotes = True
+    results_path = state.runtime_dir / "TEST_ONLY_order_flow_results.json"
+    if results_path.exists():
+        return json.loads(results_path.read_text(encoding="utf-8"))
 
     existing = {
         item.audit_metadata.get("fixture_receipt"): item
@@ -314,7 +317,7 @@ def _seed_order_flow_fixtures(state) -> dict:
     after_cash = state.portfolio_manager.get_strategy_portfolio(DYNAMIC_DESK_ID, DecisionScope.SWING).cash
     state.runner._persist_portfolios()
 
-    return {
+    result = {
         "positive": positive,
         "negative": negatives,
         "negative_invariants": {
@@ -326,6 +329,8 @@ def _seed_order_flow_fixtures(state) -> dict:
         "paper_only": True,
         "broker_connected": False,
     }
+    results_path.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
+    return result
 
 
 async def _watch_stop(server: uvicorn.Server, stop_file: Path) -> None:
