@@ -10,7 +10,7 @@ import json
 import math
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 from zoneinfo import ZoneInfo
 
 import requests
@@ -105,7 +105,8 @@ class _OfficialCollector:
 
 class DailyResearchPlanProducer:
     def __init__(self, *, root: Path, packet_root: Path, session_id: str, workspace_root: str,
-                 learning_store: Any, reader: Any = None, maximum_ceiling: float = 0.02, timeout_seconds: int = 240):
+                 learning_store: Any, reader: Any = None, maximum_ceiling: float = 0.02, timeout_seconds: int = 240,
+                 now_fn: Callable[[], datetime] | None = None):
         self.root, self.packet_root = Path(root), Path(packet_root)
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / 'raw_official').mkdir(parents=True, exist_ok=True)
@@ -114,14 +115,19 @@ class DailyResearchPlanProducer:
         self.session_id, self.workspace_root = session_id, workspace_root
         self.learning_store, self.maximum_ceiling = learning_store, maximum_ceiling
         self.timeout_seconds = timeout_seconds
+        self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
         self.network = requests.Session()
         self.captures_by_url = {}
         from cio_market_lab.research.browser import PublicResearchInboxReader
         self.collector = _OfficialCollector(reader or PublicResearchInboxReader(self.root/'official_intake'))
         self.official = OfficialResearchProducer(fetch_json=self._capture_official)
 
+    def _now(self) -> datetime:
+        value = self._now_fn()
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
     def _capture_official(self, url):
-        now = datetime.now(timezone.utc)
+        now = self._now()
         from cio_market_lab.research.official import USER_AGENT
         from urllib.parse import urlparse
         from cio_market_lab.research.official_documents import ALLOWED_HOSTS, parse_official_document, MAX_BYTES
@@ -237,11 +243,11 @@ class DailyResearchPlanProducer:
         if result.get('is_fixture') or runtime.is_fixture or not runtime.auth_verified or not runtime.is_success_response or result.get('failed') or result.get('error'):
             raise RuntimeError('unauthenticated/fixture/failed daily-plan receipt rejected')
         atomic_json(self.root/'authenticated_model_receipts'/(key+'.json'),
-                    {'observed_at':datetime.now(timezone.utc).isoformat(),'symbol':symbol,'runtime_metadata':metadata,
+                    {'observed_at':self._now().isoformat(),'symbol':symbol,'runtime_metadata':metadata,
                      'response':response,'session_id':result.get('session_id'),'is_fixture':False,'purpose':'DAILY_RESEARCH_PLAN_NOT_ORDER'})
         plan = DailyPlanJudgment.model_validate_json(response)
         validate_plan_against_inputs(plan, evidence, maximum_ceiling=self.maximum_ceiling)
-        actual_now = datetime.now(timezone.utc)
+        actual_now = self._now()
         # A research formation crossing market-day boundaries must be retried, not misdated.
         if plan_session_date(symbol, actual_now) != date:
             raise RuntimeError('plan formation crossed market session date')

@@ -1089,9 +1089,15 @@ class AutonomousPaperRunner:
             inputs["validation_errors"] = errors
             return self._decision(run_id, settings, symbol, "NO_TRADE", "BLOCKED_DAILY_PLAN_PACKET_VALIDATION", inputs, terminal_status="TERMINAL_RISK_BLOCK")
         applied_lesson_ids = list(raw_applied)
+        decision_delta = packet.conditions.get("decision_delta", {})
+        if not isinstance(decision_delta, dict):
+            inputs["validation_errors"] = ["DAILY_PLAN_INVALID_DECISION_DELTA"]
+            return self._decision(run_id, settings, symbol, "NO_TRADE", "BLOCKED_DAILY_PLAN_PACKET_VALIDATION", inputs, terminal_status="TERMINAL_RISK_BLOCK")
         packet.conditions["delivered_lesson_ids"] = delivered_lesson_ids
         self.learning_store.record_decision(
-            packet, native, reference, applied_lesson_ids=applied_lesson_ids
+            packet, native, reference,
+            applied_lesson_ids=applied_lesson_ids,
+            decision_delta=decision_delta,
         )
         self.last_receipt = receipt
         inputs.update({"case_id": packet.case_id, "provider_id": getattr(receipt, "provider_id", None),
