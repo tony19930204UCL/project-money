@@ -298,6 +298,9 @@ def test_strategy_and_main_cio_readback_and_authority_boundaries(
         authority_payload = authority.json()
         assert authority_payload["paper_only"] is True
         assert authority_payload["broker_connected"] is False
+        assert authority_payload["positive"]["action"] == "BUY_PENDING"
+        assert "PENDING" in authority_payload["positive"]["reason"]
+        assert authority_payload["positive"]["order_id"] in cio_order_ids
         assert authority_payload["negative_invariants"]["fills_before"] == authority_payload["negative_invariants"]["fills_after"]
         assert authority_payload["negative_invariants"]["cash_before"] == authority_payload["negative_invariants"]["cash_after"]
 
