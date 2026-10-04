@@ -113,9 +113,10 @@ def test_quote_capacity_partial_then_fresh_quote_completes_once(
         "extended_hours_book": session == "EXTENDED",
         "odd_lot_book": session == "ODD_LOT",
     })
-    quote.timestamp = clock["now"] + timedelta(seconds=1)
-    quote.observed_at = clock["now"] + timedelta(seconds=1)
-    clock["now"] = quote.observed_at
+    # Submission happens before an eligible later quote exists, so the real
+    # caller must create a durable PENDING order first.
+    quote.timestamp = clock["now"] - timedelta(seconds=1)
+    quote.observed_at = clock["now"]
 
     p = packet(
         f"TEST_ONLY_{session}_PARTIAL",
@@ -128,10 +129,19 @@ def test_quote_capacity_partial_then_fresh_quote_completes_once(
     p.quantity = 2
     p = sign_cio_packet(p, signer_id="fixture-test-signer")
 
-    first = runner.submit_cio_packet(p, strategy_id=cfg.strategy_id)
-    assert first.action == "BUY_PARTIALLY_FILLED"
+    submitted = runner.submit_cio_packet(p, strategy_id=cfg.strategy_id)
+    assert submitted.action == "BUY_PENDING"
     ledger = pm.get_strategy_ledger(cfg.strategy_id, DecisionScope.SWING)
     order = next(o for o in service.all_orders() if o.strategy_id == cfg.strategy_id)
+    assert order.status == OrderStatus.PENDING
+    assert not ledger.fills
+
+    # First fresh eligible update exposes only one unit of attested capacity.
+    clock["now"] += timedelta(seconds=2)
+    quote.timestamp = clock["now"] - timedelta(seconds=1)
+    quote.observed_at = clock["now"]
+    first_decisions = runner.process_pending_orders()
+    assert [item.action for item in first_decisions] == ["BUY_PARTIALLY_FILLED"]
     assert order.status == OrderStatus.PARTIALLY_FILLED
     assert order.filled_quantity == 1
     assert order.remaining_quantity == 1
@@ -184,6 +194,86 @@ def test_quote_capacity_partial_then_fresh_quote_completes_once(
     ],
     ids=["last-only", "stale", "fallback", "no-bbo-capability"],
 )
+def test_partial_cancel_replace_terminates_old_remainder_and_links_new_order(
+    tmp_path, monkeypatch
+):
+    runner, pm, service, cfg, clock, data, quote = setup_book(
+        tmp_path, monkeypatch, session="REGULAR", size=1
+    )
+    runner.allow_fixture_quotes = True
+    quote.timestamp = clock["now"] - timedelta(seconds=1)
+    quote.observed_at = clock["now"]
+    p = packet(
+        "TEST_ONLY_REPLACE_PARTIAL",
+        NOW,
+        paper_execution_model="QUOTE_BOOK",
+        allow_partial_fills=True,
+    )
+    p.quantity = 2
+    p = sign_cio_packet(p, signer_id="fixture-test-signer")
+    assert runner.submit_cio_packet(p, strategy_id="TEST_ONLY_native").action == "BUY_PENDING"
+
+    clock["now"] += timedelta(seconds=2)
+    quote.timestamp = clock["now"] - timedelta(seconds=1)
+    quote.observed_at = clock["now"]
+    assert [d.action for d in runner.process_pending_orders()] == ["BUY_PARTIALLY_FILLED"]
+    old = next(o for o in service.all_orders() if o.reason.startswith("Main CIO"))
+    assert old.status == OrderStatus.PARTIALLY_FILLED
+    assert old.filled_quantity == 1
+    assert old.remaining_quantity == 1
+
+    replacement = service.cancel_replace(
+        old.order_id,
+        PaperOrderRequest(
+            currency="USD",
+            symbol="MSFT",
+            market="US",
+            bucket=DecisionScope.SWING,
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            quantity=1,
+            limit_price=102,
+            origin=OrderOrigin.MAIN_CIO,
+            strategy_id="TEST_ONLY_native",
+            reason="TEST_ONLY partial remainder replacement",
+            explicit_user_instruction=True,
+            data=PaperDataContext(
+                source="fixture://ISSUE7_REPLACE",
+                observed_at=clock["now"],
+                last_price=101,
+            ),
+        ),
+    )
+    old_after = service.find_order(old.order_id)
+    assert old_after.status == OrderStatus.CANCELLED
+    assert old_after.rejection_reason == "CANCEL_REPLACE"
+    assert replacement.status == OrderStatus.PENDING
+    assert replacement.audit_metadata["replaced_order_id"] == old.order_id
+    assert replacement.audit_metadata["replaced_filled_quantity"] == 1
+    assert replacement.audit_metadata["replaced_remaining_quantity"] == 1
+
+    events = [
+        event for _, event in service.event_store.get_events(limit=1000, strict=True)
+    ]
+    assert any(
+        event.event_type.value == "ORDER_CANCELLED"
+        and event.aggregate_id == old.order_id
+        for event in events
+    )
+    assert any(
+        event.event_type.value == "ORDER_REPLACED"
+        and event.payload["old_order_id"] == old.order_id
+        and event.payload["new_order_id"] == replacement.order_id
+        for event in events
+    )
+    ledger = pm.get_strategy_ledger("TEST_ONLY_native", DecisionScope.SWING)
+    assert len(ledger.fills) == 1
+    cash_after_partial = ledger.cash
+    assert runner.process_pending_orders() == []
+    assert ledger.cash == cash_after_partial
+    assert len(ledger.fills) == 1
+
+
 def test_non_executable_quote_capabilities_never_promote_bar_or_last_to_book(
     tmp_path, monkeypatch, mutator
 ):
