@@ -64,6 +64,60 @@ def test_expiry_aware_option_chain_greeks_and_fail_closed():
     expired=option(expiry=T0-timedelta(seconds=1))
     assert engine.option_chain_snapshot(expired,q(expired),underlying_price=20100,implied_volatility=.22,as_of=T0)["reason"]=="CONTRACT_EXPIRED"
 
+@pytest.mark.parametrize("bad_meta",[
+    {"strike":"not-a-number"},
+    {"strike":{"bad":1}},
+    {"strike":float("nan")},
+    {"expiry":"not-a-date"},
+    {"expiry":{"bad":1}},
+    {"contract_right":"INVALID"},
+    {"contract_right":["CALL"]},
+])
+def test_malformed_contract_metadata_is_bounded_and_never_mutates_ledger(tmp_path,bad_meta):
+    spec=option()
+    engine=PaperDerivativesEngine()
+    malformed=q(spec).model_copy(update={"provenance":{**q(spec).provenance,**bad_meta}})
+    snap=engine.option_chain_snapshot(spec,malformed,underlying_price=20100,
+        implied_volatility=.22,as_of=T0)
+    assert snap["status"]=="UNAVAILABLE"
+    assert snap["reason"]=="CONTRACT_TARGET_MISMATCH"
+
+    svc,pm,store=setup(tmp_path,[spec])
+    before=pm.get_strategy_ledger(SID,BUCKET).cash
+    result=svc.execute(strategy_id=SID,bucket=BUCKET,spec=spec,quote=malformed,
+        side=OrderSide.BUY,quantity=1,order_id="malformed",now=T0)
+    assert result.success is False
+    assert result.rejection_reason=="CONTRACT_TARGET_MISMATCH"
+    ledger=pm.get_strategy_ledger(SID,BUCKET)
+    assert ledger.cash==before and not ledger.positions and store.count()==0
+
+
+def test_option_valuation_can_remain_available_when_session_closed_but_execution_refuses(tmp_path):
+    spec=option()
+    closed=q(spec,session_open=False)
+    snap=PaperDerivativesEngine().option_chain_snapshot(spec,closed,
+        underlying_price=20100,implied_volatility=.22,as_of=T0)
+    assert snap["status"]=="AVAILABLE_TEST_ONLY"
+    assert snap["execution_enabled"] is False
+
+    svc,pm,store=setup(tmp_path,[spec])
+    before=pm.get_strategy_ledger(SID,BUCKET).cash
+    result=svc.execute(strategy_id=SID,bucket=BUCKET,spec=spec,quote=closed,
+        side=OrderSide.BUY,quantity=1,order_id="closed-session",now=T0)
+    assert not result.success and result.rejection_reason=="EXECUTION_SESSION_UNAUTHORIZED"
+    assert pm.get_strategy_ledger(SID,BUCKET).cash==before
+    assert store.count()==0
+
+
+def test_option_chain_naive_as_of_is_explicitly_unavailable():
+    spec=option()
+    result=PaperDerivativesEngine().option_chain_snapshot(spec,q(spec),
+        underlying_price=20100,implied_volatility=.22,
+        as_of=datetime(2026,10,5,1,0))
+    assert result["status"]=="UNAVAILABLE"
+    assert result["reason"]=="AS_OF_TIMEZONE_REQUIRED"
+
+
 @pytest.mark.parametrize("scope",[DecisionScope.SWING,DecisionScope.INTRADAY])
 def test_concrete_per_scope_option_fixture_executes_only_exact_contract(tmp_path,scope):
     spec=option()
