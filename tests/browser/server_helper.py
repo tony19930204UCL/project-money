@@ -501,16 +501,100 @@ async def serve(
         def test_only_order_flow():
             return app.state.test_only_order_flow
 
-        # create_app mounts the SPA at "/" last in production. The helper-only
-        # route above is added afterwards, so keep the catch-all mount last or
-        # Starlette would serve the SPA 404 before this TEST_ONLY endpoint.
+        @app.post("/api/test-only/orders/{order_id}/execute")
+        def test_only_execute_manual_order(
+            order_id: str,
+            quantity: float = 0.0,
+            mode: str = "quote",
+        ):
+            state = app.state.app_state
+            order = state.paper_orders.find_order(order_id)
+            if order is None:
+                return {"status": "NOT_FOUND", "order_id": order_id}
+            if order.origin != OrderOrigin.MANUAL:
+                return {"status": "FORBIDDEN_ORIGIN", "order_id": order_id}
+
+            before_fills = [
+                fill for fill in state.portfolio_manager.get_portfolio(order.bucket).fills
+                if fill.order_id == order_id
+            ]
+            before_cash = state.portfolio_manager.get_portfolio(order.bucket).cash
+
+            if mode == "noquote":
+                prior = state.market_adapter.quote_enabled
+                state.market_adapter.quote_enabled = False
+                try:
+                    quote = state.market_adapter.get_latest_quote(order.symbol)
+                finally:
+                    state.market_adapter.quote_enabled = prior
+                if quote is not None:
+                    raise AssertionError("TEST_ONLY noquote execution unexpectedly found a quote")
+                return {
+                    "status": "PENDING_UNAVAILABLE",
+                    "reason": "WAITING_FOR_EXECUTABLE_QUOTE",
+                    "order_id": order_id,
+                    "order_status": order.status.value,
+                    "fills_before": len(before_fills),
+                    "fills_after": len(before_fills),
+                    "cash_before": before_cash,
+                    "cash_after": before_cash,
+                    "paper_only": True,
+                    "broker_connected": False,
+                }
+
+            remaining = order.remaining_quantity
+            if remaining <= 0:
+                return {
+                    "status": "ALREADY_FILLED",
+                    "order_id": order_id,
+                    "order_status": order.status.value,
+                }
+            fill_quantity = remaining if quantity <= 0 else min(float(quantity), remaining)
+            fill_id = f"TEST_ONLY_UI_FILL_{order_id}_{len(before_fills) + 1}"
+            _fixture_fill(state, order_id, fill_quantity, fill_id)
+            mark = state.market_adapter.get_latest_bar(order.symbol)
+            if mark is not None:
+                state.portfolio_manager.update_mark_to_market(mark)
+            state.runner._persist_portfolios()
+
+            refreshed = state.paper_orders.find_order(order_id)
+            after_fills = [
+                fill.model_dump(mode="json")
+                for fill in state.portfolio_manager.get_portfolio(order.bucket).fills
+                if fill.order_id == order_id
+            ]
+            portfolio = state.portfolio_manager.get_portfolio(order.bucket).model_dump(mode="json")
+            return {
+                "status": refreshed.status.value,
+                "order_id": order_id,
+                "order": refreshed.model_dump(mode="json"),
+                "fills": after_fills,
+                "portfolio": portfolio,
+                "paper_only": True,
+                "broker_connected": False,
+            }
+
+        # create_app mounts StaticFiles at the root catch-all. Starlette reports
+        # that mount path as "" on the live router, so match both spellings and
+        # keep the UI mount after helper-only API routes.
         root_mount = next(
             (
                 route for route in app.router.routes
-                if getattr(route, "path", None) == "/" and route.__class__.__name__ == "Mount"
+                if route.__class__.__name__ == "Mount"
+                and getattr(route, "path", None) in {"", "/"}
+                and getattr(route, "name", None) == "ui"
             ),
             None,
         )
+        if root_mount is None:
+            root_mount = next(
+                (
+                    route for route in app.router.routes
+                    if route.__class__.__name__ == "Mount"
+                    and getattr(route, "path", None) in {"", "/"}
+                ),
+                None,
+            )
         if root_mount is not None:
             app.router.routes.remove(root_mount)
             app.router.routes.append(root_mount)
