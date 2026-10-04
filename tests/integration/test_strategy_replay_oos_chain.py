@@ -6,6 +6,7 @@ evidence only and never live strategy approval or capital authority.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -227,8 +228,12 @@ def test_frozen_replay_and_real_paper_next_bar_path_align_on_economics(tmp_path)
         selected_instrument="MSFT",
         action="BUY",
         quantity=1,
+        strategy_version="1",
         is_fixture=True,
-        conditions={"paper_execution_model": "NEXT_BAR_OPEN"},
+        conditions={
+            "paper_execution_model": "NEXT_BAR_OPEN",
+            "strategy_config": config,
+        },
     )
     p = sign_cio_packet(p, signer_id="fixture-test-signer")
     submitted = paper.submit_cio_packet(p, strategy_id="TEST_ONLY_native")
@@ -243,7 +248,15 @@ def test_frozen_replay_and_real_paper_next_bar_path_align_on_economics(tmp_path)
     paper_fill = paper_ledger.fills[0]
     paper_order = paper_service.all_orders()[0]
 
-    assert paper_order.symbol == replay_order.symbol == "MSFT"
+    replay_signal = replay._order_signals[replay_order.order_id]
+    expected_config_hash = hashlib.sha256(
+        json.dumps(config, sort_keys=True).encode()
+    ).hexdigest()
+    assert replay_signal.version == p.strategy_version == "1"
+    assert replay_signal.config_hash == expected_config_hash
+    assert p.conditions["strategy_config"] == config
+    assert paper_order.strategy_version == "1"
+    assert replay_order.symbol == paper_order.symbol == "MSFT"
     assert paper_order.side == replay_order.side == OrderSide.BUY
     assert paper_order.quantity == replay_order.quantity == 1
     assert paper_fill.quantity == replay_buy.quantity == 1
