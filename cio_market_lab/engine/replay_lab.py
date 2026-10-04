@@ -6,7 +6,7 @@ receipts. This lab cannot manufacture Main CIO BUY decisions or production fills
 """
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 import hashlib
 import json
@@ -288,3 +288,220 @@ def walk_forward_replay(bars: list[Bar], symbol: str, currency: str, initial_cas
     (output_dir / 'walk_forward_result.json').write_text(json.dumps(report, indent=2) + '\n')
     return report
 
+
+
+def validation_selected_oos(
+    bars: list[Bar],
+    symbol: str,
+    currency: str,
+    initial_cash: float,
+    candidate_configs: list[dict[str, Any]],
+    output_dir: Path,
+    *,
+    train_fraction: float = 0.60,
+    validation_fraction: float = 0.20,
+    allow_test_only: bool = False,
+    fit_inputs: list[dict[str, Any]] | None = None,
+    selection_inputs: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Select on validation only, then evaluate untouched OOS exactly once.
+
+    TEST_ONLY fixtures require explicit opt-in and remain permanently marked as
+    non-live evidence. No holdout result is available to configuration selection.
+    """
+    import inspect
+    if any(b.symbol != symbol for b in bars):
+        raise ValueError("SOURCE_SYMBOL_MISMATCH")
+    expected_currency = "TWD" if symbol.endswith((".TW", ".TWO")) else "USD"
+    if currency != expected_currency:
+        raise ValueError("SOURCE_SYMBOL_OR_NATIVE_CURRENCY_MISMATCH")
+    if not math.isfinite(initial_cash) or initial_cash <= 0:
+        raise ValueError("INVALID_PAPER_INITIAL_CASH")
+    if len(bars) < 30:
+        return {
+            "status": "UNAVAILABLE",
+            "reason": "INSUFFICIENT_HELDOUT_WINDOW",
+            "live_approved": False,
+            "completion_claim_allowed": False,
+        }
+    if any(a.timestamp >= b.timestamp for a, b in zip(bars, bars[1:])):
+        raise ValueError("DUPLICATE_OR_NONCHRONOLOGICAL_BARS")
+    if any(b.is_synthetic for b in bars):
+        raise ValueError("SYNTHETIC_SOURCE_FORBIDDEN")
+    if any(b.is_fixture for b in bars) and not allow_test_only:
+        raise ValueError("TEST_ONLY_SOURCE_REQUIRES_EXPLICIT_OPT_IN")
+    if not candidate_configs:
+        raise ValueError("NO_CANDIDATE_CONFIGS")
+    if not 0 < train_fraction < 1 or not 0 < validation_fraction < 1:
+        raise ValueError("INVALID_OOS_SPLIT")
+    if train_fraction + validation_fraction >= 1:
+        raise ValueError("INVALID_OOS_SPLIT")
+
+    n = len(bars)
+    train_end = int(n * train_fraction)
+    validation_end = int(n * (train_fraction + validation_fraction))
+    train = bars[:train_end]
+    validation = bars[train_end:validation_end]
+    holdout = bars[validation_end:]
+    if not train or not validation or not holdout:
+        return {
+            "status": "UNAVAILABLE",
+            "reason": "INSUFFICIENT_HELDOUT_WINDOW",
+            "live_approved": False,
+            "completion_claim_allowed": False,
+        }
+
+    allowed = {"fast", "slow", "fast_period", "slow_period"}
+    normalized: list[dict[str, int]] = []
+    for item in candidate_configs:
+        if set(item) - allowed:
+            raise ValueError("INVALID_FROZEN_CONFIG_KEYS")
+        if ("fast" in item and "fast_period" in item) or ("slow" in item and "slow_period" in item):
+            raise ValueError("INVALID_FROZEN_CONFIG_KEYS")
+        fast = item.get("fast", item.get("fast_period", 5))
+        slow = item.get("slow", item.get("slow_period", 20))
+        if type(fast) is not int or type(slow) is not int or not 2 <= fast < slow <= 200:
+            raise ValueError("INVALID_FROZEN_CONFIG")
+        normalized.append({"fast": fast, "slow": slow})
+    max_slow = max(item["slow"] for item in normalized)
+    if min(len(train), len(validation), len(holdout)) < max_slow + 2:
+        return {
+            "status": "UNAVAILABLE",
+            "reason": "INSUFFICIENT_HELDOUT_WINDOW",
+            "live_approved": False,
+            "completion_claim_allowed": False,
+        }
+
+    train_end_ts = train[-1].timestamp
+    for item in fit_inputs or []:
+        available_at = item.get("available_at")
+        if not isinstance(available_at, datetime) or available_at.tzinfo is None:
+            raise ValueError("FIT_INPUT_TIMESTAMP_REQUIRED")
+        if available_at > train_end_ts:
+            raise ValueError("FUTURE_TRAINING_INPUT_FORBIDDEN")
+
+    validation_end_ts = validation[-1].timestamp
+    for item in selection_inputs or []:
+        available_at = item.get("available_at")
+        if not isinstance(available_at, datetime):
+            raise ValueError("SELECTION_INPUT_TIMESTAMP_REQUIRED")
+        if available_at.tzinfo is None:
+            raise ValueError("SELECTION_INPUT_TIMESTAMP_REQUIRED")
+        if available_at > validation_end_ts:
+            raise ValueError("FUTURE_SELECTION_INPUT_FORBIDDEN")
+
+    source_tags = sorted({b.source for b in bars})
+    if len(source_tags) != 1:
+        raise ValueError("MIXED_SOURCE_TAGS_FORBIDDEN")
+    source_blob = json.dumps([b.model_dump(mode="json") for b in bars], sort_keys=True)
+    source_hash = hashlib.sha256(source_blob.encode()).hexdigest()
+    strategy_source = inspect.getsource(FrozenMACrossover)
+    strategy_code_hash = hashlib.sha256(strategy_source.encode()).hexdigest()
+    costs = ExecutionCostConfig()
+
+    def evaluate(config: dict[str, int], warmup: list[Bar], evaluation: list[Bar], label: str) -> dict[str, Any]:
+        run_dir = Path(output_dir) / label
+        run_dir.mkdir(parents=True, exist_ok=False)
+        store = NativeReplayEventStore(run_dir / "events.sqlite", currency)
+        engine = NativeCurrencyReplayEngine(
+            store,
+            currency=currency,
+            cost_config=costs,
+            initial_cash_swing=initial_cash,
+            initial_cash_intraday=0,
+            reject_stale_bars=False,
+            default_order_shares=1,
+        )
+        engine.bars_history[symbol] = list(warmup[-(config["slow"] + 1):])
+        result = engine.run(evaluation, [FrozenMACrossover(config)])
+        ledger = engine.portfolio_manager.get_ledger(DecisionScope.SWING)
+        return {
+            "bar_count": len(evaluation),
+            "first_timestamp": evaluation[0].timestamp.isoformat(),
+            "last_timestamp": evaluation[-1].timestamp.isoformat(),
+            "orders": result.total_orders,
+            "fills": result.total_fills,
+            "positions": {
+                key: value.model_dump(mode="json") for key, value in ledger.positions.items()
+            },
+            "native_cash": ledger.cash,
+            "native_nav": ledger.equity,
+            "net_return_pct": (ledger.equity / initial_cash - 1) * 100,
+            "deterministic": result.is_deterministic,
+        }
+
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    candidate_rows = []
+    for index, config in enumerate(normalized):
+        train_result = evaluate(config, [], train, f"candidate-{index}-train")
+        validation_result = evaluate(
+            config, train, validation, f"candidate-{index}-validation"
+        )
+        candidate_rows.append({
+            "config": config,
+            "train": train_result,
+            "validation": validation_result,
+        })
+
+    selected_index = max(
+        range(len(candidate_rows)),
+        key=lambda i: (
+            candidate_rows[i]["validation"]["net_return_pct"],
+            -i,
+        ),
+    )
+    selected = candidate_rows[selected_index]
+    frozen_config = dict(selected["config"])
+
+    # Holdout is touched exactly once, only after the selection result is frozen.
+    holdout_result = evaluate(
+        frozen_config,
+        train + validation,
+        holdout,
+        "final-holdout-oos",
+    )
+    report = {
+        "status": "COMPLETE_TEST_ONLY" if any(b.is_fixture for b in bars) else "COMPLETE",
+        "strategy_id": "frozen_ma_replay",
+        "strategy_version": "1",
+        "strategy_code_hash": strategy_code_hash,
+        "data_source_tag": source_tags[0],
+        "source_sha256": source_hash,
+        "data_range": {
+            "start": bars[0].timestamp.isoformat(),
+            "end": bars[-1].timestamp.isoformat(),
+        },
+        "train_range": {
+            "start": train[0].timestamp.isoformat(),
+            "end": train[-1].timestamp.isoformat(),
+        },
+        "validation_range": {
+            "start": validation[0].timestamp.isoformat(),
+            "end": validation[-1].timestamp.isoformat(),
+        },
+        "oos_range": {
+            "start": holdout[0].timestamp.isoformat(),
+            "end": holdout[-1].timestamp.isoformat(),
+        },
+        "cost_assumptions": {
+            "slippage_bps": costs.slippage_bps,
+            "fee_rate_tw": costs.fee_rate_tw,
+            "fee_rate_us": costs.fee_rate_us,
+            "min_fee_tw": costs.min_fee_tw,
+            "min_fee_us": costs.min_fee_us,
+        },
+        "candidate_results": candidate_rows,
+        "selected_config": frozen_config,
+        "selection_metric": "VALIDATION_NET_RETURN_ONLY",
+        "selection_frozen_before_oos": True,
+        "oos_evaluation_count": 1,
+        "oos": holdout_result,
+        "live_approved": False,
+        "completion_claim_allowed": False,
+        "evidence_scope": "TEST_ONLY_RETROSPECTIVE" if any(b.is_fixture for b in bars) else AUTHORITY,
+    }
+    (Path(output_dir) / "validation_selected_oos.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return report
