@@ -64,6 +64,8 @@ def read_learning_snapshot(runtime_dir, *, as_of=None, symbols=None, limit=200):
             "analysis_reference":conditions.get("analysis_reference"),
             "packet_provenance":row.get("packet_provenance") or {key:value for key,value in (packet.get("provenance") or {}).items() if key in ("authority", "actor_role", "source", "receipt_id", "signer_id", "verified_by_worker")},
             "applied_lesson_ids":row.get("applied_lesson_ids", []),
+            "lesson_used":bool(row.get("applied_lesson_ids", [])),
+            "decision_delta":row.get("decision_delta", {}),
             "lessons":row.get("lessons", []), "outcome":outcome,
             "no_trade_pnl":outcome.get("realized_pnl") if packet.get("action")=="NO_TRADE" and isinstance(outcome,dict) else None,
         })
