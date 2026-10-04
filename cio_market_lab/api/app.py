@@ -807,6 +807,34 @@ def create_app(
         all_fills = [f.model_dump() for f in swing.fills] + [f.model_dump() for f in intraday.fills]
         return all_fills
 
+    @app.get("/api/paper/readback", tags=["Paper Trade"])
+    def paper_readback() -> Dict[str, Any]:
+        """Read-only canonical paper orders/fills across native and strategy ledgers."""
+        st = app.state.app_state
+        orders = [order.model_dump(mode="json") for order in st.paper_orders.all_orders()]
+        fills: List[Dict[str, Any]] = []
+        seen_fill_ids: set[str] = set()
+        for bucket in (DecisionScope.SWING, DecisionScope.INTRADAY):
+            portfolio = st.portfolio_manager.get_portfolio(bucket)
+            for fill in portfolio.fills:
+                if fill.fill_id not in seen_fill_ids:
+                    seen_fill_ids.add(fill.fill_id)
+                    fills.append(fill.model_dump(mode="json"))
+        for strategy_id in st.portfolio_manager.strategy_ids():
+            for portfolio in st.portfolio_manager.get_all_strategy_portfolios(strategy_id).values():
+                for fill in portfolio.fills:
+                    if fill.fill_id not in seen_fill_ids:
+                        seen_fill_ids.add(fill.fill_id)
+                        row = fill.model_dump(mode="json")
+                        row["strategy_id"] = strategy_id
+                        fills.append(row)
+        return {
+            "orders": orders,
+            "fills": fills,
+            "paper_only": True,
+            "broker_connected": False,
+        }
+
     # --- Guarded local paper orders ---
     @app.get("/api/paper/orders", tags=["Paper Trade"])
     def list_paper_orders() -> List[Dict[str, Any]]:
