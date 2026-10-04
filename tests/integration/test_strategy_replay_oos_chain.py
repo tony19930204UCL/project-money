@@ -90,11 +90,15 @@ def _fresh_app(workspace_root: Path, runtime_dir: Path) -> dict:
             "--runtime-dir",
             str(runtime_dir),
         ],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
         timeout=30,
     )
+    if proc.returncode != 0:
+        raise AssertionError(
+            f"fresh AppState helper failed rc={proc.returncode}: {proc.stderr}"
+        )
     return json.loads(proc.stdout.splitlines()[-1])
 
 
