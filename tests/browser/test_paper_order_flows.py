@@ -168,7 +168,162 @@ def test_manual_ui_preview_confirm_cancel_replace_and_rejections(
         assert replacement["quantity"] == 2
         assert replacement["audit_metadata"]["replaced_order_id"] == old["order_id"]
 
-        stable_count = len(replaced["orders"])
+        # A MANUAL order created through the real UI must itself advance through
+        # partial -> full execution. Pre-seeded readback fills are not accepted
+        # as proof for this flow.
+        execution_before = _canonical(page, base_url)
+        execution_position_before = execution_before["portfolio"]["swing"]["positions"]["2330.TW"]["quantity"]
+        execution_cash_before = execution_before["portfolio"]["swing"]["cash"]
+
+        _set_manual_form(
+            page,
+            quantity="2",
+            reason="TEST_ONLY_UI_EXECUTION",
+            order_type="LIMIT",
+            data_state="fresh",
+            limit_price="101",
+        )
+        assert '"status": "APPROVED"' in _preview(page)
+        page.get_by_role("button", name="Confirm paper order", exact=True).click()
+        page.get_by_role("status").filter(has_text="CONFIRMED").wait_for(timeout=5_000)
+        execution_submitted = _canonical(page, base_url)
+        ui_execution = next(
+            item for item in execution_submitted["orders"]
+            if item["reason"] == "TEST_ONLY_UI_EXECUTION"
+        )
+        action_order_ids["ui_execution"] = ui_execution["order_id"]
+        assert ui_execution["origin"] == "MANUAL"
+        assert ui_execution["status"] == "PENDING"
+        assert not [
+            fill for fill in execution_submitted["fills"]
+            if fill["order_id"] == ui_execution["order_id"]
+        ]
+
+        partial_response = page.request.post(
+            f"{base_url}/api/test-only/orders/{ui_execution['order_id']}/execute?quantity=1&mode=quote"
+        )
+        assert partial_response.status == 200
+        partial_payload = partial_response.json()
+        assert partial_payload["status"] == "PARTIALLY_FILLED"
+        assert partial_payload["order_id"] == ui_execution["order_id"]
+        assert len(partial_payload["fills"]) == 1
+        assert partial_payload["fills"][0]["quantity"] == 1.0
+
+        page.get_by_role("button", name="Portfolio", exact=True).click()
+        portfolio_view = page.locator('[data-workspace-view="portfolio"]')
+        portfolio_view.wait_for(state="visible", timeout=5_000)
+        page.get_by_role("button", name="Paper Trade", exact=True).click()
+        view = page.locator('[data-workspace-view="paper-trade"]')
+        view.wait_for(state="visible", timeout=5_000)
+        partial_row = page.locator(f'tr[data-order-id="{ui_execution["order_id"]}"]')
+        assert "PARTIALLY_FILLED" in partial_row.inner_text()
+        assert "TEST_ONLY_UI_FILL_" in partial_row.inner_text()
+
+        partial = _canonical(page, base_url)
+        partial_order = next(
+            item for item in partial["orders"]
+            if item["order_id"] == ui_execution["order_id"]
+        )
+        partial_fills = [
+            fill for fill in partial["fills"]
+            if fill["order_id"] == ui_execution["order_id"]
+        ]
+        assert partial_order["status"] == "PARTIALLY_FILLED"
+        assert len(partial_fills) == 1
+        assert sum(fill["quantity"] for fill in partial_fills) == 1.0
+        assert partial["portfolio"]["swing"]["positions"]["2330.TW"]["quantity"] == execution_position_before + 1.0
+        assert partial["portfolio"]["swing"]["cash"] < execution_cash_before
+        assert any(
+            item["event"]["event_type"] == "ORDER_FILLED"
+            and item["event"]["aggregate_id"] == ui_execution["order_id"]
+            for item in partial["events"]["events"]
+        )
+
+        full_response = page.request.post(
+            f"{base_url}/api/test-only/orders/{ui_execution['order_id']}/execute?quantity=1&mode=quote"
+        )
+        assert full_response.status == 200
+        full_payload = full_response.json()
+        assert full_payload["status"] == "FILLED"
+        assert full_payload["order_id"] == ui_execution["order_id"]
+        assert len(full_payload["fills"]) == 2
+
+        page.get_by_role("button", name="Portfolio", exact=True).click()
+        portfolio_view = page.locator('[data-workspace-view="portfolio"]')
+        portfolio_view.wait_for(state="visible", timeout=5_000)
+        portfolio_text = portfolio_view.locator(".pm-data-card pre").inner_text()
+        assert "2330.TW" in portfolio_text
+        page.get_by_role("button", name="Paper Trade", exact=True).click()
+        view = page.locator('[data-workspace-view="paper-trade"]')
+        view.wait_for(state="visible", timeout=5_000)
+        full_row = page.locator(f'tr[data-order-id="{ui_execution["order_id"]}"]')
+        assert "FILLED" in full_row.inner_text()
+        assert full_row.inner_text().count("TEST_ONLY_UI_FILL_") == 2
+
+        fully_filled = _canonical(page, base_url)
+        fully_filled_order = next(
+            item for item in fully_filled["orders"]
+            if item["order_id"] == ui_execution["order_id"]
+        )
+        fully_filled_receipts = [
+            fill for fill in fully_filled["fills"]
+            if fill["order_id"] == ui_execution["order_id"]
+        ]
+        assert fully_filled_order["status"] == "FILLED"
+        assert len(fully_filled_receipts) == 2
+        assert sum(fill["quantity"] for fill in fully_filled_receipts) == 2.0
+        assert fully_filled["portfolio"]["swing"]["positions"]["2330.TW"]["quantity"] == execution_position_before + 2.0
+        assert fully_filled["portfolio"]["swing"]["cash"] < partial["portfolio"]["swing"]["cash"]
+        assert sum(
+            1 for item in fully_filled["events"]["events"]
+            if item["event"]["event_type"] == "ORDER_FILLED"
+            and item["event"]["aggregate_id"] == ui_execution["order_id"]
+        ) == 2
+
+        # No-quote is a distinct pending/unavailable execution state. Create
+        # the order through UI, then prove the TEST_ONLY executor cannot fill it.
+        _set_manual_form(
+            page,
+            quantity="1",
+            reason="TEST_ONLY_UI_NOQUOTE_PENDING",
+            order_type="LIMIT",
+            data_state="noquote",
+            limit_price="101",
+        )
+        noquote_preview = _preview(page)
+        assert '"status": "APPROVED"' in noquote_preview
+        page.get_by_role("button", name="Confirm paper order", exact=True).click()
+        page.get_by_role("status").filter(has_text="CONFIRMED").wait_for(timeout=5_000)
+        noquote_before = _canonical(page, base_url)
+        noquote_order = next(
+            item for item in noquote_before["orders"]
+            if item["reason"] == "TEST_ONLY_UI_NOQUOTE_PENDING"
+        )
+        action_order_ids["ui_noquote_pending"] = noquote_order["order_id"]
+        assert noquote_order["status"] == "PENDING"
+        noquote_fill_ids_before = [fill["fill_id"] for fill in noquote_before["fills"]]
+        noquote_cash_before = noquote_before["portfolio"]["swing"]["cash"]
+
+        noquote_response = page.request.post(
+            f"{base_url}/api/test-only/orders/{noquote_order['order_id']}/execute?mode=noquote"
+        )
+        assert noquote_response.status == 200
+        noquote_payload = noquote_response.json()
+        assert noquote_payload["status"] == "PENDING_UNAVAILABLE"
+        assert noquote_payload["reason"] == "WAITING_FOR_EXECUTABLE_QUOTE"
+        assert noquote_payload["order_status"] == "PENDING"
+        assert noquote_payload["fills_before"] == noquote_payload["fills_after"] == 0
+        assert noquote_payload["cash_before"] == noquote_payload["cash_after"]
+
+        noquote_after = _canonical(page, base_url)
+        assert [fill["fill_id"] for fill in noquote_after["fills"]] == noquote_fill_ids_before
+        assert noquote_after["portfolio"]["swing"]["cash"] == noquote_cash_before
+        assert next(
+            item for item in noquote_after["orders"]
+            if item["order_id"] == noquote_order["order_id"]
+        )["status"] == "PENDING"
+
+        stable_count = len(noquote_after["orders"])
         forbidden_baseline_fill_ids = [item["fill_id"] for item in replaced["fills"]]
         forbidden_baseline_cash = replaced["portfolio"]["swing"]["cash"]
         _set_manual_form(page, quantity="0", reason="TEST_ONLY_INVALID_QUANTITY")
@@ -254,6 +409,25 @@ def test_manual_ui_preview_confirm_cancel_replace_and_rejections(
             ),
             "canonical_event_types": (
                 [item["event"]["event_type"] for item in canonical_after["events"]["events"]]
+                if canonical_after is not None else None
+            ),
+            "ui_execution_order_id": action_order_ids.get("ui_execution"),
+            "ui_noquote_order_id": action_order_ids.get("ui_noquote_pending"),
+            "ui_execution_fill_ids": (
+                [
+                    item["fill_id"] for item in canonical_after["fills"]
+                    if item["order_id"] == action_order_ids.get("ui_execution")
+                ]
+                if canonical_after is not None else None
+            ),
+            "ui_noquote_status": (
+                next(
+                    (
+                        item["status"] for item in canonical_after["orders"]
+                        if item["order_id"] == action_order_ids.get("ui_noquote_pending")
+                    ),
+                    None,
+                )
                 if canonical_after is not None else None
             ),
             "console_errors": console_errors,
