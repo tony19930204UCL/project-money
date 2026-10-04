@@ -828,9 +828,23 @@ def create_app(
                         row = fill.model_dump(mode="json")
                         row["strategy_id"] = strategy_id
                         fills.append(row)
+        portfolios = {
+            "global": {
+                bucket.value: st.portfolio_manager.get_portfolio(bucket).model_dump(mode="json")
+                for bucket in (DecisionScope.SWING, DecisionScope.INTRADAY)
+            },
+            "strategies": {
+                strategy_id: {
+                    bucket.value: portfolio.model_dump(mode="json")
+                    for bucket, portfolio in st.portfolio_manager.get_all_strategy_portfolios(strategy_id).items()
+                }
+                for strategy_id in st.portfolio_manager.strategy_ids()
+            },
+        }
         return {
             "orders": orders,
             "fills": fills,
+            "portfolios": portfolios,
             "paper_only": True,
             "broker_connected": False,
         }
