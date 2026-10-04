@@ -311,7 +311,7 @@ def test_durable_strategy_version_hot_swap_and_rollback_preserve_execution_state
         current = state.paper_orders.find_order(pending.order_id)
         assert current.model_dump(mode="json") == order_snapshot
         assert ledger.cash == cash_snapshot
-        assert ledger.positions["MSFT"].model_dump(mode="json") == position_snapshot
+        assert ledger.positions["2330.TW"].model_dump(mode="json") == position_snapshot
         assert [fill.fill_id for fill in ledger.fills] == fill_ids_snapshot
 
         state.runner._persist_portfolios()
@@ -358,7 +358,7 @@ def test_durable_strategy_version_hot_swap_and_rollback_preserve_execution_state
         current = state.paper_orders.find_order(pending.order_id)
         assert current.model_dump(mode="json") == order_snapshot
         assert ledger.cash == cash_snapshot
-        assert ledger.positions["MSFT"].model_dump(mode="json") == position_snapshot
+        assert ledger.positions["2330.TW"].model_dump(mode="json") == position_snapshot
         assert [fill.fill_id for fill in ledger.fills] == fill_ids_snapshot
 
         state.runner._persist_portfolios()
