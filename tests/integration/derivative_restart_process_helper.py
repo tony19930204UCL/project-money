@@ -31,7 +31,7 @@ def quote(symbol,when,bid,ask,**extra):
         last_price=(bid+ask)/2,is_fixture=True,source="TEST_ONLY_DERIVATIVE_BOOK",provenance=provenance)
 
 def build(runtime,kind):
-    store=EventStore(Path(runtime)/"events.sqlite")
+    store=EventStore(Path(runtime)/"events.db")
     pm=PortfolioManager()
     pm.register_strategy(SID,1_000_000,currency="TWD",unified_cash=True)
     orders=PaperOrderService(pm,store)
