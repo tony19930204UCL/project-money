@@ -72,6 +72,21 @@ class TestOnlyMarketAdapter:
         return [
             Bar(
                 symbol=symbol,
+                timestamp=now - timedelta(minutes=10),
+                observed_at=observed,
+                open=98.0,
+                high=100.0,
+                low=97.5,
+                close=99.0,
+                volume=900,
+                source=self.source_name,
+                quality="TEST_ONLY",
+                is_stale=stale,
+                is_fixture=True,
+                is_synthetic=False,
+            ),
+            Bar(
+                symbol=symbol,
                 timestamp=now - timedelta(minutes=5),
                 observed_at=observed,
                 open=99.0,
@@ -84,7 +99,7 @@ class TestOnlyMarketAdapter:
                 is_stale=stale,
                 is_fixture=True,
                 is_synthetic=False,
-            )
+            ),
         ]
 
     def stream_bars(self, symbols):
@@ -101,7 +116,7 @@ class TestOnlyMarketAdapter:
             return None
         now = self._now()
         stale = symbol == "STALE.TW"
-        observed = now - (timedelta(hours=2) if stale else timedelta(seconds=2))
+        observed = now - timedelta(hours=2) if stale else now
         return Quote(
             symbol=symbol,
             timestamp=observed,
@@ -260,24 +275,24 @@ def _seed_order_flow_fixtures(state) -> dict:
             max_position_notional=100_000.0,
             allowed_buckets=[DecisionScope.SWING],
         ))
-        if "TEST_ONLY_STRATEGY_ORDER" not in existing:
-            order = state.paper_orders.submit(PaperOrderRequest(
-                currency="TWD",
-                symbol="2330.TW",
-                market="TW",
-                bucket=DecisionScope.SWING,
-                side=OrderSide.BUY,
-                order_type=OrderType.LIMIT,
-                quantity=1.0,
-                limit_price=101.0,
-                origin=OrderOrigin.STRATEGY,
-                reason="TEST_ONLY registry-backed strategy readback",
-                strategy_id=reg.id,
-                strategy_version=reg.version,
-                audit_metadata={"is_fixture": True, "fixture_receipt": "TEST_ONLY_STRATEGY_ORDER"},
-                data=PaperDataContext(source="fixture://TEST_ONLY_STRATEGY_ORDER", last_price=100.0),
-            ))
-            _fixture_fill(state, order.order_id, 1.0, "TEST_ONLY_FILL_STRATEGY", strategy_id=reg.id)
+        if not any(order.origin == OrderOrigin.STRATEGY and order.strategy_id == reg.id for order in state.paper_orders.all_orders()):
+            cycle = state.runner.run_one_cycle(reg.id, symbols=["2330.TW"])
+            strategy_orders = [
+                order for order in state.paper_orders.all_orders()
+                if order.origin == OrderOrigin.STRATEGY and order.strategy_id == reg.id
+            ]
+            if not strategy_orders:
+                raise AssertionError(f"TEST_ONLY strategy runner did not create order: {cycle}")
+            strategy_order = strategy_orders[-1]
+            strategy_order.audit_metadata["fixture_receipt"] = "TEST_ONLY_STRATEGY_ORDER"
+            if not any(fill.order_id == strategy_order.order_id for fill in state.portfolio_manager.get_strategy_portfolio(reg.id, DecisionScope.SWING).fills):
+                _fixture_fill(
+                    state,
+                    strategy_order.order_id,
+                    min(1.0, strategy_order.quantity),
+                    "TEST_ONLY_FILL_STRATEGY",
+                    strategy_id=reg.id,
+                )
 
     state.runner.configure(PaperExperimentSettings(
         strategy_id=DYNAMIC_DESK_ID,
