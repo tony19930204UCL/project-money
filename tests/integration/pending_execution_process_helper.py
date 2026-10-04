@@ -23,9 +23,7 @@ from cio_market_lab.engine.cio_packet import sign_cio_packet
 from cio_market_lab.engine.corporate_actions import CorporateAction, PaperCorporateActions
 from cio_market_lab.engine.paper_orders import PaperExperimentSettings
 
-US_STRATEGY = "TEST_ONLY_RESTART_US"
 TW_STRATEGY = "TEST_ONLY_RESTART_TW"
-US_CASE = "TEST_ONLY_RESTART_US_CASE"
 TW_CASE = "TEST_ONLY_RESTART_TW_CASE"
 ACTION_ID = "TEST_ONLY_RESTART_DIVIDEND"
 
@@ -166,27 +164,9 @@ def _build(workspace_root: Path, runtime_dir: Path, control_path: Path):
 
 
 def _snapshot(state, decisions=None, corporate_changed=None) -> dict:
-    strategies = {}
-    for strategy_id in (US_STRATEGY, TW_STRATEGY):
-        ledger = state.portfolio_manager.get_strategy_ledger(
-            strategy_id, DecisionScope.SWING
-        )
-        strategies[strategy_id] = {
-            "currency": ledger.currency,
-            "cash": ledger.cash,
-            "equity": ledger.equity,
-            "realized_pnl": ledger.realized_pnl,
-            "positions": {
-                symbol: position.model_dump(mode="json")
-                for symbol, position in ledger.positions.items()
-            },
-            "orders": [
-                order.model_dump(mode="json") for order in ledger.orders
-            ],
-            "fills": [
-                fill.model_dump(mode="json") for fill in ledger.fills
-            ],
-        }
+    ledger = state.portfolio_manager.get_strategy_ledger(
+        TW_STRATEGY, DecisionScope.SWING
+    )
     corporate_events = state.event_store.get_events(
         event_type=EventType.CORPORATE_ACTION_APPLIED,
         limit=1000,
@@ -199,24 +179,25 @@ def _snapshot(state, decisions=None, corporate_changed=None) -> dict:
         "corporate_changed": corporate_changed,
         "event_count": state.event_store.count(),
         "corporate_event_ids": [event.event_id for _, event in corporate_events],
-        "strategies": strategies,
+        "strategy": {
+            "strategy_id": TW_STRATEGY,
+            "currency": ledger.currency,
+            "cash": ledger.cash,
+            "equity": ledger.equity,
+            "realized_pnl": ledger.realized_pnl,
+            "positions": {
+                symbol: position.model_dump(mode="json")
+                for symbol, position in ledger.positions.items()
+            },
+            "orders": [order.model_dump(mode="json") for order in ledger.orders],
+            "fills": [fill.model_dump(mode="json") for fill in ledger.fills],
+        },
     }
 
 
 def _seed(workspace_root: Path, runtime_dir: Path, control_path: Path) -> dict:
     app, state, adapter = _build(workspace_root, runtime_dir, control_path)
     try:
-        state.runner.configure(PaperExperimentSettings(
-            strategy_id=US_STRATEGY,
-            enabled=True,
-            market="US",
-            base_currency="USD",
-            reporting_currency="USD",
-            initial_cash=10_000,
-            max_position_notional=5_000,
-            universe=["MSFT"],
-            paper_execution_model="QUOTE_BOOK",
-        ))
         state.runner.configure(PaperExperimentSettings(
             strategy_id=TW_STRATEGY,
             enabled=True,
@@ -229,17 +210,13 @@ def _seed(workspace_root: Path, runtime_dir: Path, control_path: Path) -> dict:
             paper_execution_model="QUOTE_BOOK",
         ))
         now = adapter.now()
-        us = state.runner.submit_cio_packet(
-            _packet(US_CASE, "MSFT", now),
-            strategy_id=US_STRATEGY,
-        )
         tw = state.runner.submit_cio_packet(
             _packet(TW_CASE, "2330.TW", now, odd_lot=True),
             strategy_id=TW_STRATEGY,
         )
-        if us.action != "BUY_PENDING" or tw.action != "BUY_PENDING":
+        if tw.action != "BUY_PENDING":
             raise AssertionError(
-                f"seed must create pending orders through real admission: {us.action}, {tw.action}"
+                f"seed must create pending order through real admission: {tw.action}"
             )
         state.runner._persist_portfolios()
         return _snapshot(state)
