@@ -110,3 +110,101 @@ def test_native_cash_restore_currency_mismatch_fails_closed(tmp_path):
     runner.paper_orders = PaperOrderService(pm, EventStore(":memory:")); runner._path = lambda name: tmp_path / name
     with pytest.raises(ValueError, match="PORTFOLIO_RESTORE_FAIL_CLOSED"):
         runner._restore_portfolios()
+
+
+def test_restore_preserves_terminal_order_status_and_persisted_spot_marks(tmp_path):
+    """Regression: restart must not mutate final order state or drop evidenced NAV marks."""
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from cio_market_lab.domain.models import Fill, Order, OrderSide, OrderStatus
+    from cio_market_lab.engine.paper_orders import PaperOrderService
+    from cio_market_lab.engine.portfolio import PortfolioManager
+    from cio_market_lab.events.store import EventStore
+
+    pm = PortfolioManager(initial_cash_swing=1000, initial_cash_intraday=1000)
+    service = PaperOrderService(pm, EventStore(":memory:"))
+    writer = AutonomousPaperRunner.__new__(AutonomousPaperRunner)
+    writer._runtime_dir = tmp_path
+    writer.is_read_only = False
+    writer.portfolio_manager = pm
+    writer.paper_orders = service
+    writer.corporate_actions = PaperCorporateActions(pm, service.event_store)
+    writer._atomic_json = lambda name, payload: (tmp_path / name).write_text(json.dumps(payload))
+
+    filled_order = Order(
+        order_id="TEST_ONLY_restore_filled",
+        currency="TWD",
+        symbol="2330.TW",
+        market="TW",
+        bucket="swing",
+        side="BUY",
+        order_type="LIMIT",
+        quantity=2,
+        limit_price=110,
+        origin="MANUAL",
+        reason="TEST_ONLY terminal status restore",
+    )
+    pm.add_order(filled_order)
+    fill = Fill(
+        fill_id="TEST_ONLY_restore_fill",
+        order_id=filled_order.order_id,
+        currency="TWD",
+        symbol="2330.TW",
+        bucket="swing",
+        side=OrderSide.BUY,
+        quantity=2,
+        fill_price=100,
+        fee=1,
+        tax=0,
+        slippage=0,
+        timestamp=datetime.now(timezone.utc),
+    )
+    pm.apply_fill(fill)
+    assert pm.get_portfolio(DecisionScope.SWING).orders[0].status == OrderStatus.FILLED
+
+    cancelled = Order(
+        order_id="TEST_ONLY_restore_cancelled",
+        currency="TWD",
+        symbol="2330.TW",
+        market="TW",
+        bucket="swing",
+        side="BUY",
+        order_type="LIMIT",
+        quantity=1,
+        limit_price=90,
+        origin="MANUAL",
+        reason="TEST_ONLY cancelled status restore",
+        status=OrderStatus.CANCELLED,
+        rejection_reason="TEST_ONLY_FINAL_REASON",
+    )
+    pm.add_order(cancelled)
+
+    pm.update_mark_to_market(SimpleNamespace(symbol="2330.TW", close=123.0, last_price=123.0))
+    before = pm.get_portfolio(DecisionScope.SWING)
+    assert before.equity is not None
+    assert before.positions["2330.TW"].current_price == 123.0
+    writer._persist_portfolios()
+
+    restored_pm = PortfolioManager(initial_cash_swing=1000, initial_cash_intraday=1000)
+    restored_service = PaperOrderService(restored_pm, EventStore(":memory:"))
+    reader = AutonomousPaperRunner.__new__(AutonomousPaperRunner)
+    reader._runtime_dir = tmp_path
+    reader.is_read_only = False
+    reader.portfolio_manager = restored_pm
+    reader.paper_orders = restored_service
+    reader.corporate_actions = PaperCorporateActions(restored_pm, restored_service.event_store)
+    reader._path = lambda name: tmp_path / name
+    reader._restore_portfolios()
+
+    after = restored_pm.get_portfolio(DecisionScope.SWING)
+    by_id = {order.order_id: order for order in after.orders}
+    assert by_id["TEST_ONLY_restore_filled"].status == OrderStatus.FILLED
+    assert by_id["TEST_ONLY_restore_cancelled"].status == OrderStatus.CANCELLED
+    assert by_id["TEST_ONLY_restore_cancelled"].rejection_reason == "TEST_ONLY_FINAL_REASON"
+    assert after.positions["2330.TW"].current_price == 123.0
+    assert after.positions["2330.TW"].market_value == before.positions["2330.TW"].market_value
+    assert after.positions["2330.TW"].unrealized_pnl == before.positions["2330.TW"].unrealized_pnl
+    assert after.cash == before.cash
+    assert after.equity == before.equity
+    assert [item.fill_id for item in after.fills] == ["TEST_ONLY_restore_fill"]
