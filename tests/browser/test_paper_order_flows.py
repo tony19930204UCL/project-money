@@ -233,6 +233,7 @@ def test_manual_ui_preview_confirm_cancel_replace_and_rejections(
         assert "TEST_ONLY_UI_FILL_" in partial_row.inner_text()
 
         partial = _canonical(page, base_url)
+        assert partial_portfolio_ui == partial["portfolio"]
         partial_order = next(
             item for item in partial["orders"]
             if item["order_id"] == ui_execution["order_id"]
@@ -285,6 +286,7 @@ def test_manual_ui_preview_confirm_cancel_replace_and_rejections(
         assert full_row.inner_text().count("TEST_ONLY_UI_FILL_") == 2
 
         fully_filled = _canonical(page, base_url)
+        assert portfolio_payload == fully_filled["portfolio"]
         fully_filled_order = next(
             item for item in fully_filled["orders"]
             if item["order_id"] == ui_execution["order_id"]
