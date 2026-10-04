@@ -179,29 +179,6 @@ def test_quote_capacity_partial_then_fresh_quote_completes_once(
     assert len(ledger.fills) == 2
 
 
-@pytest.mark.parametrize(
-    "mutator",
-    [
-        lambda q: q.model_copy(update={
-            "bid": None,
-            "ask": None,
-            "bid_size": 0,
-            "ask_size": 0,
-            "quality": "public_reported_last_sale",
-            "source": "TEST_ONLY_PUBLIC_LAST_ONLY",
-            "source_capabilities": {},
-        }),
-        lambda q: q.model_copy(update={"is_stale": True}),
-        lambda q: q.model_copy(update={"source": "fallback://TEST_ONLY", "source_capabilities": {}}),
-        lambda q: q.model_copy(update={
-            "source_capabilities": {
-                **q.source_capabilities,
-                "two_sided_book": False,
-            }
-        }),
-    ],
-    ids=["last-only", "stale", "fallback", "no-bbo-capability"],
-)
 def test_partial_cancel_replace_terminates_old_remainder_and_links_new_order(
     tmp_path, monkeypatch
 ):
@@ -282,6 +259,29 @@ def test_partial_cancel_replace_terminates_old_remainder_and_links_new_order(
     assert len(ledger.fills) == 1
 
 
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda q: q.model_copy(update={
+            "bid": None,
+            "ask": None,
+            "bid_size": 0,
+            "ask_size": 0,
+            "quality": "public_reported_last_sale",
+            "source": "TEST_ONLY_PUBLIC_LAST_ONLY",
+            "source_capabilities": {},
+        }),
+        lambda q: q.model_copy(update={"is_stale": True}),
+        lambda q: q.model_copy(update={"source": "fallback://TEST_ONLY", "source_capabilities": {}}),
+        lambda q: q.model_copy(update={
+            "source_capabilities": {
+                **q.source_capabilities,
+                "two_sided_book": False,
+            }
+        }),
+    ],
+    ids=["last-only", "stale", "fallback", "no-bbo-capability"],
+)
 def test_non_executable_quote_capabilities_never_promote_bar_or_last_to_book(
     tmp_path, monkeypatch, mutator
 ):
