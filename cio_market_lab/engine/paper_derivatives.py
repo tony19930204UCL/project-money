@@ -384,6 +384,12 @@ class PaperDerivativesEngine:
             return unavailable("AS_OF_TIMEZONE_REQUIRED")
         if spec.expiry is None or spec.expiry.tzinfo is None or spec.strike is None or spec.option_right is None:
             return unavailable("EXPIRY_AWARE_OPTION_SPEC_REQUIRED")
+        try:
+            strike_value = float(spec.strike)
+        except (TypeError, ValueError, OverflowError):
+            return unavailable("INVALID_CONTRACT_SPEC")
+        if not math.isfinite(strike_value) or strike_value <= 0:
+            return unavailable("INVALID_CONTRACT_SPEC")
         if now >= spec.expiry:
             return unavailable("CONTRACT_EXPIRED")
         if quote is None:
@@ -409,7 +415,7 @@ class PaperDerivativesEngine:
             return unavailable("CONTRACT_EXPIRED")
         sigma = float(implied_volatility)
         spot = float(underlying_price)
-        strike = float(spec.strike)
+        strike = strike_value
         sqrt_t = math.sqrt(years)
         d1 = (math.log(spot / strike) + (risk_free_rate + 0.5 * sigma * sigma) * years) / (sigma * sqrt_t)
         d2 = d1 - sigma * sqrt_t
