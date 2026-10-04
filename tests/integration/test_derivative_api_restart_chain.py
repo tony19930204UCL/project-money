@@ -46,24 +46,92 @@ def test_option_restart_missing_quote_then_real_fixture_close_is_idempotent(tmp_
     assert after["event_ids"]==close_events
     assert after["positions"]["TXO-TEST"]["quantity"]==0
 
-def test_future_restart_dated_settlement_receipt_replay_has_no_duplicate_cash(tmp_path):
+def test_future_restart_dated_settlement_margin_review_and_legal_risk_exit(tmp_path):
     runtime=tmp_path/"future-runtime"
     opened=run(runtime,"future","open")
     assert opened["changed"]["success"] is True
+    assert opened["margin_locked"]==100000
+    assert opened["available_cash"]==opened["cash"]-100000
     cash_before=opened["cash"]
+
     settled=run(runtime,"future","settle")
     assert settled["changed"] is True
     expected=cash_before+(1020-1001)*200
     assert settled["cash"]==expected
-    ids=settled["event_ids"]
+    assert settled["positions"]["TXF-TEST"]["assumptions"]["derivative_position"]["last_settlement_price"]==1020
+    settlement_ids=settled["event_ids"]
+
     duplicate=run(runtime,"future","settle")
     assert duplicate["changed"] is False
     assert duplicate["cash"]==expected
-    assert duplicate["event_ids"]==ids
+    assert duplicate["event_ids"]==settlement_ids
+
+    missing=run(runtime,"future","margin-missing")
+    assert missing["changed"]["status"]=="UNRESOLVED_ACCOUNT_NAV"
+    assert missing["cash"]==expected
+    assert missing["positions"]["TXF-TEST"]["quantity"]==1
+    missing_receipts=list(missing["review_receipts"])
+    assert {r["phase"] for r in missing_receipts if r["review_id"]=="MARGIN-MISSING"}=={
+        "MARGIN_REVIEW_STARTED","MARGIN_REVIEW_BASELINE","MARGIN_REVIEW_COMPLETED"}
+
+    unauthorized=run(runtime,"future","margin-unauthorized")
+    assert unauthorized["changed"]["status"]=="UNRESOLVED_MARGIN_EXECUTION"
+    assert unauthorized["changed"]["initial_maintenance_required"]==1100000
+    assert unauthorized["changed"]["unresolved"][0]["reason"]=="CONTRACT_TARGET_MISMATCH"
+    assert unauthorized["cash"]==expected
+    assert unauthorized["positions"]["TXF-TEST"]["quantity"]==1
+
+    closed=run(runtime,"future","margin-close")
+    assert closed["changed"]["status"]=="PAPER_MARGIN_CURED"
+    assert len(closed["changed"]["closed_positions"])==1
+    assert closed["positions"]["TXF-TEST"]["quantity"]==0
+    assert closed["margin_locked"]==0
+    assert closed["available_cash"]==closed["cash"]
+    close_cash=closed["cash"]
+    close_ids=list(closed["event_ids"])
+    close_receipts=list(closed["review_receipts"])
+
     restarted=run(runtime,"future","snapshot")
-    assert restarted["cash"]==expected
-    assert restarted["event_ids"]==ids
-    assert restarted["positions"]["TXF-TEST"]["assumptions"]["derivative_position"]["last_settlement_price"]==1020
+    assert restarted["cash"]==close_cash
+    assert restarted["event_ids"]==close_ids
+    assert restarted["review_receipts"]==close_receipts
+    assert restarted["positions"]["TXF-TEST"]["quantity"]==0
+
+    duplicate_close=run(runtime,"future","margin-close")
+    assert duplicate_close["cash"]==close_cash
+    assert duplicate_close["event_ids"]==close_ids
+    assert duplicate_close["review_receipts"]==close_receipts
+
+
+def test_option_expiry_without_trusted_cash_settlement_stays_unresolved_across_restart(tmp_path):
+    runtime=tmp_path/"option-expiry-runtime"
+    opened=run(runtime,"option","open")
+    assert opened["changed"]["success"] is True
+    before_cash=opened["cash"]
+
+    expired=run(runtime,"option","expiry-review")
+    assert expired["changed"]=="UNRESOLVED_EXPIRY_DELIVERY_UNSUPPORTED"
+    assert expired["cash"]==before_cash
+    assert expired["equity"] is None
+    assert expired["positions"]["TXO-TEST"]["quantity"]==1
+    expired_ids=list(expired["event_ids"])
+
+    replayed=run(runtime,"option","expiry-review")
+    assert replayed["cash"]==before_cash
+    assert replayed["event_ids"]==expired_ids
+    assert replayed["positions"]["TXO-TEST"]["quantity"]==1
+
+    invalid=run(runtime,"option","expiry-invalid-settlement")
+    assert invalid["changed"]["accepted"] is False
+    assert invalid["changed"]["reason"]=="SETTLEMENT_SOURCE_UNAVAILABLE"
+    assert invalid["cash"]==before_cash
+    assert invalid["positions"]["TXO-TEST"]["quantity"]==1
+    assert invalid["event_ids"]==expired_ids
+
+    final=run(runtime,"option","snapshot")
+    assert final["cash"]==before_cash
+    assert final["event_ids"]==expired_ids
+    assert final["positions"]["TXO-TEST"]["quantity"]==1
 
 def test_api_capability_quote_inventory_and_derivative_readback_remain_fail_closed(tmp_path):
     runtime=tmp_path/"api-runtime"
