@@ -107,7 +107,7 @@ def test_futures_margin_reserve_multiplier_and_roll_constraints(tmp_path):
     old=future("TXF-202610",T0+timedelta(days=2),multiplier=200)
     new=future("TXF-202611",T0+timedelta(days=32),multiplier=200)
     svc,pm,_=setup(tmp_path,[old,new])
-    opened=svc.execute(strategy_id=SID,bucket=BUCKET,spec=old,quote=q(old,bid=19999,ask=20001),
+    opened=svc.execute(strategy_id=SID,bucket=BUCKET,spec=old,quote=q(old,bid=999,ask=1001),
         side=OrderSide.BUY,quantity=1,order_id="fut-open",now=T0)
     assert opened.success
     pos=pm.get_strategy_ledger(SID,BUCKET).positions[old.symbol]
@@ -115,18 +115,18 @@ def test_futures_margin_reserve_multiplier_and_roll_constraints(tmp_path):
     assert d["multiplier"]==200 and d["margin_locked"]==100000
     cash_before=pm.get_strategy_ledger(SID,BUCKET).cash
     assert svc.settle_futures_daily(strategy_id=SID,bucket=BUCKET,symbol=old.symbol,
-        settlement_price=20020,settlement_date="2026-10-05",
-        quote=q(old,T0+timedelta(hours=1),20019,20021),now=T0+timedelta(hours=1))
+        settlement_price=1020,settlement_date="2026-10-05",
+        quote=q(old,T0+timedelta(hours=1),1019,1021),now=T0+timedelta(hours=1))
     cash_after=pm.get_strategy_ledger(SID,BUCKET).cash
-    assert cash_after==pytest.approx(cash_before+(20020-20001)*200)
+    assert cash_after==pytest.approx(cash_before+(1020-1001)*200)
     assert not svc.settle_futures_daily(strategy_id=SID,bucket=BUCKET,symbol=old.symbol,
-        settlement_price=20020,settlement_date="2026-10-05",
-        quote=q(old,T0+timedelta(hours=1),20019,20021),now=T0+timedelta(hours=1))
+        settlement_price=1020,settlement_date="2026-10-05",
+        quote=q(old,T0+timedelta(hours=1),1019,1021),now=T0+timedelta(hours=1))
     assert pm.get_strategy_ledger(SID,BUCKET).cash==pytest.approx(cash_after)
     roller=PaperFuturesRollService(svc)
     receipt=roller.roll(strategy_id=SID,bucket=BUCKET,old_spec=old,new_spec=new,
-        close_quote=q(old,T0+timedelta(hours=2),20029,20031),
-        open_quote=q(new,T0+timedelta(hours=2),20039,20041),quantity=1,roll_id="ROLL-1",
+        close_quote=q(old,T0+timedelta(hours=2),1029,1031),
+        open_quote=q(new,T0+timedelta(hours=2),1039,1041),quantity=1,roll_id="ROLL-1",
         now=T0+timedelta(hours=2))
     assert receipt["status"]=="PAPER_ROLL_COMPLETED"
     assert receipt["expiry_calendar"]["old_expiry"]==old.expiry.isoformat()
@@ -134,8 +134,8 @@ def test_futures_margin_reserve_multiplier_and_roll_constraints(tmp_path):
     incompatible=future("TXF-BAD",T0+timedelta(days=40),multiplier=100)
     with pytest.raises(ValueError,match="ROLL_COMPATIBLE_EXPLICIT_FUTURE_SERIES_REQUIRED"):
         roller.roll(strategy_id=SID,bucket=BUCKET,old_spec=new,new_spec=incompatible,
-            close_quote=q(new,T0+timedelta(hours=3),20039,20041),
-            open_quote=q(incompatible,T0+timedelta(hours=3),20049,20051),quantity=1,
+            close_quote=q(new,T0+timedelta(hours=3),1039,1041),
+            open_quote=q(incompatible,T0+timedelta(hours=3),1049,1051),quantity=1,
             roll_id="ROLL-BAD",now=T0+timedelta(hours=3))
 
 def test_shared_cash_reserve_across_scopes_blocks_second_future(tmp_path):
