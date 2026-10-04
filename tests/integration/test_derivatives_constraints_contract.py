@@ -91,6 +91,14 @@ def test_calendar_bbo_capacity_and_exact_target_authority_refusal(tmp_path):
         r=svc.execute(strategy_id=SID,bucket=BUCKET,spec=spec,quote=quote,side=OrderSide.BUY,
                       quantity=1,order_id=f"reject-{i}",now=T0)
         assert not r.success and r.rejection_reason==reason
+    with pytest.raises(ValueError,match="NO_EXECUTABLE_CONTRACT_QUOTE"):
+        svc.execute(strategy_id=SID,bucket=BUCKET,spec=spec,
+            quote=q(spec).model_copy(update={"bid":None}),side=OrderSide.BUY,
+            quantity=1,order_id="missing-bbo",now=T0)
+    expired=option(symbol=spec.symbol,expiry=T0-timedelta(seconds=1))
+    expired_result=svc.execute(strategy_id=SID,bucket=BUCKET,spec=expired,quote=q(expired),
+        side=OrderSide.BUY,quantity=1,order_id="expired",now=T0)
+    assert not expired_result.success and expired_result.rejection_reason=="CONTRACT_EXPIRED"
     ledger=pm.get_strategy_ledger(SID,BUCKET)
     assert ledger.cash==before and not ledger.positions
     assert store.count()==0
