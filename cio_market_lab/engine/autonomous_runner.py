@@ -443,22 +443,44 @@ class AutonomousPaperRunner:
                     persisted = Order.model_validate(order_data)
                     persisted_status = persisted.status
                     persisted_reason = persisted.rejection_reason
+                    persisted_audit_metadata = persisted.model_copy(deep=True).audit_metadata
                     order = existing_orders.get(persisted.order_id)
                     if order is None:
                         order = persisted.model_copy(deep=True)
                         order.status = OrderStatus.PENDING
                         ledger.add_order(order)
                         existing_orders[order.order_id] = order
-                    saved_orders.append((order, persisted_status, persisted_reason))
+                    else:
+                        # EventStore reconstruction owns object identity; the
+                        # persisted portfolio snapshot owns canonical execution
+                        # metadata such as cumulative filled_quantity.
+                        if (
+                            order.symbol != persisted.symbol
+                            or order.bucket != persisted.bucket
+                            or order.side != persisted.side
+                            or order.quantity != persisted.quantity
+                        ):
+                            raise ValueError(
+                                f"PERSISTED_ORDER_IDENTITY_MISMATCH:{persisted.order_id}"
+                            )
+                    saved_orders.append(
+                        (
+                            order,
+                            persisted_status,
+                            persisted_reason,
+                            persisted_audit_metadata,
+                        )
+                    )
                 for fill_data in payload.get("fills", []):
                     fill = Fill.model_validate(fill_data)
                     if fill.fill_id in existing_fill_ids:
                         continue
                     ledger.apply_fill(fill)
                     existing_fill_ids.add(fill.fill_id)
-                for order, status, reason in saved_orders:
+                for order, status, reason, audit_metadata in saved_orders:
                     order.status = status
                     order.rejection_reason = reason
+                    order.audit_metadata = audit_metadata
 
             for bucket_value, payload in aggregate.items():
                 if bucket_value not in {DecisionScope.SWING.value, DecisionScope.INTRADAY.value}:
