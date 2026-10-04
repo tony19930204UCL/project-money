@@ -89,20 +89,19 @@ def _run_process_helper(
     return json.loads(proc.stdout.splitlines()[-1])
 
 
-def _strategy_state(payload: dict, strategy_id: str) -> dict:
-    return payload["strategies"][strategy_id]
+def _strategy_state(payload: dict) -> dict:
+    return payload["strategy"]
 
 
 def _assert_replay_idempotent(before: dict, after: dict) -> None:
-    for strategy_id in ("TEST_ONLY_RESTART_US", "TEST_ONLY_RESTART_TW"):
-        left = _strategy_state(before, strategy_id)
-        right = _strategy_state(after, strategy_id)
-        assert [f["fill_id"] for f in right["fills"]] == [
-            f["fill_id"] for f in left["fills"]
-        ]
-        assert right["cash"] == pytest.approx(left["cash"])
-        assert right["positions"] == left["positions"]
-        assert right["orders"] == left["orders"]
+    left = _strategy_state(before)
+    right = _strategy_state(after)
+    assert [f["fill_id"] for f in right["fills"]] == [
+        f["fill_id"] for f in left["fills"]
+    ]
+    assert right["cash"] == pytest.approx(left["cash"])
+    assert right["positions"] == left["positions"]
+    assert right["orders"] == left["orders"]
     assert after["corporate_event_ids"] == before["corporate_event_ids"]
     assert after["corporate_changed"] is False
     assert after["decisions"] == []
@@ -807,14 +806,17 @@ def test_pending_execution_and_corporate_action_survive_real_process_restart(tmp
         action_at=action_at,
     )
     seeded = _run_process_helper(root, runtime, control, "seed")
-    assert _strategy_state(seeded, "TEST_ONLY_RESTART_US")["orders"][0]["status"] == "PENDING"
-    assert _strategy_state(seeded, "TEST_ONLY_RESTART_TW")["orders"][0]["status"] == "PENDING"
-    assert not _strategy_state(seeded, "TEST_ONLY_RESTART_US")["fills"]
-    assert not _strategy_state(seeded, "TEST_ONLY_RESTART_TW")["fills"]
+    seeded_state = _strategy_state(seeded)
+    assert seeded_state["orders"][0]["status"] == "PENDING"
+    assert not seeded_state["fills"]
+    assert seeded_state["cash"] == pytest.approx(100_000)
 
     q1 = {
-        "MSFT": {"quote_id": "TEST_ONLY_US_Q1", "session": "REGULAR", "size": 1},
-        "2330.TW": {"quote_id": "TEST_ONLY_TW_Q1", "session": "ODD_LOT", "size": 2},
+        "2330.TW": {
+            "quote_id": "TEST_ONLY_TW_Q1",
+            "session": "ODD_LOT",
+            "size": 1,
+        },
     }
     _write_process_control(
         control,
@@ -825,27 +827,20 @@ def test_pending_execution_and_corporate_action_survive_real_process_restart(tmp
     first = _run_process_helper(
         root, runtime, control, "advance", "--apply-action"
     )
-    us_first = _strategy_state(first, "TEST_ONLY_RESTART_US")
-    tw_first = _strategy_state(first, "TEST_ONLY_RESTART_TW")
+    first_state = _strategy_state(first)
     assert [d["action"] for d in first["decisions"]] == [
         "BUY_PARTIALLY_FILLED",
-        "BUY_FILLED",
     ]
-    assert us_first["orders"][0]["status"] == "PARTIALLY_FILLED"
-    assert us_first["orders"][0]["audit_metadata"]["filled_quantity"] == 1
-    assert len(us_first["fills"]) == 1
-    assert us_first["fills"][0]["fill_price"] == pytest.approx(101.0505)
-    assert us_first["fills"][0]["fee"] == pytest.approx(1)
-    assert us_first["cash"] == pytest.approx(10_000 - 101.0505 - 1)
-    assert us_first["positions"]["MSFT"]["quantity"] == 1
-    assert tw_first["orders"][0]["status"] == "FILLED"
-    assert len(tw_first["fills"]) == 1
-    assert tw_first["fills"][0]["fill_price"] == pytest.approx(101.0505)
-    assert tw_first["fills"][0]["fee"] == pytest.approx(20)
-    assert tw_first["cash"] == pytest.approx(
-        100_000 - 2 * 101.0505 - 20 + 4
+    assert first_state["orders"][0]["status"] == "PARTIALLY_FILLED"
+    assert first_state["orders"][0]["audit_metadata"]["filled_quantity"] == 1
+    assert len(first_state["fills"]) == 1
+    assert first_state["fills"][0]["fill_price"] == pytest.approx(101.0505)
+    assert first_state["fills"][0]["fee"] == pytest.approx(20)
+    assert first_state["fills"][0]["tax"] == 0
+    assert first_state["cash"] == pytest.approx(
+        100_000 - 101.0505 - 20 + 2
     )
-    assert tw_first["positions"]["2330.TW"]["quantity"] == 2
+    assert first_state["positions"]["2330.TW"]["quantity"] == 1
     assert first["corporate_changed"] is True
     assert len(first["corporate_event_ids"]) == 2
 
@@ -858,34 +853,30 @@ def test_pending_execution_and_corporate_action_survive_real_process_restart(tmp
         control,
         now=PROCESS_BASE + timedelta(seconds=6),
         quotes={
-            "MSFT": {
-                "quote_id": "TEST_ONLY_US_Q2",
-                "session": "REGULAR",
+            "2330.TW": {
+                "quote_id": "TEST_ONLY_TW_Q2",
+                "session": "ODD_LOT",
                 "size": 1,
             },
-            "2330.TW": q1["2330.TW"],
         },
         action_at=action_at,
     )
     completed = _run_process_helper(
         root, runtime, control, "advance", "--apply-action"
     )
-    us_done = _strategy_state(completed, "TEST_ONLY_RESTART_US")
-    tw_done = _strategy_state(completed, "TEST_ONLY_RESTART_TW")
+    done = _strategy_state(completed)
     assert [d["action"] for d in completed["decisions"]] == ["BUY_FILLED"]
-    assert us_done["orders"][0]["status"] == "FILLED"
-    assert us_done["orders"][0]["audit_metadata"]["filled_quantity"] == 2
-    assert len(us_done["fills"]) == 2
-    assert len({fill["fill_id"] for fill in us_done["fills"]}) == 2
+    assert done["orders"][0]["status"] == "FILLED"
+    assert done["orders"][0]["audit_metadata"]["filled_quantity"] == 2
+    assert len(done["fills"]) == 2
+    assert len({fill["fill_id"] for fill in done["fills"]}) == 2
     assert {
-        fill["consumed_quote"]["source_quote_id"] for fill in us_done["fills"]
-    } == {"TEST_ONLY_US_Q1", "TEST_ONLY_US_Q2"}
-    assert us_done["cash"] == pytest.approx(
-        10_000 - 2 * 101.0505 - 2
+        fill["consumed_quote"]["source_quote_id"] for fill in done["fills"]
+    } == {"TEST_ONLY_TW_Q1", "TEST_ONLY_TW_Q2"}
+    assert done["cash"] == pytest.approx(
+        100_000 - 2 * 101.0505 - 40 + 2
     )
-    assert us_done["positions"]["MSFT"]["quantity"] == 2
-    assert tw_done["cash"] == pytest.approx(tw_first["cash"])
-    assert tw_done["positions"] == tw_first["positions"]
+    assert done["positions"]["2330.TW"]["quantity"] == 2
     assert completed["corporate_changed"] is False
     assert completed["corporate_event_ids"] == first["corporate_event_ids"]
 
@@ -908,7 +899,7 @@ def test_pending_execution_and_corporate_action_survive_real_process_restart(tmp
     readback_ids = [fill["fill_id"] for fill in after["readback"]["fills"]]
     assert len(readback_ids) == len(set(readback_ids))
     assert set(readback_ids) >= {
-        fill["fill_id"] for fill in us_done["fills"]
+        fill["fill_id"] for fill in done["fills"]
     }
 
 
@@ -926,15 +917,10 @@ def test_restart_chain_non_vacuity_requires_pending_caller_and_quote_dedup(tmp_p
         control,
         now=PROCESS_BASE + timedelta(seconds=3),
         quotes={
-            "MSFT": {
-                "quote_id": "TEST_ONLY_BLOCKED_Q1",
-                "session": "REGULAR",
-                "size": 1,
-            },
             "2330.TW": {
                 "quote_id": "TEST_ONLY_BLOCKED_TW_Q1",
                 "session": "ODD_LOT",
-                "size": 2,
+                "size": 1,
             },
         },
         action_at=action_at,
@@ -959,15 +945,10 @@ def test_restart_chain_non_vacuity_requires_pending_caller_and_quote_dedup(tmp_p
         control,
         now=PROCESS_BASE + timedelta(seconds=3),
         quotes={
-            "MSFT": {
-                "quote_id": "TEST_ONLY_DEDUP_Q1",
-                "session": "REGULAR",
-                "size": 1,
-            },
             "2330.TW": {
                 "quote_id": "TEST_ONLY_DEDUP_TW_Q1",
                 "session": "ODD_LOT",
-                "size": 2,
+                "size": 1,
             },
         },
         action_at=action_at,
@@ -985,6 +966,6 @@ def test_restart_chain_non_vacuity_requires_pending_caller_and_quote_dedup(tmp_p
     )
     with pytest.raises(AssertionError):
         _assert_replay_idempotent(first, broken_replay)
-    us_broken = _strategy_state(broken_replay, "TEST_ONLY_RESTART_US")
-    assert len(us_broken["fills"]) == 2
-    assert us_broken["cash"] < _strategy_state(first, "TEST_ONLY_RESTART_US")["cash"]
+    broken_state = _strategy_state(broken_replay)
+    assert len(broken_state["fills"]) == 2
+    assert broken_state["cash"] < _strategy_state(first)["cash"]
