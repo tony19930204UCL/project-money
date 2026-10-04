@@ -67,6 +67,9 @@ class RejectionReason(str, Enum):
     PRE_EXPIRY_CLOSE_WINDOW_ACTIVE = "PRE_EXPIRY_CLOSE_WINDOW_ACTIVE"
     INSUFFICIENT_POSITION_FOR_CLOSE = "INSUFFICIENT_POSITION_FOR_CLOSE"
     INVALID_CONTRACT_SPEC = "INVALID_CONTRACT_SPEC"
+    CONTRACT_TARGET_MISMATCH = "CONTRACT_TARGET_MISMATCH"
+    EXECUTION_SESSION_UNAUTHORIZED = "EXECUTION_SESSION_UNAUTHORIZED"
+    DISPLAYED_CAPACITY_INSUFFICIENT = "DISPLAYED_CAPACITY_INSUFFICIENT"
 
 
 class ContractSpec(BaseModel):
@@ -311,6 +314,108 @@ class PaperDerivativesEngine:
 
         return True, None
 
+    def option_chain_snapshot(
+        self,
+        spec: ContractSpec,
+        quote: Optional[DerivativeQuote],
+        *,
+        underlying_price: Optional[float],
+        implied_volatility: Optional[float],
+        risk_free_rate: float = 0.0,
+        as_of: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """Validate one exact option-chain target and calculate bounded Black-Scholes Greeks.
+
+        This is a valuation/constraint helper on the existing paper derivatives engine.
+        It never creates an executable quote, order, broker authority, or live readiness.
+        """
+        now = as_of or datetime.now(timezone.utc)
+        unavailable = lambda reason: {
+            "status": "UNAVAILABLE",
+            "reason": reason,
+            "symbol": spec.symbol,
+            "expiry": spec.expiry.isoformat() if spec.expiry else None,
+            "paper_only": True,
+            "execution_enabled": False,
+            "live_approved": False,
+        }
+        if spec.instrument_type != DerivativeInstrumentType.OPTION:
+            return unavailable("OPTION_CONTRACT_REQUIRED")
+        if spec.expiry is None or spec.expiry.tzinfo is None or spec.strike is None or spec.option_right is None:
+            return unavailable("EXPIRY_AWARE_OPTION_SPEC_REQUIRED")
+        if now >= spec.expiry:
+            return unavailable("CONTRACT_EXPIRED")
+        if quote is None:
+            return unavailable("OPTION_CHAIN_MISSING")
+        valid, reason = self.validate_quote(quote, as_of=now)
+        if not valid:
+            return unavailable(reason or "OPTION_CHAIN_UNAVAILABLE")
+        if quote.symbol != spec.symbol:
+            return unavailable("CONTRACT_TARGET_MISMATCH")
+        meta = quote.provenance or {}
+        if meta.get("strike") is not None and float(meta["strike"]) != float(spec.strike):
+            return unavailable("CONTRACT_TARGET_MISMATCH")
+        if meta.get("contract_right") is not None and str(meta["contract_right"]).upper() not in {
+            str(spec.option_right.value).upper(), str(spec.option_right).split(".")[-1].upper()
+        }:
+            return unavailable("CONTRACT_TARGET_MISMATCH")
+        if meta.get("expiry") is not None:
+            try:
+                observed_expiry = datetime.fromisoformat(str(meta["expiry"]).replace("Z", "+00:00"))
+            except ValueError:
+                return unavailable("CONTRACT_TARGET_MISMATCH")
+            if observed_expiry != spec.expiry:
+                return unavailable("CONTRACT_TARGET_MISMATCH")
+        if underlying_price is None or not math.isfinite(underlying_price) or underlying_price <= 0:
+            return unavailable("UNDERLYING_MARK_MISSING")
+        if implied_volatility is None or not math.isfinite(implied_volatility) or implied_volatility <= 0:
+            return unavailable("IMPLIED_VOLATILITY_MISSING")
+        if not math.isfinite(risk_free_rate):
+            return unavailable("RISK_FREE_RATE_INVALID")
+        seconds = (spec.expiry - now).total_seconds()
+        years = seconds / (365.0 * 24.0 * 3600.0)
+        if years <= 0:
+            return unavailable("CONTRACT_EXPIRED")
+        sigma = float(implied_volatility)
+        spot = float(underlying_price)
+        strike = float(spec.strike)
+        sqrt_t = math.sqrt(years)
+        d1 = (math.log(spot / strike) + (risk_free_rate + 0.5 * sigma * sigma) * years) / (sigma * sqrt_t)
+        d2 = d1 - sigma * sqrt_t
+        cdf = lambda x: 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+        pdf = lambda x: math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+        is_call = str(spec.option_right.value).upper() == "CALL"
+        if is_call:
+            delta = cdf(d1)
+            theta = (-(spot * pdf(d1) * sigma) / (2 * sqrt_t)
+                     - risk_free_rate * strike * math.exp(-risk_free_rate * years) * cdf(d2)) / 365.0
+        else:
+            delta = cdf(d1) - 1.0
+            theta = (-(spot * pdf(d1) * sigma) / (2 * sqrt_t)
+                     + risk_free_rate * strike * math.exp(-risk_free_rate * years) * cdf(-d2)) / 365.0
+        gamma = pdf(d1) / (spot * sigma * sqrt_t)
+        vega = spot * pdf(d1) * sqrt_t / 100.0
+        return {
+            "status": "AVAILABLE_TEST_ONLY" if quote.is_fixture else "AVAILABLE_SOURCE_VALUATION_ONLY",
+            "symbol": spec.symbol,
+            "underlying_symbol": spec.underlying_symbol,
+            "expiry": spec.expiry.isoformat(),
+            "seconds_to_expiry": seconds,
+            "strike": strike,
+            "option_right": spec.option_right.value,
+            "multiplier": spec.multiplier,
+            "tick_size": spec.tick_size,
+            "currency": spec.currency,
+            "quote_timestamp": quote.timestamp.isoformat(),
+            "source": quote.source,
+            "implied_volatility": sigma,
+            "underlying_price": spot,
+            "greeks": {"delta": delta, "gamma": gamma, "vega": vega, "theta_per_day": theta},
+            "paper_only": True,
+            "execution_enabled": False,
+            "live_approved": False,
+        }
+
     def validate_tick_size(self, price: float, tick_size: float) -> bool:
         if tick_size <= 0:
             return False
@@ -408,6 +513,35 @@ class PaperDerivativesEngine:
                 success=False,
                 rejection_reason=RejectionReason.PRICING_FAILURE_ENTRY_BLOCKED.value,
             )
+
+        # Explicit contract-book authority constraints, when supplied by the source.
+        # Missing metadata preserves legacy fixture compatibility; explicit refusal never upgrades.
+        meta = quote.provenance or {}
+        if meta.get("contract_authorized") is False:
+            return ExecutionAttemptResult(success=False, rejection_reason=RejectionReason.CONTRACT_TARGET_MISMATCH.value)
+        if meta.get("session_open") is False:
+            return ExecutionAttemptResult(success=False, rejection_reason=RejectionReason.EXECUTION_SESSION_UNAUTHORIZED.value)
+        displayed = meta.get("ask_size") if side == OrderSide.BUY else meta.get("bid_size")
+        if displayed is not None:
+            try:
+                displayed_qty = float(displayed)
+            except (TypeError, ValueError):
+                displayed_qty = 0.0
+            if not math.isfinite(displayed_qty) or displayed_qty < quantity:
+                return ExecutionAttemptResult(success=False, rejection_reason=RejectionReason.DISPLAYED_CAPACITY_INSUFFICIENT.value)
+        if meta.get("expiry") is not None and spec.expiry is not None:
+            try:
+                quoted_expiry = datetime.fromisoformat(str(meta["expiry"]).replace("Z", "+00:00"))
+            except ValueError:
+                return ExecutionAttemptResult(success=False, rejection_reason=RejectionReason.CONTRACT_TARGET_MISMATCH.value)
+            if quoted_expiry != spec.expiry:
+                return ExecutionAttemptResult(success=False, rejection_reason=RejectionReason.CONTRACT_TARGET_MISMATCH.value)
+        if meta.get("strike") is not None and spec.strike is not None and float(meta["strike"]) != float(spec.strike):
+            return ExecutionAttemptResult(success=False, rejection_reason=RejectionReason.CONTRACT_TARGET_MISMATCH.value)
+        if meta.get("contract_right") is not None and spec.option_right is not None:
+            right = str(meta["contract_right"]).upper()
+            if right not in {str(spec.option_right.value).upper(), str(spec.option_right).split(".")[-1].upper()}:
+                return ExecutionAttemptResult(success=False, rejection_reason=RejectionReason.CONTRACT_TARGET_MISMATCH.value)
 
         # 4. Tick size check
         if not self.validate_tick_size(raw_price, spec.tick_size):
