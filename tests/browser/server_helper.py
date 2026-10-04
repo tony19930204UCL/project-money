@@ -49,6 +49,7 @@ class TestOnlyMarketAdapter:
     """Deterministic browser-harness adapter. Never reaches an external source."""
 
     source_name = "TEST_ONLY_BROWSER_ADAPTER"
+    is_fixture = True
 
     def __init__(self, mode: str = "normal") -> None:
         self.mode = mode
@@ -128,6 +129,19 @@ def _fixture_fill(state, order_id: str, quantity: float, fill_id: str, *, strate
     order = state.paper_orders.find_order(order_id)
     if order is None:
         raise AssertionError(f"missing TEST_ONLY order {order_id}")
+    bar = state.market_adapter.get_latest_bar(order.symbol)
+    quote = state.market_adapter.get_latest_quote(order.symbol)
+    if bar is None or quote is None:
+        raise AssertionError("TEST_ONLY fixture requires bar + quote capability")
+    executable = order.model_copy(update={"quantity": quantity})
+    consumed = state.runner._consume_book(quote, bar, executable)
+    if consumed is None:
+        raise AssertionError("TEST_ONLY fixture quote was not executable under existing model")
+    evidence, per_share_slippage, effective_price = consumed
+    trade_value = quantity * effective_price
+    fee = state.paper_orders.cost_config.calculate_fee(order.market, trade_value)
+    tax = state.paper_orders.cost_config.calculate_tax(order.market, order.side, trade_value)
+    slippage = round(quantity * per_share_slippage, 4)
     fill = Fill(
         currency=order.currency,
         fill_id=fill_id,
@@ -136,14 +150,20 @@ def _fixture_fill(state, order_id: str, quantity: float, fill_id: str, *, strate
         bucket=order.bucket,
         side=order.side,
         quantity=quantity,
-        fill_price=100.0,
-        fee=20.0,
-        tax=0.0,
-        slippage=0.0,
-        timestamp=datetime.now(timezone.utc),
+        fill_price=effective_price,
+        fee=fee,
+        tax=tax,
+        slippage=slippage,
+        timestamp=quote.timestamp,
         provenance={"strategy_id": strategy_id} if strategy_id else {"fixture": "TEST_ONLY_BROWSER"},
-        assumptions={"execution": "TEST_ONLY_BROWSER_FIXTURE", "slippage_embedded": True},
-        quote_verification="TEST_ONLY_FIXTURE",
+        assumptions={
+            "execution": "TEST_ONLY_BROWSER_EXISTING_QUOTE_MODEL",
+            "slippage_embedded": True,
+            "base_price": evidence.ask if order.side == OrderSide.BUY else evidence.bid,
+            "slippage_bps": state.paper_orders.cost_config.slippage_bps,
+        },
+        consumed_quote=evidence,
+        quote_verification="BOOK_BOUND_TEST_ONLY",
     )
     state.portfolio_manager.apply_fill(fill, strategy_id)
     state.event_store.append(EventEnvelope(
