@@ -196,12 +196,12 @@ def test_durable_strategy_version_hot_swap_and_rollback_preserve_execution_state
         state.runner.configure(PaperExperimentSettings(
             strategy_id=v1.id,
             enabled=True,
-            market="US",
-            base_currency="USD",
-            reporting_currency="USD",
-            initial_cash=10_000,
-            max_position_notional=5_000,
-            universe=["MSFT"],
+            market="TW",
+            base_currency="TWD",
+            reporting_currency="TWD",
+            initial_cash=100_000,
+            max_position_notional=50_000,
+            universe=["2330.TW"],
             paper_execution_model="QUOTE_BOOK",
         ))
         packet = CIODecisionPacket(
@@ -209,7 +209,7 @@ def test_durable_strategy_version_hot_swap_and_rollback_preserve_execution_state
             as_of=clock["now"],
             expiry=clock["now"] + timedelta(hours=1),
             thesis="TEST_ONLY AppState-connected hot-swap execution continuity",
-            selected_instrument="MSFT",
+            selected_instrument="2330.TW",
             action="BUY",
             quantity=2,
             strategy_version=v1.version,
@@ -217,6 +217,7 @@ def test_durable_strategy_version_hot_swap_and_rollback_preserve_execution_state
             conditions={
                 "paper_execution_model": "QUOTE_BOOK",
                 "allow_partial_fills": True,
+                "allow_odd_lot": True,
             },
         )
         packet = sign_cio_packet(packet, signer_id="fixture-test-signer")
@@ -230,7 +231,7 @@ def test_durable_strategy_version_hot_swap_and_rollback_preserve_execution_state
 
         clock["now"] += timedelta(seconds=2)
         quote_holder["value"] = Quote(
-            symbol="MSFT",
+            symbol="2330.TW",
             timestamp=clock["now"] - timedelta(seconds=1),
             observed_at=clock["now"],
             bid=100,
@@ -240,7 +241,7 @@ def test_durable_strategy_version_hot_swap_and_rollback_preserve_execution_state
             last_price=100.5,
             source="fixture://ISSUE8_CONNECTED_BOOK",
             quality="TEST_ONLY",
-            session="REGULAR",
+            session="ODD_LOT",
             quote_id="TEST_ONLY_CONNECTED_Q1",
             is_stale=False,
             is_synthetic=False,
@@ -251,7 +252,8 @@ def test_durable_strategy_version_hot_swap_and_rollback_preserve_execution_state
                 "exchange_session_attested": True,
                 "entitlement_evidence_id": "TEST_ONLY_CONNECTED_EID",
                 "entitlement_status": "TEST_ONLY",
-                "supported_sessions": ["REGULAR"],
+                "supported_sessions": ["ODD_LOT"],
+                "odd_lot_book": True,
             },
         )
         decisions = state.runner.process_pending_orders()
@@ -268,10 +270,10 @@ def test_durable_strategy_version_hot_swap_and_rollback_preserve_execution_state
         assert len(ledger.fills) == 1
         assert ledger.fills[0].consumed_quote.source_quote_id == "TEST_ONLY_CONNECTED_Q1"
         assert ledger.fills[0].fill_price == pytest.approx(101.0505)
-        assert ledger.fills[0].fee == pytest.approx(1)
+        assert ledger.fills[0].fee == pytest.approx(20)
         order_snapshot = pending.model_dump(mode="json")
         cash_snapshot = ledger.cash
-        position_snapshot = ledger.positions["MSFT"].model_dump(mode="json")
+        position_snapshot = ledger.positions["2330.TW"].model_dump(mode="json")
         fill_ids_snapshot = [fill.fill_id for fill in ledger.fills]
 
         v2 = state.registry.register_or_reload(v2_dir)
@@ -334,7 +336,7 @@ def test_durable_strategy_version_hot_swap_and_rollback_preserve_execution_state
         assert fresh_partial["audit_metadata"]["filled_quantity"] == 1
         assert [f["fill_id"] for f in fresh_ledger_v2["fills"]] == fill_ids_snapshot
         assert fresh_ledger_v2["cash"] == pytest.approx(cash_snapshot)
-        assert fresh_ledger_v2["positions"]["MSFT"] == position_snapshot
+        assert fresh_ledger_v2["positions"]["2330.TW"] == position_snapshot
 
         rolled = client.post(
             f"/api/strategies/{v1.id}/rollback",
@@ -376,7 +378,7 @@ def test_durable_strategy_version_hot_swap_and_rollback_preserve_execution_state
         assert fresh_partial["audit_metadata"]["filled_quantity"] == 1
         assert [f["fill_id"] for f in fresh_ledger_v1["fills"]] == fill_ids_snapshot
         assert fresh_ledger_v1["cash"] == pytest.approx(cash_snapshot)
-        assert fresh_ledger_v1["positions"]["MSFT"] == position_snapshot
+        assert fresh_ledger_v1["positions"]["2330.TW"] == position_snapshot
     finally:
         state.runner.shutdown()
 
