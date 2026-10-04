@@ -285,7 +285,8 @@ def test_corporate_actions_native_cash_and_fx_fail_closed(tmp_path):
         )
         assert applied is True
         assert tw.positions["2330.TW"].quantity == 4
-        assert tw.positions["2330.TW"].average_entry_price == pytest.approx(50.02525)
+        # ask=100.1, 5 bps slippage => 100.15005 fill; 2-for-1 halves basis/share.
+        assert tw.positions["2330.TW"].average_entry_price == pytest.approx(50.075025)
         assert state.runner.apply_corporate_action(
             split,
             strategy_id="TEST_ONLY_TW_BOOK",
