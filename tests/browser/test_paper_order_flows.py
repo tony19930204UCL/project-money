@@ -266,6 +266,21 @@ def test_strategy_and_main_cio_readback_and_authority_boundaries(
             if item["origin"] == "MAIN_CIO"
             and item.get("audit_metadata", {}).get("case_id") != "TEST_ONLY_CIO_POSITIVE"
         ]
+        script_sources = page.locator('script[src]').evaluate_all(
+            "(nodes) => nodes.map((node) => node.getAttribute('src')).filter(Boolean)"
+        )
+        assert script_sources
+        bundle_text = "\n".join(
+            page.request.get(
+                source if source.startswith("http") else base_url + (source if source.startswith("/") else "/" + source)
+            ).text()
+            for source in script_sources
+        )
+        assert "CIO_PROVENANCE_SECRET" not in bundle_text
+        assert "fixture-test-signer" not in bundle_text
+        assert "sign_cio_packet" not in bundle_text
+        assert page.get_by_label("Order origin").count() == 0
+
         assert not page_errors
         assert not console_errors
         completed = True
@@ -294,7 +309,7 @@ def test_same_runtime_actual_process_restart_preserves_order_fill_case_and_nav(
         first_snapshot = _canonical(page, base_url)
         learning = page.request.get(f"{base_url}/api/paper/cio/learning-cases").json()
         first_snapshot["case_ids"] = sorted(
-            item["case_id"] for item in learning.get("records", [])
+            item["case_id"] for item in learning.get("cases", [])
             if item.get("case_id", "").startswith("TEST_ONLY_CIO")
         )
         first_snapshot["runtime"] = str(runtime)
@@ -312,7 +327,7 @@ def test_same_runtime_actual_process_restart_preserves_order_fill_case_and_nav(
         second_snapshot = _canonical(page, base_url)
         learning = page.request.get(f"{base_url}/api/paper/cio/learning-cases").json()
         second_snapshot["case_ids"] = sorted(
-            item["case_id"] for item in learning.get("records", [])
+            item["case_id"] for item in learning.get("cases", [])
             if item.get("case_id", "").startswith("TEST_ONLY_CIO")
         )
 
