@@ -150,6 +150,14 @@ def test_quote_capacity_partial_then_fresh_quote_completes_once(
     first_fill_id = ledger.fills[0].fill_id
     assert ledger.fills[0].consumed_quote.source_quote_id == quote.quote_id
     assert ledger.fills[0].consumed_quote.session == session
+    assert ledger.fills[0].consumed_quote.source == "fixture://c08_cutoff"
+    assert ledger.fills[0].consumed_quote.observed_at == quote.observed_at
+    assert ledger.fills[0].consumed_quote.source_capabilities["two_sided_book"] is True
+    expected_fee = 20.0 if market == "TW" else 1.0
+    assert ledger.fills[0].fill_price == pytest.approx(101.0505)
+    assert ledger.fills[0].fee == pytest.approx(expected_fee)
+    assert ledger.fills[0].tax == 0
+    assert ledger.cash == pytest.approx(10_000 - 101.0505 - expected_fee)
     assert runner.process_pending_orders() == []
     assert ledger.cash == first_cash
     assert [f.fill_id for f in ledger.fills] == [first_fill_id]
@@ -164,7 +172,7 @@ def test_quote_capacity_partial_then_fresh_quote_completes_once(
     assert order.status == OrderStatus.FILLED
     assert len(ledger.fills) == 2
     assert len({f.fill_id for f in ledger.fills}) == 2
-    assert ledger.cash < first_cash
+    assert ledger.cash == pytest.approx(10_000 - 2 * 101.0505 - 2 * expected_fee)
     second_cash = ledger.cash
     assert runner.process_pending_orders() == []
     assert ledger.cash == second_cash
@@ -217,7 +225,7 @@ def test_partial_cancel_replace_terminates_old_remainder_and_links_new_order(
     quote.timestamp = clock["now"] - timedelta(seconds=1)
     quote.observed_at = clock["now"]
     assert [d.action for d in runner.process_pending_orders()] == ["BUY_PARTIALLY_FILLED"]
-    old = next(o for o in service.all_orders() if o.reason.startswith("Main CIO"))
+    old = next(o for o in service.all_orders() if o.strategy_id == "TEST_ONLY_native")
     assert old.status == OrderStatus.PARTIALLY_FILLED
     assert old.filled_quantity == 1
     assert old.remaining_quantity == 1
@@ -290,6 +298,53 @@ def test_non_executable_quote_capabilities_never_promote_bar_or_last_to_book(
     assert not pm.get_strategy_ledger("TEST_ONLY_native", DecisionScope.SWING).fills
 
 
+@pytest.mark.parametrize(
+    "session,symbol,market,currency",
+    [
+        ("EXTENDED", "MSFT", "US", "USD"),
+        ("ODD_LOT", "2330.TW", "TW", "TWD"),
+    ],
+)
+def test_non_regular_session_requires_explicit_packet_authorization(
+    tmp_path, monkeypatch, session, symbol, market, currency
+):
+    runner, pm, service, cfg, clock, data, quote = setup_book(
+        tmp_path, monkeypatch, session=session, size=2
+    )
+    runner.allow_fixture_quotes = True
+    data["bar"] = data["bar"].model_copy(update={"symbol": symbol})
+    quote.symbol = symbol
+    quote.timestamp = clock["now"] - timedelta(seconds=1)
+    quote.observed_at = clock["now"]
+    order = make_order(
+        symbol=symbol,
+        market=market,
+        currency=currency,
+        created_at=NOW,
+    )
+    p = packet("TEST_ONLY_SESSION_NEGATIVE", NOW, paper_execution_model="QUOTE_BOOK")
+    p.selected_instrument = symbol
+    p = sign_cio_packet(p, signer_id="fixture-test-signer")
+    assert runner._resolve_cio_execution(cfg, p, data["bar"], order) is None
+    assert not pm.get_strategy_ledger("TEST_ONLY_native", DecisionScope.SWING).fills
+
+
+def test_quote_source_timeout_fails_closed_without_bar_promotion(tmp_path, monkeypatch):
+    runner, pm, service, cfg, clock, data, quote = setup_book(
+        tmp_path, monkeypatch, session="REGULAR", size=2
+    )
+    runner.allow_fixture_quotes = True
+
+    def timeout(_symbol):
+        raise TimeoutError("TEST_ONLY quote source timeout")
+
+    monkeypatch.setattr(runner.market_adapter, "get_latest_quote", timeout)
+    order = make_order(created_at=NOW)
+    p = packet("TEST_ONLY_TIMEOUT", NOW, paper_execution_model="QUOTE_BOOK")
+    assert runner._resolve_cio_execution(cfg, p, data["bar"], order) is None
+    assert not pm.get_strategy_ledger("TEST_ONLY_native", DecisionScope.SWING).fills
+
+
 def test_bar_reference_only_never_becomes_executable_book(tmp_path, monkeypatch):
     runner, pm, service = runner_harness(
         tmp_path,
@@ -355,6 +410,7 @@ def test_corporate_actions_native_cash_and_fx_fail_closed(tmp_path):
         us = state.portfolio_manager.get_strategy_ledger("TEST_ONLY_US_BOOK", DecisionScope.SWING)
         tw_cash_before = tw.cash
         us_cash_before = us.cash
+        now = tw.fills[0].timestamp
 
         split = CorporateAction(
             action_id="TEST_ONLY_SPLIT_2_FOR_1",
@@ -377,6 +433,8 @@ def test_corporate_actions_native_cash_and_fx_fail_closed(tmp_path):
         assert tw.positions["2330.TW"].quantity == 4
         # ask=100.1, 5 bps slippage => 100.15005 fill; 2-for-1 halves basis/share.
         assert tw.positions["2330.TW"].average_entry_price == pytest.approx(50.075025)
+        assert tw.positions["2330.TW"].current_price is None
+        assert tw.positions["2330.TW"].unrealized_pnl is None
         assert state.runner.apply_corporate_action(
             split,
             strategy_id="TEST_ONLY_TW_BOOK",
@@ -404,7 +462,9 @@ def test_corporate_actions_native_cash_and_fx_fail_closed(tmp_path):
             now=now + timedelta(days=3),
         )
         assert tw.cash == pytest.approx(tw_cash_before + 8)
+        assert tw.realized_pnl == pytest.approx(8)
         assert us.cash == us_cash_before
+        assert us.realized_pnl == 0
         assert state.runner.apply_corporate_action(
             dividend,
             strategy_id="TEST_ONLY_TW_BOOK",
@@ -466,6 +526,23 @@ def test_corporate_actions_native_cash_and_fx_fail_closed(tmp_path):
                 rate_receipts=[stale],
                 allow_test_only=True,
                 max_age=timedelta(days=5),
+            )
+
+        future = FxRateReceipt(
+            "USD/TWD",
+            Decimal("32"),
+            as_of + timedelta(days=1),
+            "TEST_ONLY future FX",
+            "https://example.invalid/test-only-future-fx",
+            (as_of + timedelta(days=1)).date(),
+            provenance="TEST_ONLY",
+        )
+        with pytest.raises(FxReportingBlocked, match="future FX"):
+            state.runner.report_strategy_nav(
+                "TEST_ONLY_US_BOOK",
+                as_of=as_of,
+                rate_receipts=[future],
+                allow_test_only=True,
             )
     finally:
         state.runner.shutdown()
