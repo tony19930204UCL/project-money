@@ -472,6 +472,7 @@ def test_full_research_decision_outcome_lesson_fresh_process_chain(tmp_path, mon
         # Refresh only the new session input; prior frozen receipt remains immutable.
         clock[0] = due + timedelta(minutes=1)
         adapter.set_now(clock[0])
+        producer.learning_store = CIODecisionLearningStore(runtime)
         producer.refresh("MSFT", now=clock[0])
         assert _sha(old_plan) == old_hash
     finally:
@@ -513,6 +514,30 @@ def test_full_research_decision_outcome_lesson_fresh_process_chain(tmp_path, mon
     assert next_readback["applied_lesson_ids"] == [lesson_id]
     assert next_readback["decision_delta"]["lesson_id"] == lesson_id
 
+    # A second fresh-process reload with the same frozen material must not
+    # resubmit the already-recorded case. This is caller-level idempotency, not
+    # a direct store insertion.
+    proc_repeat = subprocess.run(
+        [
+            sys.executable,
+            str(HELPER),
+            "--workspace-root", str(ROOT),
+            "--runtime-dir", str(runtime),
+            "--packet-root", str(producer.packet_root),
+            "--manifest", str(producer.manifest),
+            "--now", clock[0].isoformat(),
+            "--lesson-id", lesson_id,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    repeated_process = json.loads(proc_repeat.stdout.splitlines()[-1])
+    assert repeated_process["executor_calls"] == 0
+
     final_store = CIODecisionLearningStore(runtime)
     assert len([x for x in final_store._lessons if x.case_id == "TEST_ONLY_CHAIN_CASE_1"]) == 1
+    assert list(final_store._records).count("TEST_ONLY_CHAIN_CASE_2") == 1
     assert final_store.get_record("TEST_ONLY_CHAIN_CASE_2").applied_lesson_ids == [lesson_id]
+    assert final_store.get_record("TEST_ONLY_CHAIN_CASE_2").decision_delta["lesson_id"] == lesson_id
