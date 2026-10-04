@@ -68,6 +68,7 @@ def _canonical(page, base_url: str) -> dict:
     return {
         "orders": page.request.get(f"{base_url}/api/paper/orders").json(),
         "fills": readback["fills"],
+        "portfolios": readback["portfolios"],
         "portfolio": page.request.get(f"{base_url}/api/portfolio").json(),
         "events": page.request.get(f"{base_url}/api/events?since_id=0&limit=1000").json(),
     }
@@ -324,6 +325,7 @@ def test_same_runtime_actual_process_restart_preserves_order_fill_case_and_nav(
         assert second_snapshot["case_ids"] == first_snapshot["case_ids"]
         assert second_snapshot["portfolio"]["swing"]["cash"] == first_snapshot["portfolio"]["swing"]["cash"]
         assert second_snapshot["portfolio"]["swing"]["equity"] == first_snapshot["portfolio"]["swing"]["equity"]
+        assert second_snapshot["portfolios"] == first_snapshot["portfolios"]
         assert len(set(item["order_id"] for item in second_snapshot["orders"])) == len(second_snapshot["orders"])
         assert len(set(item["fill_id"] for item in second_snapshot["fills"])) == len(second_snapshot["fills"])
         assert "TEST_ONLY_CIO_POSITIVE" in view.locator(".pm-data-card pre").inner_text()
@@ -338,5 +340,6 @@ def test_same_runtime_actual_process_restart_preserves_order_fill_case_and_nav(
             "case_ids": second_snapshot["case_ids"],
             "cash": second_snapshot["portfolio"]["swing"]["cash"],
             "equity": second_snapshot["portfolio"]["swing"]["equity"],
+            "canonical_portfolios_equal": second_snapshot["portfolios"] == first_snapshot["portfolios"],
         })
         context.close()
