@@ -217,7 +217,10 @@ def adapt_canonical_registry_snapshot(
             except RegistryValidationError as exc:
                 record["_criterion_adapter_error"]=str(exc); changed=True
 
-        if not _present(record,"criteria_evidence") and isinstance(record.get("acceptance_evidence"),Mapping):
+        if _present(record,"criteria_evidence") and _present(record,"acceptance_evidence"):
+            if record["criteria_evidence"]!=record["acceptance_evidence"]:
+                _record_alias_conflict(record,"acceptance_evidence","criteria_evidence","CANONICAL_CRITERIA_EVIDENCE_ALIAS_CONFLICT"); changed=True
+        elif not _present(record,"criteria_evidence") and isinstance(record.get("acceptance_evidence"),Mapping):
             record["criteria_evidence"]=copy.deepcopy(record["acceptance_evidence"]); changed=True
 
         if _present(record,"original_deadline") and _present(record,"deadline"):
@@ -225,7 +228,10 @@ def adapt_canonical_registry_snapshot(
                 _record_alias_conflict(record,"deadline","original_deadline","CANONICAL_DEADLINE_ALIAS_CONFLICT"); changed=True
         elif not _present(record,"original_deadline") and _present(record,"deadline"):
             record["original_deadline"]=record["deadline"]; changed=True
-        if not _present(record,"original_deadline_source_ref") and _present(record,"deadline_source_ref"):
+        if _present(record,"original_deadline_source_ref") and _present(record,"deadline_source_ref"):
+            if record["original_deadline_source_ref"]!=record["deadline_source_ref"]:
+                _record_alias_conflict(record,"deadline_source_ref","original_deadline_source_ref","CANONICAL_DEADLINE_SOURCE_ALIAS_CONFLICT"); changed=True
+        elif not _present(record,"original_deadline_source_ref") and _present(record,"deadline_source_ref"):
             record["original_deadline_source_ref"]=record["deadline_source_ref"]; changed=True
 
         canonical_status=record.get("status")
