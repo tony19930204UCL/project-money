@@ -34,6 +34,10 @@ Unknown status values remain unsupported. `OVERDUE` does not become a synthetic 
 
 The adapter is nonmutating: it deep-copies the source object, preserves canonical originals, reports before/after SHA-256, and never invents a missing run time, source reference, completion timestamp, criterion result, recovery authorization, or live executor.
 
+Canonical alias adaptation is fail-closed. If both sides of an alias pair are present, the adapter must prove semantic equivalence before normalization. Conflicting `id/obligation_id`, `deadline/original_deadline`, `original_criteria/acceptance_criteria`, or `execution_one_shot.run_at` versus `execution_history[0].scheduled_at` are retained in diagnostics and block validation; no preferred alias silently wins. Timestamp aliases may differ textually only when they resolve to the same instant.
+
+Acceptance criteria are also count/order preserving. String criteria and mappings with one unambiguous `criterion_id`/`id`/`name` are supported; malformed or ambiguously named entries block adaptation instead of being discarded. Thus a mandatory criterion can never disappear merely because the adapter cannot name it.
+
 ## Completion-time semantics
 
 A source-backed completion timestamp is necessary but not sufficient. `completed_at` must also satisfy:
