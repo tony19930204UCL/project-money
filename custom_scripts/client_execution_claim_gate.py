@@ -3,7 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 from typing import Any, Mapping, Optional
+
+ROOT=Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0,str(ROOT))
 
 from custom_scripts.obligation_deadline_registry import (
     ACCEPTANCE_FAIL,
@@ -180,8 +185,14 @@ def evaluate_manifest(registry: Mapping[str,Any], manifest: Mapping[str,Any]) ->
             case_results.append({"id":rid,"status":"BLOCKED","reason":"FAIL_REQUIRES_EVIDENCE_BACKED_BLOCKER_OR_CRITERION_RESULT"})
 
     completion_allowed=(not any_blocked and all(r["status"]=="PASS" for r in case_results))
+    if any_blocked:
+        status="CLIENT_EXECUTION_CLAIM_BLOCKED"
+    elif completion_allowed:
+        status="CLIENT_EXECUTION_CLAIM_PASS"
+    else:
+        status="CLIENT_EXECUTION_CLAIM_RECORDED_NONCOMPLETION"
     return {
-        "status":"CLIENT_EXECUTION_CLAIM_PASS" if completion_allowed else "CLIENT_EXECUTION_CLAIM_BLOCKED",
+        "status":status,
         "required_ids":required_ids,
         "case_results":case_results,
         "completion_claim_allowed":completion_allowed,
@@ -197,7 +208,7 @@ def main(argv: Optional[list[str]]=None) -> int:
     manifest=json.loads(args.manifest.read_text(encoding="utf-8"))
     result=evaluate_manifest(registry,manifest)
     print(json.dumps(result,indent=2,sort_keys=True))
-    return 0 if result["status"]=="CLIENT_EXECUTION_CLAIM_PASS" else 4
+    return 0 if result["status"] in {"CLIENT_EXECUTION_CLAIM_PASS","CLIENT_EXECUTION_CLAIM_RECORDED_NONCOMPLETION"} else 4
 
 
 if __name__=="__main__":
