@@ -91,7 +91,7 @@ def _binding_equal(expected: Mapping[str,Any], actual: Mapping[str,Any], *, pref
             return False
     if _present(left,"scheduled_at"):
         _require_scope_field(right,"scheduled_at",f"{prefix}.actual")
-        if left["scheduled_at"]!=right["scheduled_at"]:
+        if _semantic_time(left["scheduled_at"])!=_semantic_time(right["scheduled_at"]):
             return False
     return True
 
