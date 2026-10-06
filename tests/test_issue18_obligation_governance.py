@@ -972,3 +972,144 @@ def test_result_alias_valid_equivalence_passes_in_selected_and_shadow_results():
     assert report["conflicts"]==[]
     assert adapted["obligation_results"][0]["acceptance_result"]=="PASS"
     assert evaluate_manifest(reg,adapted,now=NOW)["status"]=="CLIENT_EXECUTION_CLAIM_PASS"
+
+
+
+def _assert_legacy_claim_blocked_without_mutation(reg, raw, expected_kind):
+    before=deepcopy(raw)
+    adapted,report=adapt_legacy_manifest(raw)
+    assert raw==before
+    assert report["input_unchanged"] is True
+    assert any(x["kind"]==expected_kind for x in report["conflicts"])
+    result=evaluate_manifest(reg,adapted,now=NOW)
+    assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+    assert result["completion_claim_allowed"] is False
+
+
+def test_alias_domain_matrix_present_invalid_identity_and_result_fail_closed_selected_and_shadow():
+    reg=scoped_registry(completed_record("done"),assigned_ids=["done"])
+    bad_values=(None,"","   ",{"value":"done"},17)
+
+    for bad in bad_values:
+        raw=_passing_claim_manifest("done")
+        raw["obligation_results"][0]["obligation_id"]=deepcopy(bad)
+        _assert_legacy_claim_blocked_without_mutation(reg,raw,"LEGACY_RESULT_ID_DOMAIN_INVALID")
+
+        raw=_passing_claim_manifest("done")
+        raw["results"]=deepcopy(raw["obligation_results"])
+        raw["results"][0]["obligation_id"]=deepcopy(bad)
+        _assert_legacy_claim_blocked_without_mutation(reg,raw,"LEGACY_RESULT_ID_DOMAIN_INVALID")
+
+    result_bad_values=(None,"","   ","BLOCKED","UNKNOWN",{"value":"PASS"},17)
+    for bad in result_bad_values:
+        raw=_passing_claim_manifest("done")
+        raw["obligation_results"][0]["result"]=deepcopy(bad)
+        _assert_legacy_claim_blocked_without_mutation(reg,raw,"LEGACY_ACCEPTANCE_RESULT_DOMAIN_INVALID")
+
+        raw=_passing_claim_manifest("done")
+        raw["results"]=deepcopy(raw["obligation_results"])
+        raw["results"][0]["result"]=deepcopy(bad)
+        _assert_legacy_claim_blocked_without_mutation(reg,raw,"LEGACY_ACCEPTANCE_RESULT_DOMAIN_INVALID")
+
+        raw=_passing_claim_manifest("done")
+        row=raw["obligation_results"][0]
+        row["result"]="PASS"
+        row["acceptance_result"]=deepcopy(bad)
+        _assert_legacy_claim_blocked_without_mutation(reg,raw,"LEGACY_ACCEPTANCE_RESULT_DOMAIN_INVALID")
+
+        raw=_passing_claim_manifest("done")
+        raw["results"]=deepcopy(raw["obligation_results"])
+        row=raw["results"][0]
+        row["result"]="PASS"
+        row["acceptance_result"]=deepcopy(bad)
+        _assert_legacy_claim_blocked_without_mutation(reg,raw,"LEGACY_ACCEPTANCE_RESULT_DOMAIN_INVALID")
+
+
+def test_alias_domain_matrix_present_invalid_schedule_fail_closed_selected_and_shadow():
+    reg=scoped_registry(completed_record("done"),assigned_ids=["done"])
+    bad_values=(None,"","   ","not-a-time","2026-10-09T09:00:00",{"time":"2026-10-09T09:00:00Z"},17)
+
+    for field in ("run_at","scheduled_at"):
+        for bad in bad_values:
+            raw=_passing_claim_manifest("done")
+            raw["execution_scope"]["executor_binding"][field]=deepcopy(bad)
+            _assert_legacy_claim_blocked_without_mutation(reg,raw,"LEGACY_SCHEDULE_ALIAS_DOMAIN_INVALID")
+
+            raw=_passing_claim_manifest("done")
+            raw["scope"]=deepcopy(raw["execution_scope"])
+            raw["scope"]["executor_binding"][field]=deepcopy(bad)
+            _assert_legacy_claim_blocked_without_mutation(reg,raw,"LEGACY_SCHEDULE_ALIAS_DOMAIN_INVALID")
+
+
+def test_alias_domain_matrix_present_invalid_scope_and_results_top_level_fail_closed():
+    reg=scoped_registry(completed_record("done"),assigned_ids=["done"])
+    invalid=(None,"","   ",17,{"unexpected":"shape"})
+
+    for bad in invalid:
+        raw=_passing_claim_manifest("done")
+        raw["scope"]=deepcopy(bad)
+        _assert_legacy_claim_blocked_without_mutation(reg,raw,"LEGACY_SCOPE_DOMAIN_INVALID")
+
+        raw=_passing_claim_manifest("done")
+        raw["execution_scope"]=deepcopy(bad)
+        _assert_legacy_claim_blocked_without_mutation(reg,raw,"LEGACY_SCOPE_DOMAIN_INVALID")
+
+    invalid_results=(None,"","   ",17,{"id":"done"})
+    for bad in invalid_results:
+        raw=_passing_claim_manifest("done")
+        raw["results"]=deepcopy(bad)
+        _assert_legacy_claim_blocked_without_mutation(reg,raw,"LEGACY_RESULTS_DOMAIN_INVALID")
+
+        raw=_passing_claim_manifest("done")
+        raw["obligation_results"]=deepcopy(bad)
+        _assert_legacy_claim_blocked_without_mutation(reg,raw,"LEGACY_RESULTS_DOMAIN_INVALID")
+
+    for field in ("obligation_results","results"):
+        raw=_passing_claim_manifest("done")
+        if field=="results":
+            raw["results"]=deepcopy(raw["obligation_results"])
+        raw[field]=[None] if field=="obligation_results" else [None]
+        _assert_legacy_claim_blocked_without_mutation(reg,raw,"LEGACY_RESULT_ROW_DOMAIN_INVALID")
+
+
+def test_alias_domain_matrix_absent_and_valid_equivalent_aliases_remain_compatible():
+    reg=scoped_registry(completed_record("done"),assigned_ids=["done"])
+
+    # All optional legacy aliases absent: canonical manifest remains valid.
+    raw=_passing_claim_manifest("done")
+    before=deepcopy(raw)
+    adapted,report=adapt_legacy_manifest(raw)
+    assert raw==before and report["input_unchanged"] is True
+    assert report["conflicts"]==[]
+    assert evaluate_manifest(reg,adapted,now=NOW)["status"]=="CLIENT_EXECUTION_CLAIM_PASS"
+
+    # Legacy-only top-level and row aliases remain a supported fallback.
+    legacy={
+        "scope":deepcopy(_passing_claim_manifest("done")["execution_scope"]),
+        "results":[{
+            "obligation_id":"done",
+            "status":"COMPLETED",
+            "result":"PASS",
+            "completion_evidence":{"source_ref":"artifact://completion"},
+            "effect_evidence":{"verified":True,"source_ref":"artifact://effect"},
+        }],
+    }
+    before=deepcopy(legacy)
+    adapted,report=adapt_legacy_manifest(legacy)
+    assert legacy==before and report["input_unchanged"] is True
+    assert report["conflicts"]==[]
+    assert evaluate_manifest(reg,adapted,now=NOW)["status"]=="CLIENT_EXECUTION_CLAIM_PASS"
+
+    # Valid dual aliases, including offset-equivalent schedule instants, remain positive.
+    raw=_passing_claim_manifest("done")
+    raw["scope"]=deepcopy(raw["execution_scope"])
+    raw["execution_scope"]["executor_binding"]["run_at"]="2026-10-09T11:00:00+02:00"
+    raw["scope"]["executor_binding"]["run_at"]="2026-10-09T11:00:00+02:00"
+    raw["obligation_results"][0]["obligation_id"]="done"
+    raw["obligation_results"][0]["result"]="PASS"
+    raw["results"]=deepcopy(raw["obligation_results"])
+    before=deepcopy(raw)
+    adapted,report=adapt_legacy_manifest(raw)
+    assert raw==before and report["input_unchanged"] is True
+    assert report["conflicts"]==[]
+    assert evaluate_manifest(reg,adapted,now=NOW)["status"]=="CLIENT_EXECUTION_CLAIM_PASS"
