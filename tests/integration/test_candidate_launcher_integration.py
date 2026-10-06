@@ -91,7 +91,9 @@ def test_verification_only_missing_inputs_is_truthful_and_side_effect_bounded(tm
     assert result["status"]=="WAITING_FOR_APPROVED_INPUT"
     assert result["provider_invoked"] is False
     assert result["runner_invoked"] is False
-    assert result["fx"]["status"]=="COMBINED_NAV_GAP"\n    assert result["fx"]["valuation_timing"]=="VERIFY_ONLY_PRE_CYCLE"\n    assert result["fx"]["reporting_nav"] is None
+    assert result["fx"]["status"]=="COMBINED_NAV_GAP"
+    assert result["fx"]["valuation_timing"]=="VERIFY_ONLY_PRE_CYCLE"
+    assert result["fx"]["reporting_nav"] is None
     assert not (runtime/FX_NAME).exists()
     persisted=json.loads((runtime/RESULT_NAME).read_text())
     assert persisted==result
@@ -111,7 +113,9 @@ def test_supplied_fx_provenance_is_preserved_and_test_only_never_promoted(tmp_pa
         workspace_root=ROOT,runtime_dir=runtime,mode=VERIFY_ONLY,settings=settings(),
         fx_receipts_path=supplied,now=T0,
     )
-    assert result["fx"]["status"]=="AVAILABLE"\n    assert result["fx"]["valuation_timing"]=="VERIFY_ONLY_PRE_CYCLE"\n    exact=json.loads((runtime/FX_NAME).read_text())["receipts"][0]
+    assert result["fx"]["status"]=="AVAILABLE"
+    assert result["fx"]["valuation_timing"]=="VERIFY_ONLY_PRE_CYCLE"
+    exact=json.loads((runtime/FX_NAME).read_text())["receipts"][0]
     assert exact["source_date"]=="2026-10-05"
     assert exact["source_url"]=="https://fred.stlouisfed.org/series/DEXTAUS"
     assert exact["provenance"]=="OFFICIAL_SOURCE"
@@ -160,7 +164,10 @@ def test_authenticated_test_only_consumer_calls_real_runner_and_persists_lineage
     assert context_id and result["research_lineage"][0]["daily_plan_review"] is True
     assert result["cycle"]["decisions"][0]["action"]=="NO_TRADE"
     assert result["cycle"]["fills"] if "fills" in result["cycle"] else True
-    assert result["fx"]["status"]=="COMBINED_NAV_GAP"\n    assert result["fx"]["valuation_timing"]=="POST_CYCLE"\n    assert not (runtime/FX_NAME).exists()\n
+    assert result["fx"]["status"]=="COMBINED_NAV_GAP"
+    assert result["fx"]["valuation_timing"]=="POST_CYCLE"
+    assert not (runtime/FX_NAME).exists()
+
     proc=subprocess.run([
         sys.executable,str(HELPER),
         "--workspace-root",str(ROOT),
