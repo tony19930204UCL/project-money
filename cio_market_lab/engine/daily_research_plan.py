@@ -220,7 +220,9 @@ class DailyResearchPlanProducer:
                 enriched.append(current)
             raw=enriched
         if disclosure:
-            wire = self.root / 'raw_official' / (capture_identity + '.wire')
+            # Preserve the established content-addressed wire path for exact-byte
+            # lineage/readers. JSON capture identity is stricter (URL+wire+schema).
+            wire = self.root / 'raw_official' / (digest + '.wire')
             if not wire.exists():
                 wire.write_bytes(response.content)
         atomic_json(path, {'source_url': url, 'observed_at': now.isoformat(), 'tls_verified': True,
