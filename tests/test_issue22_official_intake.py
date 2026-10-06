@@ -159,7 +159,7 @@ def test_capture_records_wire_digest_observed_time_and_body_provenance(tmp_path,
     assert stored["sha256_of_wire_bytes"]==digest
     assert stored["capture_schema"]=="official-document-enriched-v1"
     assert stored["content"]==rows
-    assert capture.with_suffix(".wire").read_bytes()==body
+    assert (p.root/"raw_official"/(digest+".wire")).read_bytes()==body
 
 
 def _cash_rows(start,ocf,capex):
