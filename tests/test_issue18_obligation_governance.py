@@ -771,3 +771,115 @@ def test_internal_scheduled_at_run_at_conflicts_fail_closed_in_one_shot_and_live
     result=validate_registry(adapted,now=NOW)
     assert result["status"]=="DEADLINE_REGISTRY_INVALID"
     assert any("CANONICAL_SCHEDULE_ALIAS_CONFLICT" in e for e in result["errors"])
+
+
+def _passing_claim_manifest(rid="done"):
+    manifest=scoped_manifest([rid])
+    manifest["obligation_results"]=[{
+        "id":rid,
+        "status":"COMPLETED",
+        "acceptance_result":"PASS",
+        "completion_evidence":{"source_ref":"artifact://completion"},
+        "effect_evidence":{"verified":True,"source_ref":"artifact://effect"},
+    }]
+    return manifest
+
+
+def test_full_claim_blocks_scope_schedule_alias_conflict_even_when_all_copies_match():
+    raw=scoped_registry(completed_record("done"),assigned_ids=["done"])
+    manifest=_passing_claim_manifest("done")
+    for b in (
+        raw["execution_scopes"]["scope-1"]["executor_binding"],
+        raw["live_jobs"]["job-1"],
+        manifest["execution_scope"]["executor_binding"],
+    ):
+        b["scheduled_at"]="2026-10-09T09:00:00+00:00"
+        b["run_at"]="2026-10-09T10:00:00+00:00"
+    adapted,report=adapt_canonical_registry_snapshot(raw)
+    assert report["input_unchanged"] is True
+    result=evaluate_manifest(adapted,manifest,now=NOW)
+    assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+    assert result["completion_claim_allowed"] is False
+    assert "SCHEDULE_ALIAS_CONFLICT" in result["reason"]
+
+
+def test_canonical_acceptance_evidence_conflict_blocks_registry_and_full_claim():
+    raw=scoped_registry(completed_record("done"),assigned_ids=["done"])
+    row=raw["obligations"][0]
+    row["acceptance_evidence"]=criterion(False)
+    before=deepcopy(raw)
+    adapted,report=adapt_canonical_registry_snapshot(raw)
+    assert raw==before
+    assert report["input_unchanged"] is True
+    conflict=adapted["obligations"][0]["_canonical_alias_conflicts"]
+    assert any(x["kind"]=="CANONICAL_CRITERIA_EVIDENCE_ALIAS_CONFLICT" for x in conflict)
+    registry_result=validate_registry(adapted,now=NOW)
+    assert registry_result["status"]=="DEADLINE_REGISTRY_INVALID"
+    assert acceptance_check(adapted,"done",now=NOW)["status"]=="OBLIGATION_ACCEPTANCE_BLOCKED"
+    claim=evaluate_manifest(adapted,_passing_claim_manifest("done"),now=NOW)
+    assert claim["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+    assert claim["case_results"][0]["reason"]=="CANONICAL_ACCEPTANCE_NOT_PASS"
+    assert claim["completion_claim_allowed"] is False
+
+
+def test_legacy_manifest_conflicting_aliases_block_in_full_claim_and_preserve_input():
+    reg=scoped_registry(completed_record("done"),assigned_ids=["done"])
+    base=_passing_claim_manifest("done")
+
+    raw=deepcopy(base)
+    raw["scope"]=deepcopy(raw["execution_scope"])
+    raw["scope"]["authorization_source"]="decision://conflicting-scope"
+    before=deepcopy(raw)
+    adapted,report=adapt_legacy_manifest(raw)
+    assert raw==before and report["input_unchanged"] is True
+    result=evaluate_manifest(reg,adapted,now=NOW)
+    assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+    assert "LEGACY_SCOPE_ALIAS_CONFLICT" in result["reason"]
+
+    raw=deepcopy(base)
+    raw["results"]=deepcopy(raw["obligation_results"])
+    raw["results"][0]["id"]="different-canonical-id"
+    adapted,_=adapt_legacy_manifest(raw)
+    result=evaluate_manifest(reg,adapted,now=NOW)
+    assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+    assert "LEGACY_RESULTS_ALIAS_CONFLICT" in result["reason"]
+
+    raw=deepcopy(base)
+    raw["obligation_results"][0]["obligation_id"]="different-canonical-id"
+    raw["obligation_results"][0]["result"]="FAIL"
+    adapted,_=adapt_legacy_manifest(raw)
+    result=evaluate_manifest(reg,adapted,now=NOW)
+    assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+    assert "LEGACY_RESULT_ID_ALIAS_CONFLICT" in result["reason"]
+    assert "LEGACY_ACCEPTANCE_RESULT_ALIAS_CONFLICT" in result["reason"]
+
+
+def test_equivalent_aliases_remain_positive_across_registry_scope_and_legacy_manifest():
+    raw=canonical_shape_fixture("REGISTERED")
+    row=raw["obligations"][0]
+    row["id"]="canonical-active"
+    row["original_deadline"]="2026-10-10T11:00:00+02:00"
+    row["original_deadline_source_ref"]=row["deadline_source_ref"]
+    row["original_criteria"]=["criterion-a"]
+    row["criteria_evidence"]=deepcopy(row["acceptance_evidence"])
+    row["execution_one_shot"]["scheduled_at"]="2026-10-09T11:00:00+02:00"
+    raw["executor_readback"]["job-1"]["scheduled_at"]="2026-10-09T11:00:00+02:00"
+    adapted,_=adapt_canonical_registry_snapshot(raw)
+    assert validate_registry(adapted,now=NOW)["status"]=="DEADLINE_REGISTRY_VALID"
+
+    reg=scoped_registry(completed_record("done"),assigned_ids=["done"])
+    manifest=_passing_claim_manifest("done")
+    reg["execution_scopes"]["scope-1"]["executor_binding"]["run_at"]="2026-10-09T11:00:00+02:00"
+    reg["live_jobs"]["job-1"]["run_at"]="2026-10-09T11:00:00+02:00"
+    manifest["execution_scope"]["executor_binding"]["run_at"]="2026-10-09T11:00:00+02:00"
+    assert evaluate_manifest(reg,manifest,now=NOW)["status"]=="CLIENT_EXECUTION_CLAIM_PASS"
+
+    legacy=deepcopy(manifest)
+    legacy["scope"]=deepcopy(legacy["execution_scope"])
+    legacy["scope"]["executor_binding"]["scheduled_at"]="2026-10-09T11:00:00+02:00"
+    legacy["results"]=deepcopy(legacy["obligation_results"])
+    legacy["results"][0]["obligation_id"]="done"
+    legacy["results"][0]["result"]="PASS"
+    adapted_manifest,report=adapt_legacy_manifest(legacy)
+    assert report["conflicts"]==[]
+    assert evaluate_manifest(reg,adapted_manifest,now=NOW)["status"]=="CLIENT_EXECUTION_CLAIM_PASS"
