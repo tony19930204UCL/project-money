@@ -103,7 +103,7 @@ The adapter also accepts sanitized legacy manifest aliases without mutating the 
 - row `obligation_id -> id`;
 - row `result -> acceptance_result` for explicit PASS/FAIL.
 
-Unknown/missing fields remain fail-closed. Legacy aliases are compatibility inputs, not precedence rules: if both `scope/execution_scope`, `results/obligation_results`, row `id/obligation_id`, or row `result/acceptance_result` are present, they must be provably equivalent or the complete claim is blocked. Both originals are preserved for review and the input object remains unchanged.
+Unknown/missing fields remain fail-closed. Legacy aliases are compatibility inputs, not precedence rules. Raw alias trees are validated on both sides before any semantic normalization or comparison, including shadow-only `scope` / `results` branches and nested executor bindings. An internally contradictory branch (for example conflicting `scheduled_at/run_at`) blocks even if normalization would otherwise make it look equal to the selected branch. If both `scope/execution_scope`, `results/obligation_results`, row `id/obligation_id`, or row `result/acceptance_result` are present, they must be valid and provably equivalent or the complete claim is blocked. Any present `result` or `acceptance_result` must be in the supported PASS/FAIL domain; values such as BLOCKED, unknown strings, mappings, or numbers are not silently ignored. Both originals are preserved for review and the input object remains unchanged.
 
 ## FULL_MAIN_CIO and scoped claims
 
