@@ -149,6 +149,9 @@ def validate_record(record: Mapping[str,Any], live_jobs: Mapping[str,Any], *, no
 
         if status=="COMPLETED":
             completed=_parse_time(_require(record,"completed_at",prefix),f"{prefix}.completed_at")
+            _require(record,"completed_at_source_ref",prefix)
+            if record.get("completed_at_source_kind")!="ORIGINAL_ARTIFACT":
+                raise RegistryValidationError(f"{prefix}.completed_at_source_kind:ORIGINAL_ARTIFACT_REQUIRED")
             if completed>deadline:
                 _validate_recovery(record,live_jobs,deadline=deadline,prefix=prefix)
             if acceptance==ACCEPTANCE_PASS and not _criterion_complete(record):
@@ -262,21 +265,24 @@ def migrate_registry_snapshot(before: Mapping[str,Any], source_refs: Mapping[str
             continue
         original_deadline=record.get("original_deadline")
         original_failure=record.get("failure_disposition")
-        legacy_terminal=record.pop("legacy_terminal_state",None)
+        legacy_terminal=record.get("legacy_terminal_state")
         if legacy_terminal in {"FAILED","CLOSED"} and record.get("status") not in {"FAILED","CLOSED"}:
             record["status"]=legacy_terminal
-            changes.append({"id":record.get("id"),"field":"status","source_ref":_source_ref(source_refs,"status")})
+            changes.append({"id":record.get("id"),"field":"status","before":before.get("status"),"after":legacy_terminal,"source_ref":_source_ref(source_refs,"status")})
         if legacy_terminal=="CLOSED" and not record.get("historical_acceptance_result"):
             historical=record.get("legacy_acceptance_result")
             if historical in {ACCEPTANCE_PASS,ACCEPTANCE_FAIL}:
                 record["historical_acceptance_result"]=historical
                 changes.append({"id":record.get("id"),"field":"historical_acceptance_result",
+                                "before":None,"after":historical,
                                 "source_ref":_source_ref(source_refs,"historical_acceptance_result")})
         # Never synthesize completed_at from mtime/review/current/scheduled values.
         if record.get("status")=="COMPLETED" and not record.get("completed_at"):
-            record["migration_blocked_reason"]="ORIGINAL_COMPLETION_TIMESTAMP_MISSING"
-            changes.append({"id":record.get("id"),"field":"migration_blocked_reason",
-                            "source_ref":_source_ref(source_refs,"missing_completion_timestamp")})
+            if record.get("migration_blocked_reason")!="ORIGINAL_COMPLETION_TIMESTAMP_MISSING":
+                record["migration_blocked_reason"]="ORIGINAL_COMPLETION_TIMESTAMP_MISSING"
+                changes.append({"id":record.get("id"),"field":"migration_blocked_reason",
+                                "before":None,"after":"ORIGINAL_COMPLETION_TIMESTAMP_MISSING",
+                                "source_ref":_source_ref(source_refs,"missing_completion_timestamp")})
         if record.get("original_deadline")!=original_deadline:
             raise RegistryValidationError("migration:ORIGINAL_DEADLINE_MUTATED")
         if record.get("failure_disposition")!=original_failure:
