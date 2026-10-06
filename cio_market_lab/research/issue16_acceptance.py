@@ -51,7 +51,8 @@ class PublicWorkerEvidence(BaseModel):
 
 _SECRET_OR_LOCAL_VALUE=re.compile(
     r'(?i)(api[_ -]?key|bearer\\s+[A-Za-z0-9._-]+|password|secret|token|'
-    r'(?:^|[\\s"\'=])/(?:home|users|var|private|mnt|tmp)/|[A-Za-z]:\\\\(?:Users|Windows|Temp)\\\\)'
+    r'(?:^|[\\s"\'=])/(?:home|users|var|private|mnt|tmp)/|'
+    r'[A-Za-z]:\\(?:Users|Windows|Temp)\\)'
 )
 _FORBIDDEN_FIELD_PARTS=(
     "account","credential","secret","token","api_key","apikey","holding","order",
@@ -71,7 +72,7 @@ def _reject_private_content(value: Any, path: str="payload") -> None:
             _reject_private_content(child,f"{path}[{i}]")
     elif isinstance(value,str):
         lowered=value.lower()
-        local_path_markers=("/home/","/users/","/var/","/private/","/mnt/","/tmp/","\\\\users\\\\","\\\\windows\\\\","\\\\temp\\\\")
+        local_path_markers=("/home/","/users/","/var/","/private/","/mnt/","/tmp/")
         if _SECRET_OR_LOCAL_VALUE.search(value) or any(marker in lowered for marker in local_path_markers):
             raise ValueError(f"PUBLIC_OUTBOUND_VALUE_REJECTED:{path}")
 
@@ -390,16 +391,52 @@ class ReceiptAwarePositionConsumer:
                 results.append({"symbol":symbol,"stable_identity":stable_identity,
                                 "classification":"UNKNOWN","triggered":None,"reason":"QUOTE_MISSING"})
                 continue
-            evaluated=apply_verified_quote_edges(dict(observation),quote,_utc(now),
-                                                 max_age_seconds=max_age_seconds,allow_fixture=allow_fixture)
-            entry=evaluated.get("entry_edge") or {}
-            invalidation=evaluated.get("invalidation_edge") or {}
-            known=entry.get("triggered") is not None or invalidation.get("triggered") is not None
-            triggered=bool(entry.get("triggered") or invalidation.get("triggered")) if known else None
-            classification="FRESH" if known else "UNKNOWN"
-            results.append({"symbol":symbol,"stable_identity":stable_identity,
-                            "classification":classification,"triggered":triggered,
-                            "entry_edge":entry,"invalidation_edge":invalidation})
+            current_observation=dict(observation)
+            # Historical edge objects are audit history, not evidence about the
+            # current quote. Canonical evaluation must start from an edge-clean
+            # observation so a rejected quote cannot inherit an old trigger.
+            current_observation.pop("entry_edge",None)
+            current_observation.pop("invalidation_edge",None)
+            evaluated=apply_verified_quote_edges(
+                current_observation,quote,_utc(now),
+                max_age_seconds=max_age_seconds,allow_fixture=allow_fixture,
+            )
+            quote_status=evaluated.get("quote_edge_status")
+            if quote_status=="BLOCKED_QUOTE_UNAVAILABLE":
+                results.append({
+                    "symbol":symbol,"stable_identity":stable_identity,
+                    "classification":"UNKNOWN","triggered":None,
+                    "reason":evaluated.get("quote_edge_reason") or "BLOCKED_QUOTE_UNAVAILABLE",
+                    "quote_edge_status":quote_status,
+                })
+                continue
+            if quote_status=="RESEARCH_ONLY_NO_PRICE_TRIGGER":
+                results.append({
+                    "symbol":symbol,"stable_identity":stable_identity,
+                    "classification":"RESEARCH_ONLY_NO_PRICE_TRIGGER","triggered":False,
+                    "quote_edge_status":quote_status,
+                })
+                continue
+            if quote_status not in {"VALIDATED_ADAPTER_QUOTE","TEST_ONLY"}:
+                results.append({
+                    "symbol":symbol,"stable_identity":stable_identity,
+                    "classification":"UNKNOWN","triggered":None,
+                    "reason":"QUOTE_EDGE_STATUS_UNAVAILABLE",
+                    "quote_edge_status":quote_status,
+                })
+                continue
+            entry_triggered=evaluated.get("entry_triggered")
+            invalidation_triggered=evaluated.get("invalidation_triggered")
+            known=entry_triggered is not None or invalidation_triggered is not None
+            triggered=bool(entry_triggered or invalidation_triggered) if known else None
+            results.append({
+                "symbol":symbol,"stable_identity":stable_identity,
+                "classification":"FRESH" if known else "UNKNOWN",
+                "triggered":triggered,
+                "quote_edge_status":quote_status,
+                "entry_edge":evaluated.get("entry_edge") or {},
+                "invalidation_edge":evaluated.get("invalidation_edge") or {},
+            })
         return {"status":"EVALUATED","vti_contract_covered":"VTI" in observations,
                 "results":results,"private_positions_exported":False}
 
