@@ -15,6 +15,7 @@ from custom_scripts.obligation_deadline_registry import (
     ACCEPTANCE_PASS,
     NON_SUCCESS_TERMINAL,
     acceptance_check,
+    adapt_canonical_registry_snapshot,
 )
 
 
@@ -243,7 +244,8 @@ def main(argv: Optional[list[str]]=None) -> int:
     p.add_argument("--registry",type=Path,required=True)
     p.add_argument("--manifest",type=Path,required=True)
     args=p.parse_args(argv)
-    registry=json.loads(args.registry.read_text(encoding="utf-8"))
+    raw_registry=json.loads(args.registry.read_text(encoding="utf-8"))
+    registry,_=adapt_canonical_registry_snapshot(raw_registry)
     manifest=json.loads(args.manifest.read_text(encoding="utf-8"))
     result=evaluate_manifest(registry,manifest)
     print(json.dumps(result,indent=2,sort_keys=True))
