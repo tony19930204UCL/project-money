@@ -25,6 +25,26 @@ def _present(mapping: Mapping[str,Any], key: str) -> bool:
     return key in mapping and mapping[key] is not None and not (isinstance(mapping[key],str) and mapping[key]=="")
 
 
+def _key_present(mapping: Mapping[str,Any], key: str) -> bool:
+    return key in mapping
+
+
+def _nonempty_string(value: Any) -> bool:
+    return isinstance(value,str) and bool(value.strip())
+
+
+def _parse_alias_time(value: Any) -> Optional[datetime]:
+    if not _nonempty_string(value):
+        return None
+    try:
+        parsed=datetime.fromisoformat(value.replace("Z","+00:00"))
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
 def _require_scope_field(mapping: Mapping[str,Any], key: str, prefix: str) -> Any:
     if not _present(mapping,key):
         raise ClaimGateError(f"{prefix}.{key}:REQUIRED")
@@ -32,23 +52,16 @@ def _require_scope_field(mapping: Mapping[str,Any], key: str, prefix: str) -> An
 
 
 def _semantic_time(value: Any) -> Any:
-    if not isinstance(value,str):
-        return value
-    try:
-        parsed=datetime.fromisoformat(value.replace("Z","+00:00"))
-    except Exception:
-        return value
-    if parsed.tzinfo is None:
-        return value
-    return parsed.astimezone(timezone.utc).isoformat()
+    parsed=_parse_alias_time(value)
+    return parsed.isoformat() if parsed is not None else value
 
 
 def _schedule_alias_conflict(mapping: Mapping[str,Any]) -> bool:
     return (
         mapping.get("_canonical_schedule_alias_conflict") is not None
         or (
-            _present(mapping,"scheduled_at")
-            and _present(mapping,"run_at")
+            _key_present(mapping,"scheduled_at")
+            and _key_present(mapping,"run_at")
             and _semantic_time(mapping.get("scheduled_at"))!=_semantic_time(mapping.get("run_at"))
         )
     )
@@ -86,6 +99,14 @@ def _alias_values_equal(left: Any, right: Any) -> bool:
 def _raw_alias_tree_conflicts(value: Any, *, path: str) -> list[dict[str,Any]]:
     conflicts=[]
     if isinstance(value,Mapping):
+        for field in ("scheduled_at","run_at"):
+            if _key_present(value,field) and _parse_alias_time(value.get(field)) is None:
+                conflicts.append({
+                    "kind":"LEGACY_SCHEDULE_ALIAS_DOMAIN_INVALID",
+                    "path":path,
+                    "field":field,
+                    "value":copy.deepcopy(value.get(field)),
+                })
         if _schedule_alias_conflict(value):
             conflicts.append({
                 "kind":"LEGACY_RAW_SCHEDULE_ALIAS_CONFLICT",
@@ -93,15 +114,26 @@ def _raw_alias_tree_conflicts(value: Any, *, path: str) -> list[dict[str,Any]]:
                 "scheduled_at":copy.deepcopy(value.get("scheduled_at")),
                 "run_at":copy.deepcopy(value.get("run_at")),
             })
-        if _present(value,"id") and _present(value,"obligation_id") and value.get("id")!=value.get("obligation_id"):
-            conflicts.append({
-                "kind":"LEGACY_RESULT_ID_ALIAS_CONFLICT",
-                "path":path,
-                "id":copy.deepcopy(value.get("id")),
-                "obligation_id":copy.deepcopy(value.get("obligation_id")),
-            })
-        has_acceptance=_present(value,"acceptance_result")
-        has_result=_present(value,"result")
+
+        for field in ("id","obligation_id"):
+            if _key_present(value,field) and not _nonempty_string(value.get(field)):
+                conflicts.append({
+                    "kind":"LEGACY_RESULT_ID_DOMAIN_INVALID",
+                    "path":path,
+                    "field":field,
+                    "value":copy.deepcopy(value.get(field)),
+                })
+        if _key_present(value,"id") and _key_present(value,"obligation_id"):
+            if _nonempty_string(value.get("id")) and _nonempty_string(value.get("obligation_id")) and value.get("id")!=value.get("obligation_id"):
+                conflicts.append({
+                    "kind":"LEGACY_RESULT_ID_ALIAS_CONFLICT",
+                    "path":path,
+                    "id":copy.deepcopy(value.get("id")),
+                    "obligation_id":copy.deepcopy(value.get("obligation_id")),
+                })
+
+        has_acceptance=_key_present(value,"acceptance_result")
+        has_result=_key_present(value,"result")
         if has_acceptance and not (
             isinstance(value.get("acceptance_result"),str)
             and value.get("acceptance_result") in {ACCEPTANCE_PASS,ACCEPTANCE_FAIL}
@@ -122,19 +154,32 @@ def _raw_alias_tree_conflicts(value: Any, *, path: str) -> list[dict[str,Any]]:
                 "field":"result",
                 "value":copy.deepcopy(value.get("result")),
             })
-        if has_acceptance and has_result and value.get("acceptance_result")!=value.get("result"):
-            conflicts.append({
-                "kind":"LEGACY_ACCEPTANCE_RESULT_ALIAS_CONFLICT",
-                "path":path,
-                "acceptance_result":copy.deepcopy(value.get("acceptance_result")),
-                "result":copy.deepcopy(value.get("result")),
-            })
+        if has_acceptance and has_result:
+            left=value.get("acceptance_result"); right=value.get("result")
+            if (
+                isinstance(left,str) and left in {ACCEPTANCE_PASS,ACCEPTANCE_FAIL}
+                and isinstance(right,str) and right in {ACCEPTANCE_PASS,ACCEPTANCE_FAIL}
+                and left!=right
+            ):
+                conflicts.append({
+                    "kind":"LEGACY_ACCEPTANCE_RESULT_ALIAS_CONFLICT",
+                    "path":path,
+                    "acceptance_result":copy.deepcopy(left),
+                    "result":copy.deepcopy(right),
+                })
         for key,child in value.items():
             if str(key).startswith("_legacy_alias_conflicts"):
                 continue
             conflicts.extend(_raw_alias_tree_conflicts(child,path=f"{path}.{key}"))
     elif isinstance(value,list):
         for index,child in enumerate(value):
+            if not isinstance(child,Mapping):
+                conflicts.append({
+                    "kind":"LEGACY_RESULT_ROW_DOMAIN_INVALID",
+                    "path":f"{path}[{index}]",
+                    "value":copy.deepcopy(child),
+                })
+                continue
             conflicts.extend(_raw_alias_tree_conflicts(child,path=f"{path}[{index}]"))
     return conflicts
 
@@ -249,19 +294,28 @@ def adapt_legacy_manifest(raw: Mapping[str,Any]) -> tuple[dict[str,Any],dict[str
     """Nonmutating adapter for the installed client's manifest field aliases."""
     before=copy.deepcopy(raw); out=copy.deepcopy(raw); changed=[]; conflicts=[]
 
-    for field in ("execution_scope","scope","obligation_results","results"):
+    for field in ("execution_scope","scope"):
         if field in out:
-            conflicts.extend(_raw_alias_tree_conflicts(out[field],path=field))
+            if not isinstance(out[field],Mapping):
+                conflicts.append({"kind":"LEGACY_SCOPE_DOMAIN_INVALID","path":field,"value":copy.deepcopy(out[field])})
+            else:
+                conflicts.extend(_raw_alias_tree_conflicts(out[field],path=field))
+    for field in ("obligation_results","results"):
+        if field in out:
+            if not isinstance(out[field],list):
+                conflicts.append({"kind":"LEGACY_RESULTS_DOMAIN_INVALID","path":field,"value":copy.deepcopy(out[field])})
+            else:
+                conflicts.extend(_raw_alias_tree_conflicts(out[field],path=field))
 
     if isinstance(out.get("execution_scope"),Mapping) and isinstance(out.get("scope"),Mapping):
         if not _alias_values_equal(out["execution_scope"],out["scope"]):
             conflicts.append({"kind":"LEGACY_SCOPE_ALIAS_CONFLICT","execution_scope":copy.deepcopy(out["execution_scope"]),"scope":copy.deepcopy(out["scope"])})
-    elif not isinstance(out.get("execution_scope"),Mapping) and isinstance(out.get("scope"),Mapping):
+    elif "execution_scope" not in out and isinstance(out.get("scope"),Mapping):
         out["execution_scope"]=copy.deepcopy(out["scope"]); changed.append("scope->execution_scope")
     if isinstance(out.get("obligation_results"),list) and isinstance(out.get("results"),list):
         if not _alias_values_equal(out["obligation_results"],out["results"]):
             conflicts.append({"kind":"LEGACY_RESULTS_ALIAS_CONFLICT","obligation_results":copy.deepcopy(out["obligation_results"]),"results":copy.deepcopy(out["results"])})
-    elif not isinstance(out.get("obligation_results"),list) and isinstance(out.get("results"),list):
+    elif "obligation_results" not in out and isinstance(out.get("results"),list):
         out["obligation_results"]=copy.deepcopy(out["results"]); changed.append("results->obligation_results")
     rows=out.get("obligation_results")
     if isinstance(rows,list):
@@ -270,13 +324,13 @@ def adapt_legacy_manifest(raw: Mapping[str,Any]) -> tuple[dict[str,Any],dict[str
             row=copy.deepcopy(raw_row)
             if isinstance(row,dict):
                 row_conflicts=[]
-                if _present(row,"id") and _present(row,"obligation_id") and row["id"]!=row["obligation_id"]:
+                if _key_present(row,"id") and _key_present(row,"obligation_id") and _nonempty_string(row.get("id")) and _nonempty_string(row.get("obligation_id")) and row["id"]!=row["obligation_id"]:
                     row_conflicts.append({"kind":"LEGACY_RESULT_ID_ALIAS_CONFLICT","id":copy.deepcopy(row["id"]),"obligation_id":copy.deepcopy(row["obligation_id"])})
-                elif not row.get("id") and row.get("obligation_id"):
+                elif "id" not in row and _nonempty_string(row.get("obligation_id")):
                     row["id"]=row["obligation_id"]; changed.append("obligation_id->id")
-                if _present(row,"acceptance_result") and _present(row,"result") and row["acceptance_result"]!=row["result"]:
+                if _key_present(row,"acceptance_result") and _key_present(row,"result") and row.get("acceptance_result") in {ACCEPTANCE_PASS,ACCEPTANCE_FAIL} and row.get("result") in {ACCEPTANCE_PASS,ACCEPTANCE_FAIL} and row["acceptance_result"]!=row["result"]:
                     row_conflicts.append({"kind":"LEGACY_ACCEPTANCE_RESULT_ALIAS_CONFLICT","acceptance_result":copy.deepcopy(row["acceptance_result"]),"result":copy.deepcopy(row["result"])})
-                elif not row.get("acceptance_result") and row.get("result") in {ACCEPTANCE_PASS,ACCEPTANCE_FAIL}:
+                elif "acceptance_result" not in row and row.get("result") in {ACCEPTANCE_PASS,ACCEPTANCE_FAIL}:
                     row["acceptance_result"]=row["result"]; changed.append("result->acceptance_result")
                 if row_conflicts:
                     row["_legacy_alias_conflicts"]=row_conflicts
