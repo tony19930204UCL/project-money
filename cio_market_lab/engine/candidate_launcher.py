@@ -91,6 +91,68 @@ def read_candidate_result(runtime_dir: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _candidate_failure_payload(
+    entry: dict[str, Any],
+    *,
+    stamp: datetime,
+    stage: str,
+    code: str,
+) -> dict[str, Any]:
+    return {
+        **entry,
+        "status": "FAILED_CANDIDATE",
+        "completed_at": stamp.isoformat(),
+        "reason": code,
+        "failure_stage": stage,
+        "limitations": [
+            "Source-only candidate failure artifact; no broker connection or deployment claim.",
+            "Failure details are intentionally bounded; inspect logs/tests for diagnostics.",
+        ],
+    }
+
+
+def _compute_fx_state(
+    runner: Any,
+    settings: PaperExperimentSettings,
+    *,
+    stamp: datetime,
+    receipts: list[FxRateReceipt],
+    allow_test_only: bool,
+    valuation_timing: str,
+) -> dict[str, Any]:
+    try:
+        nav = runner.report_strategy_nav(
+            settings.strategy_id,
+            as_of=stamp,
+            rate_receipts=receipts,
+            allow_test_only=allow_test_only,
+        )
+        return {
+            "status": "AVAILABLE",
+            "valuation_timing": valuation_timing,
+            "receipts": [_receipt_payload(r) for r in receipts],
+            "native_nav": nav.get("native_nav"),
+            "native_currency": nav.get("native_currency"),
+            "reporting_nav": nav.get("reporting_nav"),
+            "reporting_currency": nav.get("reporting_currency"),
+            "conversion_receipt": nav.get("conversion_receipt"),
+        }
+    except FxReportingBlocked as exc:
+        ledger = runner.portfolio_manager.get_strategy_ledger(
+            settings.strategy_id, settings.allowed_buckets[0]
+        )
+        return {
+            "status": "COMBINED_NAV_GAP",
+            "valuation_timing": valuation_timing,
+            "receipts": [_receipt_payload(r) for r in receipts],
+            "native_nav": ledger.equity,
+            "native_currency": ledger.currency,
+            "reporting_nav": None,
+            "reporting_currency": settings.reporting_currency,
+            "reason": str(exc),
+        }
+
+
 def run_candidate(
     *,
     workspace_root: Path,
@@ -154,16 +216,42 @@ def run_candidate(
     result_path = runtime_dir / RESULT_NAME
     _atomic_json(result_path, entry)
 
-    receipts = load_supplied_fx_receipts(fx_receipts_path, allow_test_only=allow_test_only)
-    _persist_exact_fx(runtime_dir, receipts)
+    try:
+        receipts = load_supplied_fx_receipts(
+            fx_receipts_path, allow_test_only=allow_test_only
+        )
+        _persist_exact_fx(runtime_dir, receipts)
+    except Exception:
+        _atomic_json(
+            result_path,
+            _candidate_failure_payload(
+                entry,
+                stamp=stamp,
+                stage="FX_RECEIPT_SETUP",
+                code="CANDIDATE_FX_RECEIPT_SETUP_FAILED",
+            ),
+        )
+        raise
 
-    app = create_app(
-        workspace_root=workspace_root,
-        runtime_dir=runtime_dir,
-        fixture_mode=allow_test_only,
-        is_read_only=False,
-        market_adapter=market_adapter,
-    )
+    try:
+        app = create_app(
+            workspace_root=workspace_root,
+            runtime_dir=runtime_dir,
+            fixture_mode=allow_test_only,
+            is_read_only=False,
+            market_adapter=market_adapter,
+        )
+    except Exception:
+        _atomic_json(
+            result_path,
+            _candidate_failure_payload(
+                entry,
+                stamp=stamp,
+                stage="APP_SETUP",
+                code="CANDIDATE_APP_SETUP_FAILED",
+            ),
+        )
+        raise
     runner = app.state.app_state.runner
     runner._now_fn = lambda: stamp
     runner.cio_session_id = session_id
@@ -199,44 +287,34 @@ def run_candidate(
         if cio_executor is not None:
             runner.set_cio_executor(cio_executor)
 
-    existing = runner.paper_orders.experiments.get(settings.strategy_id)
-    if existing is None:
-        runner.configure(settings)
-    elif existing.model_dump(mode="json") != settings.model_dump(mode="json"):
-        runner.shutdown()
-        raise ValueError("PERSISTED_EXPERIMENT_SETTINGS_MISMATCH")
-
-    nav = None
-    fx_state: dict[str, Any]
     try:
-        nav = runner.report_strategy_nav(
-            settings.strategy_id,
-            as_of=stamp,
-            rate_receipts=receipts,
-            allow_test_only=allow_test_only,
+        existing = runner.paper_orders.experiments.get(settings.strategy_id)
+        if existing is None:
+            runner.configure(settings)
+        elif existing.model_dump(mode="json") != settings.model_dump(mode="json"):
+            raise ValueError("PERSISTED_EXPERIMENT_SETTINGS_MISMATCH")
+    except Exception:
+        _atomic_json(
+            result_path,
+            _candidate_failure_payload(
+                entry,
+                stamp=stamp,
+                stage="EXPERIMENT_SETUP",
+                code="CANDIDATE_EXPERIMENT_SETUP_FAILED",
+            ),
         )
-        fx_state = {
-            "status": "AVAILABLE",
-            "receipts": [_receipt_payload(r) for r in receipts],
-            "native_nav": nav.get("native_nav"),
-            "native_currency": nav.get("native_currency"),
-            "reporting_nav": nav.get("reporting_nav"),
-            "reporting_currency": nav.get("reporting_currency"),
-            "conversion_receipt": nav.get("conversion_receipt"),
-        }
-    except FxReportingBlocked as exc:
-        ledger = runner.portfolio_manager.get_strategy_ledger(settings.strategy_id, settings.allowed_buckets[0])
-        fx_state = {
-            "status": "COMBINED_NAV_GAP",
-            "receipts": [_receipt_payload(r) for r in receipts],
-            "native_nav": ledger.equity,
-            "native_currency": ledger.currency,
-            "reporting_nav": None,
-            "reporting_currency": settings.reporting_currency,
-            "reason": str(exc),
-        }
+        runner.shutdown()
+        raise
 
     if mode == VERIFY_ONLY:
+        fx_state = _compute_fx_state(
+            runner,
+            settings,
+            stamp=stamp,
+            receipts=receipts,
+            allow_test_only=allow_test_only,
+            valuation_timing="VERIFY_ONLY_PRE_CYCLE",
+        )
         status = "WAITING_FOR_APPROVED_INPUT"
         reason = "VERIFICATION_ONLY_NO_MODEL_OR_RUNNER_CALL"
         if receipts:
@@ -259,6 +337,14 @@ def run_candidate(
 
     try:
         cycle = runner.run_one_cycle(settings.strategy_id, symbols=list(settings.universe))
+        fx_state = _compute_fx_state(
+            runner,
+            settings,
+            stamp=stamp,
+            receipts=receipts,
+            allow_test_only=allow_test_only,
+            valuation_timing="POST_CYCLE",
+        )
         decisions = cycle.get("decisions", [])
         lineage = []
         for decision in decisions:
@@ -306,5 +392,16 @@ def run_candidate(
         }
         _atomic_json(result_path, exit_payload)
         return exit_payload
+    except Exception:
+        _atomic_json(
+            result_path,
+            _candidate_failure_payload(
+                entry,
+                stamp=stamp,
+                stage="RUNNER_CYCLE",
+                code="CANDIDATE_RUNNER_CYCLE_FAILED",
+            ),
+        )
+        raise
     finally:
         runner.shutdown()
