@@ -281,7 +281,10 @@ def run_candidate(
             status = "WAITING_FOR_APPROVED_INPUT"
             reason = (decisions[0].get("reason") if decisions else "APPROVED_CONTEXT_NOT_CONSUMED")
         else:
-            status = "COMPLETED_PAPER_CANDIDATE"
+            status = (
+                "COMPLETED_TEST_ONLY_PAPER_CANDIDATE"
+                if allow_test_only else "COMPLETED_PAPER_CANDIDATE"
+            )
             reason = "APPROVED_CONTEXT_CONSUMED_BY_CANONICAL_RUNNER"
         exit_payload = {
             **entry,
