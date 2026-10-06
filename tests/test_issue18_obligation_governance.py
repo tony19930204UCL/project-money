@@ -1249,3 +1249,134 @@ def test_selected_and_shadow_equal_but_structurally_incomplete_rows_still_block(
         result=evaluate_manifest(reg,adapted,now=NOW)
         assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
         assert result["completion_claim_allowed"] is False
+
+
+
+def _evaluate_both_paths(reg, raw):
+    before=deepcopy(raw)
+    adapted,report=adapt_legacy_manifest(raw)
+    adapter_result=evaluate_manifest(reg,adapted,now=NOW)
+    direct_result=evaluate_manifest(reg,raw,now=NOW)
+    assert raw==before
+    return report,adapter_result,direct_result
+
+
+def test_complete_raw_manifest_boundary_parity_selected_shadow_matrix():
+    reg=scoped_registry(completed_record("done"),assigned_ids=["done"])
+
+    cases=[]
+
+    raw=_passing_claim_manifest("done")
+    raw["results"]=deepcopy(raw["obligation_results"])+[{}]
+    cases.append(raw)
+
+    raw=_passing_claim_manifest("done")
+    raw["results"]=deepcopy(raw["obligation_results"])+[{"acceptance_result":"FAIL"}]
+    cases.append(raw)
+
+    raw=_passing_claim_manifest("done")
+    raw["results"]=None
+    cases.append(raw)
+
+    raw=_passing_claim_manifest("done")
+    raw["results"]=deepcopy(raw["obligation_results"])
+    raw["results"][0]["acceptance_result"]="FAIL"
+    cases.append(raw)
+
+    raw=_passing_claim_manifest("done")
+    raw["scope"]=None
+    cases.append(raw)
+
+    raw=_passing_claim_manifest("done")
+    raw["scope"]=deepcopy(raw["execution_scope"])
+    raw["scope"]["executor_binding"]["run_at"]="2026-09-20T00:00:00Z"
+    cases.append(raw)
+
+    for raw in cases:
+        report,adapter_result,direct_result=_evaluate_both_paths(reg,raw)
+        assert report["conflicts"]
+        assert adapter_result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+        assert direct_result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+        assert adapter_result["completion_claim_allowed"] is False
+        assert direct_result["completion_claim_allowed"] is False
+
+
+def test_complete_raw_manifest_boundary_parity_for_domain_conflicts_and_equivalence():
+    reg=scoped_registry(completed_record("done"),assigned_ids=["done"])
+
+    negatives=[]
+
+    raw=_passing_claim_manifest("done")
+    raw["scope"]="not-a-scope"
+    negatives.append(raw)
+
+    raw=_passing_claim_manifest("done")
+    raw["results"]={"not":"a-list"}
+    negatives.append(raw)
+
+    raw=_passing_claim_manifest("done")
+    raw["scope"]=deepcopy(raw["execution_scope"])
+    raw["scope"]["executor_binding"]["scheduled_at"]="2026-10-09T09:00:00Z"
+    raw["scope"]["executor_binding"]["run_at"]="2026-10-09T10:00:00Z"
+    negatives.append(raw)
+
+    raw=_passing_claim_manifest("done")
+    raw["results"]=deepcopy(raw["obligation_results"])
+    raw["results"][0]["result"]="FAIL"
+    negatives.append(raw)
+
+    for raw in negatives:
+        report,adapter_result,direct_result=_evaluate_both_paths(reg,raw)
+        assert report["conflicts"]
+        assert adapter_result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+        assert direct_result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+
+    positive=_passing_claim_manifest("done")
+    positive["scope"]=deepcopy(positive["execution_scope"])
+    positive["execution_scope"]["executor_binding"]["run_at"]="2026-10-09T11:00:00+02:00"
+    positive["scope"]["executor_binding"]["run_at"]="2026-10-09T09:00:00Z"
+    positive["results"]=deepcopy(positive["obligation_results"])
+    positive["results"][0]["obligation_id"]="done"
+    positive["results"][0]["result"]="PASS"
+    report,adapter_result,direct_result=_evaluate_both_paths(reg,positive)
+    assert report["conflicts"]==[]
+    assert adapter_result["status"]=="CLIENT_EXECUTION_CLAIM_PASS"
+    assert direct_result["status"]=="CLIENT_EXECUTION_CLAIM_PASS"
+    assert adapter_result["completion_claim_allowed"] is True
+    assert direct_result["completion_claim_allowed"] is True
+
+
+def test_complete_raw_manifest_boundary_parity_legacy_only_and_fail_noncompletion():
+    pass_reg=scoped_registry(completed_record("done"),assigned_ids=["done"])
+    legacy={
+        "scope":deepcopy(_passing_claim_manifest("done")["execution_scope"]),
+        "results":[{
+            "obligation_id":"done",
+            "status":"COMPLETED",
+            "result":"PASS",
+            "completion_evidence":{"source_ref":"artifact://completion"},
+            "effect_evidence":{"verified":True,"source_ref":"artifact://effect"},
+        }],
+    }
+    report,adapter_result,direct_result=_evaluate_both_paths(pass_reg,legacy)
+    assert report["conflicts"]==[]
+    assert adapter_result["status"]=="CLIENT_EXECUTION_CLAIM_PASS"
+    assert direct_result["status"]=="CLIENT_EXECUTION_CLAIM_PASS"
+
+    active=active_record("a")
+    fail_reg=scoped_registry(active,assigned_ids=["a"])
+    legacy_fail={
+        "scope":deepcopy(scoped_manifest(["a"])["execution_scope"]),
+        "results":[{
+            "obligation_id":"a",
+            "status":"ACTIVE",
+            "result":"FAIL",
+            "historical_evidence":{"classification":"VERIFIED_NONCOMPLETION","source_ref":"artifact://failure-a"},
+        }],
+    }
+    report,adapter_result,direct_result=_evaluate_both_paths(fail_reg,legacy_fail)
+    assert report["conflicts"]==[]
+    for result in (adapter_result,direct_result):
+        assert result["status"]=="CLIENT_EXECUTION_CLAIM_RECORDED_NONCOMPLETION"
+        assert result["completion_claim_allowed"] is False
+        assert result["case_results"][0]["status"]=="FAIL"
