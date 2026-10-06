@@ -207,6 +207,8 @@ def test_public_boundary_rejects_extra_key_nested_secret_quantity_and_local_path
         {"position_quantity":3},
         {"nested":{"secret":"synthetic-secret"}},
         {"verified_facts":["public fact","capture at /home/user/private/runtime.json"]},
+        {"verified_facts":[r"public fact at C:\Users\Synthetic\private.json"]},
+        {"verified_facts":[r"public fact at C:\Temp\synthetic.txt"]},
     ):
         stages=inference_map()
         result=PublicOnlyResearchWorkflowAdapter(
@@ -223,6 +225,56 @@ def test_public_boundary_rejects_extra_key_nested_secret_quantity_and_local_path
             "verification_status":"verified",
             "verified_facts":["see /private/local/secret.json"],"research_scope":"event_input_only_not_order",
         },now=NOW)
+
+
+    with pytest.raises(ValueError,match="PUBLIC_OUTBOUND_VALUE_REJECTED"):
+        seal_public_evidence({
+            "research_id":"official-win","symbol":"MSFT","source_url":"https://www.sec.gov/x",
+            "source_tier":"official_filing","observed_at":NOW.isoformat(),
+            "verification_status":"verified",
+            "verified_facts":[r"see C:\Users\Synthetic\private.json"],
+            "research_scope":"event_input_only_not_order",
+        },now=NOW)
+
+
+def test_windows_private_paths_fail_before_stage_transport_and_at_final_output_boundary():
+    input_engine=StubInference("local:discovery-a",{
+        "candidate_sources":["https://www.sec.gov/test"],
+        "discovery_summary":"should never be called",
+        "missing_evidence":[],
+    })
+    adapter=PublicOnlyResearchWorkflowAdapter(
+        coordinator=FakeCoordinator(),
+        stage_inference={"discovery":input_engine},
+    )
+    blocked_input=adapter._run_stage(
+        "discovery",
+        {"public_evidence":[{"verified_facts":[r"C:\Temp\synthetic.txt"]}]},
+        NOW,
+    )
+    assert blocked_input["status"]=="BLOCKED"
+    assert blocked_input["schema_valid"] is False
+    assert "PUBLIC_OUTBOUND_VALUE_REJECTED" in blocked_input["reason"]
+    assert input_engine.calls==[]
+
+    output_engine=StubInference("local:discovery-a",{
+        "candidate_sources":["https://www.sec.gov/test"],
+        "discovery_summary":r"synthetic note at C:\Users\Synthetic\private.json",
+        "missing_evidence":[],
+    })
+    adapter=PublicOnlyResearchWorkflowAdapter(
+        coordinator=FakeCoordinator(),
+        stage_inference={"discovery":output_engine},
+    )
+    blocked_output=adapter._run_stage(
+        "discovery",
+        {"public_evidence":[{"source_url":"https://www.sec.gov/test"}]},
+        NOW,
+    )
+    assert blocked_output["status"]=="BLOCKED"
+    assert blocked_output["schema_valid"] is False
+    assert "PUBLIC_OUTBOUND_VALUE_REJECTED" in blocked_output["reason"]
+    assert len(output_engine.calls)==1
 
 
 def test_secondary_only_real_host_shape_never_counts_as_official_acceptance():
@@ -315,6 +367,76 @@ def test_monitor_reuses_canonical_quote_edge_contract_and_does_not_invent_vti_co
 
     missing=consumer.evaluate(obs,{},now=NOW)
     assert missing["results"][0]["classification"]=="UNKNOWN"
+
+
+def _historical_edge_observation(symbol="VTI", *, research_only=False):
+    observation=_observation(symbol)
+    observation["entry_edge"]={
+        "condition":"price_within_buy_zone",
+        "triggered":True,
+        "quote":{"last_price":105.0},
+    }
+    observation["invalidation_edge"]={
+        "condition":{"field":"last_price","operator":"lt","threshold":90.0},
+        "triggered":True,
+        "quote":{"last_price":80.0},
+    }
+    if research_only:
+        observation["research_only"]=True
+        observation["buy_zone"]=None
+    return observation
+
+
+@pytest.mark.parametrize("quote_case",["stale","wrong_symbol","future","unverified"])
+def test_monitor_rejected_current_quote_never_reuses_historical_edges(quote_case):
+    consumer=ReceiptAwarePositionConsumer()
+    observation=_historical_edge_observation()
+    quote=_quote()
+    if quote_case=="stale":
+        quote={**quote,"observed_at":(NOW-timedelta(hours=1)).isoformat(),
+               "bar_time":(NOW-timedelta(hours=1)).isoformat()}
+    elif quote_case=="wrong_symbol":
+        quote={**quote,"symbol":"MSFT"}
+    elif quote_case=="future":
+        quote={**quote,"observed_at":(NOW+timedelta(minutes=1)).isoformat(),
+               "bar_time":(NOW+timedelta(minutes=1)).isoformat()}
+    elif quote_case=="unverified":
+        quote={**quote,"verified":False}
+
+    result=consumer.evaluate({"VTI":observation},{"VTI":quote},now=NOW)
+    row=result["results"][0]
+    assert row["classification"]=="UNKNOWN"
+    assert row["triggered"] is None
+    assert row["quote_edge_status"]=="BLOCKED_QUOTE_UNAVAILABLE"
+    assert "entry_edge" not in row
+    assert "invalidation_edge" not in row
+
+
+def test_monitor_missing_quote_with_historical_edges_is_unknown_and_not_triggered():
+    result=ReceiptAwarePositionConsumer().evaluate(
+        {"VTI":_historical_edge_observation()},
+        {},
+        now=NOW,
+    )
+    row=result["results"][0]
+    assert row["classification"]=="UNKNOWN"
+    assert row["triggered"] is None
+    assert row["reason"]=="QUOTE_MISSING"
+
+
+def test_research_only_monitor_preserves_canonical_no_price_trigger_status():
+    observation=_historical_edge_observation(research_only=True)
+    result=ReceiptAwarePositionConsumer().evaluate(
+        {"VTI":observation},
+        {"VTI":_quote()},
+        now=NOW,
+    )
+    row=result["results"][0]
+    assert row["classification"]=="RESEARCH_ONLY_NO_PRICE_TRIGGER"
+    assert row["quote_edge_status"]=="RESEARCH_ONLY_NO_PRICE_TRIGGER"
+    assert row["triggered"] is False
+    assert "entry_edge" not in row
+    assert "invalidation_edge" not in row
 
 
 def _expected():
