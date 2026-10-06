@@ -123,6 +123,14 @@ def _record_alias_conflict(record: dict[str,Any], alias: str, canonical: str, ki
     })
 
 
+def _schedule_alias_conflict(mapping: Mapping[str,Any]) -> bool:
+    return (
+        _present(mapping,"scheduled_at")
+        and _present(mapping,"run_at")
+        and not _time_semantically_equal(mapping.get("scheduled_at"),mapping.get("run_at"),"schedule_alias")
+    )
+
+
 def _normalized_schedule(mapping: Mapping[str,Any]) -> Any:
     if _present(mapping,"scheduled_at"):
         return mapping.get("scheduled_at")
@@ -154,7 +162,12 @@ def _adapt_live_jobs(raw_jobs: Any) -> dict[str,Any]:
             out[str(job_id)]=copy.deepcopy(raw)
             continue
         job=copy.deepcopy(raw)
-        if not _present(job,"scheduled_at") and _present(job,"run_at"):
+        if _schedule_alias_conflict(job):
+            job["_canonical_schedule_alias_conflict"]={
+                "scheduled_at":copy.deepcopy(job.get("scheduled_at")),
+                "run_at":copy.deepcopy(job.get("run_at")),
+            }
+        elif not _present(job,"scheduled_at") and _present(job,"run_at"):
             job["scheduled_at"]=job["run_at"]
         out[str(job_id)]=job
     return out
@@ -223,6 +236,13 @@ def adapt_canonical_registry_snapshot(
                 record["status"]=mapped
                 changed=True
 
+        one_shot=record.get("execution_one_shot")
+        if isinstance(one_shot,Mapping) and _schedule_alias_conflict(one_shot):
+            _record_alias_conflict(record,"execution_one_shot.run_at","execution_one_shot.scheduled_at","CANONICAL_SCHEDULE_ALIAS_CONFLICT"); changed=True
+        binding_record=record.get("executor_binding")
+        if isinstance(binding_record,Mapping) and _schedule_alias_conflict(binding_record):
+            _record_alias_conflict(record,"executor_binding.run_at","executor_binding.scheduled_at","CANONICAL_SCHEDULE_ALIAS_CONFLICT"); changed=True
+
         history,binding=_adapt_execution_one_shot(record)
         if _present(record,"execution_history") and isinstance(record.get("execution_one_shot"),Mapping):
             existing_history=record.get("execution_history")
@@ -265,10 +285,14 @@ def _validate_live_binding(
     prefix: str,
     require_schedule: bool=False,
 ) -> Mapping[str,Any]:
+    if _schedule_alias_conflict(binding):
+        raise RegistryValidationError(f"{prefix}:CANONICAL_SCHEDULE_ALIAS_CONFLICT")
     job_id=str(_require(binding,"job_id",prefix))
     actual=live_jobs.get(job_id)
     if not isinstance(actual,Mapping):
         raise RegistryValidationError(f"{prefix}:LIVE_JOB_NOT_FOUND")
+    if actual.get("_canonical_schedule_alias_conflict") or _schedule_alias_conflict(actual):
+        raise RegistryValidationError(f"{prefix}.live:CANONICAL_SCHEDULE_ALIAS_CONFLICT")
     for field in ("run_id","model","provider","route_kind","state"):
         expected=_require(binding,field,prefix)
         actual_value=_require(actual,field,f"{prefix}.live")
