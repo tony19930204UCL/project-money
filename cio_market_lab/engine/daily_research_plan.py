@@ -68,9 +68,26 @@ def plan_session_date(symbol: str, now: datetime) -> str:
     return now.astimezone(ZoneInfo('Asia/Taipei' if symbol.upper().endswith(('.TW','.TWO')) else 'America/New_York')).date().isoformat()
 
 
+def _semantic_evidence_value(value: Any) -> Any:
+    """Drop acquisition clocks recursively without erasing material source facts."""
+    if isinstance(value, dict):
+        return {
+            key: _semantic_evidence_value(item)
+            for key, item in value.items()
+            if key != 'observed_at'
+        }
+    if isinstance(value, list):
+        return [_semantic_evidence_value(item) for item in value]
+    return value
+
+
 def semantic_research_digest(evidence: dict[str, Any]) -> str:
-    # Acquisition/refresh time and network metadata are not material evidence.
-    semantic = {k: evidence.get(k) for k in ('symbol','market','source_url','published_at','verified_facts','title','raw_metadata')}
+    # Acquisition/refresh clocks are not material evidence, including nested
+    # supplemental rows. Source URLs, wire hashes, periods and values remain.
+    semantic = {
+        k: _semantic_evidence_value(evidence.get(k))
+        for k in ('symbol','market','source_url','published_at','verified_facts','title','raw_metadata')
+    }
     return hashlib.sha256(json.dumps(semantic, sort_keys=True, default=str).encode()).hexdigest()
 
 
@@ -171,6 +188,24 @@ class DailyResearchPlanProducer:
         if len(response.content) > MAX_BYTES:
             raise ValueError('OFFICIAL_DOCUMENT_OVERSIZE')
         digest = hashlib.sha256(response.content).hexdigest()
+        schema = 'official-document-enriched-v1' if disclosure else 'official-json-v1'
+        capture_identity = hashlib.sha256(
+            json.dumps({'source_url':url,'wire_sha256':digest,'schema':schema},sort_keys=True).encode()
+        ).hexdigest()
+        path = self.root / 'raw_official' / (capture_identity + '.json')
+        if path.exists():
+            persisted=json.loads(path.read_text())
+            if (
+                persisted.get('source_url') != url
+                or persisted.get('sha256_of_wire_bytes') != digest
+                or persisted.get('capture_schema') != schema
+                or persisted.get('is_fixture')
+                or persisted.get('tls_verified') is not True
+            ):
+                raise RuntimeError('OFFICIAL_CAPTURE_IDENTITY_CONFLICT')
+            self.captures_by_url[url]=path
+            return persisted.get('content')
+
         raw = parse_official_document(url, response.content, response.headers.get('Content-Type','')) if disclosure else response.json()
         if disclosure and isinstance(raw,list):
             enriched=[]
@@ -185,13 +220,12 @@ class DailyResearchPlanProducer:
                 enriched.append(current)
             raw=enriched
         if disclosure:
-            wire = self.root / 'raw_official' / (digest + '.wire')
+            wire = self.root / 'raw_official' / (capture_identity + '.wire')
             if not wire.exists():
                 wire.write_bytes(response.content)
-        path = self.root / 'raw_official' / (digest + '.json')
-        if not path.exists():
-            atomic_json(path, {'source_url': url, 'observed_at': now.isoformat(), 'tls_verified': True,
-                               'sha256_of_wire_bytes': digest, 'is_fixture': False, 'content': raw})
+        atomic_json(path, {'source_url': url, 'observed_at': now.isoformat(), 'tls_verified': True,
+                           'sha256_of_wire_bytes': digest, 'capture_schema':schema,
+                           'is_fixture': False, 'content': raw})
         self.captures_by_url[url] = path
         return raw
 
