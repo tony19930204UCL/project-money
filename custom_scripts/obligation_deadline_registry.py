@@ -417,9 +417,10 @@ def _dump(value: Any) -> str:
     return json.dumps(value,indent=2,sort_keys=True,default=str)
 
 
-def _add_registry_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--registry",type=Path)
-    parser.add_argument("--live-jobs",type=Path)
+def _add_registry_options(parser: argparse.ArgumentParser, *, preserve_parent: bool=False) -> None:
+    default=argparse.SUPPRESS if preserve_parent else None
+    parser.add_argument("--registry",type=Path,default=default)
+    parser.add_argument("--live-jobs",type=Path,default=default)
 
 
 def main(argv: Optional[list[str]]=None) -> int:
@@ -427,19 +428,19 @@ def main(argv: Optional[list[str]]=None) -> int:
     _add_registry_options(p)
     sub=p.add_subparsers(dest="command",required=True)
     v=sub.add_parser("validate")
-    _add_registry_options(v)
+    _add_registry_options(v,preserve_parent=True)
     a=sub.add_parser("acceptance-check")
-    _add_registry_options(a)
+    _add_registry_options(a,preserve_parent=True)
     a.add_argument("--id",required=True)
     m=sub.add_parser("migrate")
-    _add_registry_options(m)
+    _add_registry_options(m,preserve_parent=True)
     m.add_argument("--source-refs",type=Path,required=True)
     m.add_argument("--output",type=Path)
     args=p.parse_args(argv)
 
-    registry_path=_resolve_path(args.registry,"PROJECT_MONEY_OBLIGATION_REGISTRY")
+    registry_path=_resolve_path(getattr(args,"registry",None),"PROJECT_MONEY_OBLIGATION_REGISTRY")
     raw=_load(registry_path)
-    live_jobs_path=args.live_jobs
+    live_jobs_path=getattr(args,"live_jobs",None)
     if live_jobs_path is None and os.environ.get("PROJECT_MONEY_LIVE_JOBS"):
         live_jobs_path=Path(os.environ["PROJECT_MONEY_LIVE_JOBS"])
     supplied_jobs=_load(live_jobs_path) if live_jobs_path else None
