@@ -76,16 +76,51 @@ def _criterion_complete(record: Mapping[str,Any]) -> bool:
 
 def _criterion_names(value: Any) -> list[str]:
     if not isinstance(value,list):
-        return []
+        raise RegistryValidationError("acceptance_criteria:LIST_REQUIRED")
     names=[]
-    for item in value:
+    for index,item in enumerate(value):
         if isinstance(item,str) and item:
             names.append(item)
-        elif isinstance(item,Mapping):
-            name=item.get("criterion_id") or item.get("id") or item.get("name")
-            if isinstance(name,str) and name:
-                names.append(name)
+            continue
+        if isinstance(item,Mapping):
+            candidates=[item.get("criterion_id"),item.get("id"),item.get("name")]
+            usable=[name for name in candidates if isinstance(name,str) and name]
+            if len(set(usable))==1:
+                names.append(usable[0])
+                continue
+            if len(set(usable))>1:
+                raise RegistryValidationError(
+                    f"acceptance_criteria[{index}]:CRITERION_ALIAS_CONFLICT"
+                )
+        raise RegistryValidationError(
+            f"acceptance_criteria[{index}]:USABLE_CRITERION_ID_REQUIRED"
+        )
     return names
+
+
+def _time_semantically_equal(left: Any, right: Any, field: str) -> bool:
+    try:
+        return _parse_time(left,field)==_parse_time(right,field)
+    except RegistryValidationError:
+        return left==right
+
+
+def _criterion_semantically_equal(left: Any, right: Any) -> bool:
+    try:
+        return _criterion_names(left)==_criterion_names(right)
+    except RegistryValidationError:
+        return False
+
+
+def _record_alias_conflict(record: dict[str,Any], alias: str, canonical: str, kind: str) -> None:
+    conflicts=record.setdefault("_canonical_alias_conflicts",[])
+    conflicts.append({
+        "alias":alias,
+        "canonical":canonical,
+        "kind":kind,
+        "alias_value":copy.deepcopy(record.get(alias)),
+        "canonical_value":copy.deepcopy(record.get(canonical)),
+    })
 
 
 def _normalized_schedule(mapping: Mapping[str,Any]) -> Any:
@@ -155,13 +190,27 @@ def adapt_canonical_registry_snapshot(
             continue
         record=copy.deepcopy(raw)
         changed=False
-        if not _present(record,"id") and _present(record,"obligation_id"):
+        if _present(record,"id") and _present(record,"obligation_id") and record["id"]!=record["obligation_id"]:
+            _record_alias_conflict(record,"obligation_id","id","CANONICAL_IDENTITY_ALIAS_CONFLICT"); changed=True
+        elif not _present(record,"id") and _present(record,"obligation_id"):
             record["id"]=record["obligation_id"]; changed=True
-        if not _present(record,"original_criteria") and _present(record,"acceptance_criteria"):
-            record["original_criteria"]=_criterion_names(record["acceptance_criteria"]); changed=True
+
+        if _present(record,"original_criteria") and _present(record,"acceptance_criteria"):
+            if not _criterion_semantically_equal(record["acceptance_criteria"],record["original_criteria"]):
+                _record_alias_conflict(record,"acceptance_criteria","original_criteria","CANONICAL_CRITERIA_ALIAS_CONFLICT"); changed=True
+        elif not _present(record,"original_criteria") and _present(record,"acceptance_criteria"):
+            try:
+                record["original_criteria"]=_criterion_names(record["acceptance_criteria"]); changed=True
+            except RegistryValidationError as exc:
+                record["_criterion_adapter_error"]=str(exc); changed=True
+
         if not _present(record,"criteria_evidence") and isinstance(record.get("acceptance_evidence"),Mapping):
             record["criteria_evidence"]=copy.deepcopy(record["acceptance_evidence"]); changed=True
-        if not _present(record,"original_deadline") and _present(record,"deadline"):
+
+        if _present(record,"original_deadline") and _present(record,"deadline"):
+            if not _time_semantically_equal(record["original_deadline"],record["deadline"],"deadline_alias"):
+                _record_alias_conflict(record,"deadline","original_deadline","CANONICAL_DEADLINE_ALIAS_CONFLICT"); changed=True
+        elif not _present(record,"original_deadline") and _present(record,"deadline"):
             record["original_deadline"]=record["deadline"]; changed=True
         if not _present(record,"original_deadline_source_ref") and _present(record,"deadline_source_ref"):
             record["original_deadline_source_ref"]=record["deadline_source_ref"]; changed=True
@@ -175,6 +224,13 @@ def adapt_canonical_registry_snapshot(
                 changed=True
 
         history,binding=_adapt_execution_one_shot(record)
+        if _present(record,"execution_history") and isinstance(record.get("execution_one_shot"),Mapping):
+            existing_history=record.get("execution_history")
+            if isinstance(existing_history,list) and existing_history and isinstance(existing_history[0],Mapping):
+                existing_schedule=existing_history[0].get("scheduled_at")
+                one_schedule=_normalized_schedule(record["execution_one_shot"])
+                if existing_schedule is not None and one_schedule is not None and not _time_semantically_equal(existing_schedule,one_schedule,"schedule_alias"):
+                    _record_alias_conflict(record,"execution_one_shot.run_at","execution_history[0].scheduled_at","CANONICAL_SCHEDULE_ALIAS_CONFLICT"); changed=True
         if not _present(record,"execution_history") and history is not None:
             record["execution_history"]=history; changed=True
         if record.get("status") in ACTIVE_STATES and not _present(record,"executor_binding") and binding is not None:
@@ -257,6 +313,11 @@ def validate_record(record: Mapping[str,Any], live_jobs: Mapping[str,Any], *, no
     prefix=f"obligation[{rid}]"
     try:
         _require(record,"id",prefix)
+        if record.get("_canonical_alias_conflicts"):
+            kinds=",".join(str(x.get("kind")) for x in record["_canonical_alias_conflicts"] if isinstance(x,Mapping))
+            raise RegistryValidationError(f"{prefix}:CANONICAL_ALIAS_CONFLICT:{kinds}")
+        if record.get("_criterion_adapter_error"):
+            raise RegistryValidationError(f"{prefix}:{record['_criterion_adapter_error']}")
         _require(record,"owner",prefix)
         status=str(_require(record,"status",prefix))
         if status not in TERMINAL_STATES|ACTIVE_STATES:
