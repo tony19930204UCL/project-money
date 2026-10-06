@@ -23,21 +23,23 @@ class ClaimGateError(ValueError):
 
 
 def _binding_equal(expected: Mapping[str,Any], actual: Mapping[str,Any]) -> bool:
-    keys=("job_id","run_id","model","provider","route_kind")
-    return all(expected.get(k)==actual.get(k) for k in keys)
+    keys=("job_id","run_id","model","provider","route_kind","state")
+    if not all(expected.get(k)==actual.get(k) for k in keys):
+        return False
+    if "scheduled_at" in expected and expected.get("scheduled_at")!=actual.get("scheduled_at"):
+        return False
+    return True
 
 
-def _currently_assigned_ids(registry: Mapping[str,Any], owner: str) -> list[str]:
-    assigned=[]
+def _all_owner_ids(registry: Mapping[str,Any], owner: str) -> list[str]:
+    ids=[]
     for record in registry.get("obligations") or []:
-        if not isinstance(record,Mapping):
+        if not isinstance(record,Mapping) or record.get("owner")!=owner:
             continue
-        if record.get("owner")!=owner:
-            continue
-        if record.get("status") in NON_SUCCESS_TERMINAL|{"COMPLETED"}:
-            continue
-        assigned.append(str(record.get("id")))
-    return sorted(x for x in assigned if x)
+        rid=record.get("id")
+        if rid:
+            ids.append(str(rid))
+    return sorted(ids)
 
 
 def _canonical_scope(registry: Mapping[str,Any], scope_id: str) -> Mapping[str,Any]:
@@ -46,6 +48,19 @@ def _canonical_scope(registry: Mapping[str,Any], scope_id: str) -> Mapping[str,A
     if not isinstance(scope,Mapping):
         raise ClaimGateError("EXECUTION_SCOPE_NOT_CANONICAL")
     return scope
+
+
+def _validate_scope_binding(registry: Mapping[str,Any], canonical: Mapping[str,Any], provided: Mapping[str,Any], prefix: str) -> None:
+    expected_binding=canonical.get("executor_binding")
+    provided_binding=provided.get("executor_binding")
+    if not isinstance(expected_binding,Mapping) or not isinstance(provided_binding,Mapping):
+        raise ClaimGateError(f"{prefix}_EXECUTOR_BINDING_REQUIRED")
+    if not _binding_equal(expected_binding,provided_binding):
+        raise ClaimGateError(f"{prefix}_EXECUTOR_BINDING_MISMATCH")
+    live_jobs=registry.get("live_jobs") or {}
+    actual=live_jobs.get(str(expected_binding.get("job_id")))
+    if not isinstance(actual,Mapping) or not _binding_equal(expected_binding,actual):
+        raise ClaimGateError(f"{prefix}_LIVE_EXECUTOR_MISMATCH")
 
 
 def _validate_scope(registry: Mapping[str,Any], manifest: Mapping[str,Any]) -> list[str]:
@@ -57,45 +72,52 @@ def _validate_scope(registry: Mapping[str,Any], manifest: Mapping[str,Any]) -> l
     if owner!="Main CIO":
         raise ClaimGateError("EXECUTION_SCOPE_OWNER_MISMATCH")
 
+    scope_id=str(scope.get("scope_id") or "")
+    canonical=_canonical_scope(registry,scope_id)
+    if canonical.get("mode")!=mode:
+        raise ClaimGateError("EXECUTION_SCOPE_MODE_MISMATCH")
+    if canonical.get("owner")!=owner:
+        raise ClaimGateError("EXECUTION_SCOPE_OWNER_MISMATCH")
+    if not scope.get("authorization_source") or canonical.get("authorization_source")!=scope.get("authorization_source"):
+        raise ClaimGateError("EXECUTION_SCOPE_AUTHORIZATION_MISMATCH")
+    _validate_scope_binding(registry,canonical,scope,mode)
+
+    expected=sorted(str(x) for x in (canonical.get("assigned_ids") or []))
+    provided=sorted(str(x) for x in (scope.get("assigned_ids") or []))
+    if not expected:
+        raise ClaimGateError("EXECUTION_SCOPE_HAS_NO_ASSIGNED_OBLIGATIONS")
+    if provided!=expected:
+        raise ClaimGateError(f"{mode}_OMITS_OR_ADDS_ASSIGNED_CASES")
+
     if mode=="FULL_MAIN_CIO":
-        expected=_currently_assigned_ids(registry,owner)
-        provided=sorted(str(x) for x in (scope.get("assigned_ids") or []))
-        if provided!=expected:
-            raise ClaimGateError("FULL_OWNER_SCOPE_OMITS_OR_ADDS_ASSIGNED_CASES")
+        owner_ids=_all_owner_ids(registry,owner)
+        if expected!=owner_ids:
+            raise ClaimGateError("FULL_OWNER_CANONICAL_SCOPE_INCOMPLETE")
         return expected
 
     if mode!="SCOPED_RECOVERY":
         raise ClaimGateError("EXECUTION_SCOPE_MODE_UNSUPPORTED")
 
-    scope_id=str(scope.get("scope_id") or "")
-    canonical=_canonical_scope(registry,scope_id)
-    if canonical.get("owner")!=owner:
-        raise ClaimGateError("SCOPED_RECOVERY_OWNER_MISMATCH")
-    if canonical.get("authorization_source")!=scope.get("authorization_source"):
-        raise ClaimGateError("SCOPED_RECOVERY_AUTHORIZATION_MISMATCH")
-
-    expected_binding=canonical.get("executor_binding")
-    provided_binding=scope.get("executor_binding")
-    if not isinstance(expected_binding,Mapping) or not isinstance(provided_binding,Mapping):
-        raise ClaimGateError("SCOPED_RECOVERY_EXECUTOR_BINDING_REQUIRED")
-    if not _binding_equal(expected_binding,provided_binding):
-        raise ClaimGateError("SCOPED_RECOVERY_EXECUTOR_BINDING_MISMATCH")
-
-    live_jobs=registry.get("live_jobs") or {}
-    actual=live_jobs.get(str(expected_binding.get("job_id")))
-    if not isinstance(actual,Mapping) or not _binding_equal(expected_binding,actual):
-        raise ClaimGateError("SCOPED_RECOVERY_LIVE_EXECUTOR_MISMATCH")
-
     transfer=canonical.get("merged_criteria_transfer")
-    provided_transfer=scope.get("merged_criteria_transfer")
-    if transfer!=provided_transfer:
+    if transfer!=scope.get("merged_criteria_transfer"):
         raise ClaimGateError("MERGED_CRITERIA_TRANSFER_MISMATCH")
-
-    expected=sorted(str(x) for x in (canonical.get("assigned_ids") or []))
-    provided=sorted(str(x) for x in (scope.get("assigned_ids") or []))
-    if not expected or provided!=expected:
-        raise ClaimGateError("SCOPED_RECOVERY_OMITS_OR_ADDS_ASSIGNED_CASES")
     return expected
+
+
+def _evidence_backed_failure(claimed: Mapping[str,Any]) -> bool:
+    blocker=claimed.get("external_blocker")
+    if isinstance(blocker,Mapping) and blocker.get("source_ref") and blocker.get("classification"):
+        return True
+    historical=claimed.get("historical_evidence")
+    if isinstance(historical,Mapping) and historical.get("source_ref") and historical.get("classification"):
+        return True
+    criteria=claimed.get("criterion_evidence")
+    if isinstance(criteria,Mapping) and criteria:
+        return all(
+            isinstance(item,Mapping) and item.get("source_ref")
+            for item in criteria.values()
+        )
+    return False
 
 
 def evaluate_manifest(registry: Mapping[str,Any], manifest: Mapping[str,Any]) -> dict[str,Any]:
@@ -115,12 +137,34 @@ def evaluate_manifest(registry: Mapping[str,Any], manifest: Mapping[str,Any]) ->
             "reason":"OBLIGATION_RESULTS_LIST_REQUIRED",
             "completion_claim_allowed":False,
         }
-    by_id={str(r.get("id")):r for r in results if isinstance(r,Mapping) and r.get("id")}
+    if not results:
+        return {
+            "status":"CLIENT_EXECUTION_CLAIM_BLOCKED",
+            "reason":"EMPTY_OBLIGATION_RESULTS_CANNOT_COMPLETE",
+            "completion_claim_allowed":False,
+        }
+
+    rows=[r for r in results if isinstance(r,Mapping) and r.get("id")]
+    ids=[str(r.get("id")) for r in rows]
+    if len(ids)!=len(set(ids)):
+        return {
+            "status":"CLIENT_EXECUTION_CLAIM_BLOCKED",
+            "reason":"DUPLICATE_MANIFEST_OBLIGATION_ID",
+            "completion_claim_allowed":False,
+        }
+    by_id={str(r.get("id")):r for r in rows}
     missing=[rid for rid in required_ids if rid not in by_id]
+    extra=sorted(set(by_id)-set(required_ids))
     if missing:
         return {
             "status":"CLIENT_EXECUTION_CLAIM_BLOCKED",
             "reason":"ASSIGNED_CASES_OMITTED:"+",".join(missing),
+            "completion_claim_allowed":False,
+        }
+    if extra:
+        return {
+            "status":"CLIENT_EXECUTION_CLAIM_BLOCKED",
+            "reason":"UNASSIGNED_CASES_INCLUDED:"+",".join(extra),
             "completion_claim_allowed":False,
         }
 
@@ -128,16 +172,15 @@ def evaluate_manifest(registry: Mapping[str,Any], manifest: Mapping[str,Any]) ->
     any_blocked=False
     for rid in required_ids:
         claimed=by_id[rid]
-        canonical=next((r for r in registry.get("obligations",[]) if isinstance(r,Mapping) and r.get("id")==rid),None)
-        if not isinstance(canonical,Mapping):
+        matches=[r for r in registry.get("obligations",[]) if isinstance(r,Mapping) and r.get("id")==rid]
+        if len(matches)!=1:
             any_blocked=True
-            case_results.append({"id":rid,"status":"BLOCKED","reason":"CANONICAL_OBLIGATION_MISSING"})
+            case_results.append({"id":rid,"status":"BLOCKED","reason":"CANONICAL_IDENTITY_AMBIGUOUS"})
             continue
-
+        canonical=matches[0]
         canonical_acceptance=acceptance_check(registry,rid)
         claimed_outcome=claimed.get("acceptance_result")
         claimed_status=claimed.get("status")
-        external_blocker=claimed.get("external_blocker")
 
         if canonical.get("status") in NON_SUCCESS_TERMINAL and claimed_outcome==ACCEPTANCE_PASS:
             any_blocked=True
@@ -166,25 +209,21 @@ def evaluate_manifest(registry: Mapping[str,Any], manifest: Mapping[str,Any]) ->
             case_results.append({"id":rid,"status":"PASS","reason":"CANONICAL_COMPLETION_AND_EFFECT_VERIFIED"})
             continue
 
-        # A scoped recovery can legitimately report FAIL with an evidence-backed
-        # blocker. This is not completion and cannot flip canonical history.
         if claimed_outcome!=ACCEPTANCE_FAIL:
             any_blocked=True
             case_results.append({"id":rid,"status":"BLOCKED","reason":"EXPLICIT_ACCEPTANCE_RESULT_REQUIRED"})
             continue
-        if isinstance(external_blocker,Mapping) and external_blocker.get("source_ref") and external_blocker.get("classification"):
-            case_results.append({
-                "id":rid,
-                "status":"FAIL",
-                "reason":"EVIDENCE_BACKED_EXTERNAL_BLOCKER",
-                "external_blocker":dict(external_blocker),
-            })
-        else:
-            # Routine status-only execution is not enough evidence.
+        if not _evidence_backed_failure(claimed):
             any_blocked=True
-            case_results.append({"id":rid,"status":"BLOCKED","reason":"FAIL_REQUIRES_EVIDENCE_BACKED_BLOCKER_OR_CRITERION_RESULT"})
+            case_results.append({"id":rid,"status":"BLOCKED","reason":"FAIL_REQUIRES_VERIFIED_CASE_EVIDENCE"})
+            continue
+        case_results.append({
+            "id":rid,
+            "status":"FAIL",
+            "reason":"EVIDENCE_BACKED_NONCOMPLETION",
+        })
 
-    completion_allowed=(not any_blocked and all(r["status"]=="PASS" for r in case_results))
+    completion_allowed=bool(required_ids) and not any_blocked and all(r["status"]=="PASS" for r in case_results)
     if any_blocked:
         status="CLIENT_EXECUTION_CLAIM_BLOCKED"
     elif completion_allowed:
