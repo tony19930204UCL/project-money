@@ -755,3 +755,19 @@ def test_conflicting_schedule_run_at_alias_fails_closed_but_semantically_equal_t
     adapted,_=adapt_canonical_registry_snapshot(equivalent)
     assert not adapted["obligations"][0].get("_canonical_alias_conflicts")
     assert validate_registry(adapted,now=NOW)["status"]=="DEADLINE_REGISTRY_VALID"
+
+
+def test_internal_scheduled_at_run_at_conflicts_fail_closed_in_one_shot_and_live_readback():
+    raw=canonical_shape_fixture("REGISTERED")
+    raw["obligations"][0]["execution_one_shot"]["scheduled_at"]="2026-10-09T10:00:00+00:00"
+    adapted,_=adapt_canonical_registry_snapshot(raw)
+    result=validate_registry(adapted,now=NOW)
+    assert result["status"]=="DEADLINE_REGISTRY_INVALID"
+    assert any("CANONICAL_SCHEDULE_ALIAS_CONFLICT" in e for e in result["errors"])
+
+    raw=canonical_shape_fixture("REGISTERED")
+    raw["executor_readback"]["job-1"]["scheduled_at"]="2026-10-09T10:00:00+00:00"
+    adapted,_=adapt_canonical_registry_snapshot(raw)
+    result=validate_registry(adapted,now=NOW)
+    assert result["status"]=="DEADLINE_REGISTRY_INVALID"
+    assert any("CANONICAL_SCHEDULE_ALIAS_CONFLICT" in e for e in result["errors"])
