@@ -66,7 +66,9 @@ def test_positive_post_structured_evidence_to_learning_context_and_restart(tmp_p
         market_adapter=MockMarketAdapter(),
         fixture_mode=False,
     )
-    _freeze_app_clock(app)\n    client = TestClient(app, base_url="http://localhost:21322")\n
+    _freeze_app_clock(app)
+    client = TestClient(app, base_url="http://localhost:21322")
+
     now = TEST_NOW
     observed_str = (now - timedelta(minutes=10)).isoformat()
 
@@ -133,7 +135,9 @@ def test_positive_post_structured_evidence_to_learning_context_and_restart(tmp_p
         market_adapter=MockMarketAdapter(),
         fixture_mode=False,
     )
-    _freeze_app_clock(app_restarted)\n    client_restarted = TestClient(app_restarted, base_url="http://localhost:21322")\n
+    _freeze_app_clock(app_restarted)
+    client_restarted = TestClient(app_restarted, base_url="http://localhost:21322")
+
     # After restart, the canonical reader scans the inbox and loads the persisted evidence
     restarted_ctx_resp = client_restarted.get("/api/paper/cio/learning-context?symbols=NVDA,TSLA")
     assert restarted_ctx_resp.status_code == 200
@@ -167,7 +171,9 @@ def test_negative_post_fixture_and_synthetic_evidence_rejected(tmp_path: Path):
         market_adapter=MockMarketAdapter(),
         fixture_mode=False,
     )
-    _freeze_app_clock(app)\n    client = TestClient(app, base_url="http://localhost:21322")\n
+    _freeze_app_clock(app)
+    client = TestClient(app, base_url="http://localhost:21322")
+
     now = TEST_NOW
 
     fixture_payload = {
@@ -220,7 +226,9 @@ def test_negative_post_stale_and_future_evidence_rejected(tmp_path: Path):
         market_adapter=MockMarketAdapter(),
         fixture_mode=False,
     )
-    _freeze_app_clock(app)\n    client = TestClient(app, base_url="http://localhost:21322")\n
+    _freeze_app_clock(app)
+    client = TestClient(app, base_url="http://localhost:21322")
+
     now = TEST_NOW
 
     # Stale evidence: 30 days old
@@ -275,7 +283,9 @@ def test_raw_unverified_document_separation_never_auto_certified(tmp_path: Path)
         market_adapter=MockMarketAdapter(),
         fixture_mode=False,
     )
-    _freeze_app_clock(app)\n    client = TestClient(app, base_url="http://localhost:21322")\n
+    _freeze_app_clock(app)
+    client = TestClient(app, base_url="http://localhost:21322")
+
     raw_unverified = {
         "url": "https://mops.twse.com.tw/sample_unverified",
         "title": "Raw unverified press snippet",
@@ -319,7 +329,9 @@ def test_negative_path_traversal_rejected_no_write_outside_inbox(tmp_path: Path)
         market_adapter=MockMarketAdapter(),
         fixture_mode=False,
     )
-    _freeze_app_clock(app)\n    client = TestClient(app, base_url="http://localhost:21322")\n    now = TEST_NOW
+    _freeze_app_clock(app)
+    client = TestClient(app, base_url="http://localhost:21322")
+    now = TEST_NOW
 
     # Various path traversal attack patterns
     traversal_ids = [
@@ -386,7 +398,9 @@ def test_negative_persistence_failure_explicit_error_and_no_staging(tmp_path: Pa
         market_adapter=MockMarketAdapter(),
         fixture_mode=False,
     )
-    _freeze_app_clock(app)\n    client = TestClient(app, base_url="http://localhost:21322")\n    now = TEST_NOW
+    _freeze_app_clock(app)
+    client = TestClient(app, base_url="http://localhost:21322")
+    now = TEST_NOW
 
     # Monkeypatch tempfile.NamedTemporaryFile to simulate atomic write failure (e.g. disk full / EIO)
     def mock_named_temporary_file(*args, **kwargs):
