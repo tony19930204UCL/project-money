@@ -814,6 +814,12 @@ def create_app(
         all_fills = [f.model_dump() for f in swing.fills] + [f.model_dump() for f in intraday.fills]
         return all_fills
 
+    @app.get("/api/paper/candidate-result", tags=["Paper Trade"])
+    def paper_candidate_result() -> Dict[str, Any]:
+        """Read the exact persisted source-only candidate launcher artifact."""
+        from cio_market_lab.engine.candidate_launcher import read_candidate_result
+        return read_candidate_result(app.state.app_state.runtime_dir)
+
     @app.get("/api/paper/readback", tags=["Paper Trade"])
     def paper_readback() -> Dict[str, Any]:
         """Read-only canonical paper orders/fills across native and strategy ledgers."""
@@ -1235,7 +1241,7 @@ def create_app(
         reason = "NO_READER"
         if hasattr(st.runner, "research_reader") and st.runner.research_reader is not None:
             evidence_input = req_data if is_structured else item
-            verified, reason = st.runner.research_reader.add_evidence(evidence_input)
+            verified, reason = st.runner.research_reader.add_evidence(evidence_input, now=st.runner._now())
 
         return {
             "status": "success",

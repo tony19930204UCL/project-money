@@ -18,13 +18,21 @@ from cio_market_lab.domain.models import Bar, Market
 from cio_market_lab.engine.autonomous_runner import AutonomousPaperRunner, DurableQuoteSnapshot
 
 
+TEST_NOW = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+
+
+def _freeze_app_clock(app, now=TEST_NOW):
+    app.state.app_state.runner._now_fn = lambda: now
+    return app
+
+
 class MockMarketAdapter:
     def __init__(self):
         self.last_fetch_mode = "test_mock"
         self.last_error = None
 
     def get_bars(self, symbol, timeframe="1D", limit=80):
-        now = datetime.now(timezone.utc)
+        now = TEST_NOW
         return [
             Bar(
                 symbol=symbol,
@@ -58,9 +66,10 @@ def test_positive_post_structured_evidence_to_learning_context_and_restart(tmp_p
         market_adapter=MockMarketAdapter(),
         fixture_mode=False,
     )
+    _freeze_app_clock(app)
     client = TestClient(app, base_url="http://localhost:21322")
 
-    now = datetime.now(timezone.utc)
+    now = TEST_NOW
     observed_str = (now - timedelta(minutes=10)).isoformat()
 
     nvda_payload = {
@@ -126,6 +135,7 @@ def test_positive_post_structured_evidence_to_learning_context_and_restart(tmp_p
         market_adapter=MockMarketAdapter(),
         fixture_mode=False,
     )
+    _freeze_app_clock(app_restarted)
     client_restarted = TestClient(app_restarted, base_url="http://localhost:21322")
 
     # After restart, the canonical reader scans the inbox and loads the persisted evidence
@@ -161,9 +171,10 @@ def test_negative_post_fixture_and_synthetic_evidence_rejected(tmp_path: Path):
         market_adapter=MockMarketAdapter(),
         fixture_mode=False,
     )
+    _freeze_app_clock(app)
     client = TestClient(app, base_url="http://localhost:21322")
 
-    now = datetime.now(timezone.utc)
+    now = TEST_NOW
 
     fixture_payload = {
         "research_id": "fixture-nvda-announcement",
@@ -215,9 +226,10 @@ def test_negative_post_stale_and_future_evidence_rejected(tmp_path: Path):
         market_adapter=MockMarketAdapter(),
         fixture_mode=False,
     )
+    _freeze_app_clock(app)
     client = TestClient(app, base_url="http://localhost:21322")
 
-    now = datetime.now(timezone.utc)
+    now = TEST_NOW
 
     # Stale evidence: 30 days old
     stale_payload = {
@@ -271,6 +283,7 @@ def test_raw_unverified_document_separation_never_auto_certified(tmp_path: Path)
         market_adapter=MockMarketAdapter(),
         fixture_mode=False,
     )
+    _freeze_app_clock(app)
     client = TestClient(app, base_url="http://localhost:21322")
 
     raw_unverified = {
@@ -316,8 +329,9 @@ def test_negative_path_traversal_rejected_no_write_outside_inbox(tmp_path: Path)
         market_adapter=MockMarketAdapter(),
         fixture_mode=False,
     )
+    _freeze_app_clock(app)
     client = TestClient(app, base_url="http://localhost:21322")
-    now = datetime.now(timezone.utc)
+    now = TEST_NOW
 
     # Various path traversal attack patterns
     traversal_ids = [
@@ -384,8 +398,9 @@ def test_negative_persistence_failure_explicit_error_and_no_staging(tmp_path: Pa
         market_adapter=MockMarketAdapter(),
         fixture_mode=False,
     )
+    _freeze_app_clock(app)
     client = TestClient(app, base_url="http://localhost:21322")
-    now = datetime.now(timezone.utc)
+    now = TEST_NOW
 
     # Monkeypatch tempfile.NamedTemporaryFile to simulate atomic write failure (e.g. disk full / EIO)
     def mock_named_temporary_file(*args, **kwargs):
