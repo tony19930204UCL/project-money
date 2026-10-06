@@ -1241,7 +1241,7 @@ def create_app(
         reason = "NO_READER"
         if hasattr(st.runner, "research_reader") and st.runner.research_reader is not None:
             evidence_input = req_data if is_structured else item
-            verified, reason = st.runner.research_reader.add_evidence(evidence_input)
+            verified, reason = st.runner.research_reader.add_evidence(evidence_input, now=st.runner._now())
 
         return {
             "status": "success",
