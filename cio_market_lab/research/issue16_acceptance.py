@@ -178,15 +178,31 @@ class HermesLocalInference:
             model=self.contract.model,
             enforce_cio_pin=False,
         )
-        metadata=result.get("runtime_metadata") or {}
+        metadata=result.get("runtime_metadata")
+        if not isinstance(metadata,Mapping):
+            raise RuntimeError("INFERENCE_RUNTIME_METADATA_REQUIRED")
+        required_runtime_flags={
+            "auth_verified":True,
+            "is_success_response":True,
+            "is_fixture":False,
+        }
+        for key,expected in required_runtime_flags.items():
+            if key not in metadata or metadata.get(key) is not expected:
+                raise RuntimeError(f"INFERENCE_RUNTIME_EVIDENCE_INVALID:{key}")
+        if "returncode" not in result or isinstance(result.get("returncode"),bool) or not isinstance(result.get("returncode"),int):
+            raise RuntimeError("INFERENCE_RETURNCODE_REQUIRED")
+        if result["returncode"]!=0:
+            raise RuntimeError("INFERENCE_RETURNCODE_FAILED")
+        if result.get("failed") or result.get("error") or result.get("is_fixture") is True:
+            raise RuntimeError("INFERENCE_RUNTIME_UNAVAILABLE")
         response=result.get("response","")
         runtime=RuntimeEvidenceAdapter(
             pinned_provider=self.contract.provider,pinned_model=self.contract.model
         ).verify_runtime_evidence(
-            metadata=metadata,response_text=response,exit_code=result.get("returncode",0),
+            metadata=metadata,response_text=response,exit_code=result["returncode"],
             pinned_provider=self.contract.provider,pinned_model=self.contract.model,allow_fixture=False,
         )
-        if result.get("failed") or result.get("error") or result.get("is_fixture") or runtime.is_fixture:
+        if runtime.is_fixture:
             raise RuntimeError("INFERENCE_RUNTIME_UNAVAILABLE")
         parsed=schema.model_validate_json(response)
         return f"{runtime.resolved_provider}:{runtime.resolved_model}",parsed.model_dump(mode="json")
@@ -296,13 +312,27 @@ class PublicOnlyResearchWorkflowAdapter:
             model_ids[stage]=row["model_identity"]
         if model_ids["challenge"]==model_ids["underwriting"]:
             return self._blocked(symbol,attempts,"CONFIGURE_INDEPENDENT_HETEROGENEOUS_CHALLENGE_MODEL")
+        underwriting_status=prior["underwriting"]["underwriting_status"]
         verdict=prior["challenge"]["verdict"]
-        status="COMPLETED_PUBLIC_RESEARCH_CANDIDATE" if verdict=="PASS_PUBLIC_RESEARCH_ONLY" else "BLOCKED"
+        if underwriting_status=="INCOMPLETE":
+            status="BLOCKED"
+            exact_next_action="RESOLVE_UNDERWRITING_MISSING_EVIDENCE"
+        elif underwriting_status=="REJECT":
+            status="BLOCKED"
+            exact_next_action="UNDERWRITING_REJECTED_RESEARCH_CANDIDATE"
+        elif underwriting_status=="PUBLIC_EVIDENCE_READY" and verdict=="PASS_PUBLIC_RESEARCH_ONLY":
+            status="COMPLETED_PUBLIC_RESEARCH_CANDIDATE"
+            exact_next_action="MAIN_CIO_RUN_REAL_HOST_PUBLIC_INPUT_ACCEPTANCE"
+        else:
+            status="BLOCKED"
+            exact_next_action=prior["challenge"]["next_action"]
         return {
             "status":status,"symbol":symbol,"attempts":attempts,
+            "underwriting_status":underwriting_status,
+            "challenge_verdict":verdict,
             "challenge_model_distinct":True,"live_acceptance_claimed":False,
             "owner":"MAIN_CIO",
-            "exact_next_action":"MAIN_CIO_RUN_REAL_HOST_PUBLIC_INPUT_ACCEPTANCE" if status.startswith("COMPLETED") else prior["challenge"]["next_action"],
+            "exact_next_action":exact_next_action,
         }
 
     @staticmethod
@@ -453,6 +483,10 @@ class DeliveryReceiptConsumer:
     def consume(self,expected:Mapping[str,Any],receipt:Optional[Mapping[str,Any]])->dict[str,Any]:
         if not receipt:
             return self._unknown("RECEIPT_MISSING")
+        # Fixture evidence is never acknowledgement evidence. Reject it before
+        # transport/linkage checks, identity construction, history reads or writes.
+        if receipt.get("is_fixture") is True:
+            return self._unknown("FIXTURE_RECEIPT_REJECTED")
         transport=str(receipt.get("transport_status") or "").upper()
         if transport not in self.ACK_STATUSES:
             return self._unknown("UNSUPPORTED_OR_FAILED_TRANSPORT_STATUS")
