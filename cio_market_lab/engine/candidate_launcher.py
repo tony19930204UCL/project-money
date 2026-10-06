@@ -177,7 +177,7 @@ def run_candidate(
         runner.frozen_decision_context = None
         runner.set_cio_executor(None)
     else:
-        if packet_root is None or trusted_manifest is None:
+        if packet_root is None or (trusted_manifest is None and not allow_test_only):
             exit_payload = {
                 **entry,
                 "status": "WAITING_FOR_APPROVED_INPUT",
@@ -188,8 +188,7 @@ def run_candidate(
             _atomic_json(result_path, exit_payload)
             runner.shutdown()
             return exit_payload
-        provider = make_packet_observation_provider(Path(packet_root), trusted_manifest=Path(trusted_manifest))
-        runner.material_observation_provider = provider
+        provider = make_packet_observation_provider(\n            Path(packet_root),\n            trusted_manifest=Path(trusted_manifest) if trusted_manifest is not None else None,\n            allow_fixture=allow_test_only,\n        )\n        runner.material_observation_provider = provider
         runner.material_gate_enabled = True
         runner.frozen_decision_context = None
         if cio_executor is not None:
