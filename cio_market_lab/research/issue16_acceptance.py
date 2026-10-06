@@ -226,6 +226,7 @@ class PublicOnlyResearchWorkflowAdapter:
                 ],
                 "research_scope":record.get("research_scope","historical_company_facts_not_catalyst"),
                 "limitations":record.get("limitations") or [],
+                "raw_metadata":record.get("raw_metadata") or {},
             }
             rows.append(seal_public_evidence(candidate,now=now))
         return rows
