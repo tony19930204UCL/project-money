@@ -235,7 +235,7 @@ def acceptance_check(registry: Mapping[str,Any], obligation_id: str, *, now: Opt
         status=="COMPLETED"
         and acceptance==ACCEPTANCE_PASS
         and criterion_ok
-        and not next((x for x in schema["record_results"] if x["id"]==obligation_id),{"valid":False})["valid"] is False
+        and next((x for x in schema["record_results"] if x["id"]==obligation_id),{"valid":False})["valid"] is True
     )
     return {
         "schema_status":schema["status"],
@@ -265,10 +265,11 @@ def migrate_registry_snapshot(before: Mapping[str,Any], source_refs: Mapping[str
             continue
         original_deadline=record.get("original_deadline")
         original_failure=record.get("failure_disposition")
+        original_status=record.get("status")
         legacy_terminal=record.get("legacy_terminal_state")
         if legacy_terminal in {"FAILED","CLOSED"} and record.get("status") not in {"FAILED","CLOSED"}:
             record["status"]=legacy_terminal
-            changes.append({"id":record.get("id"),"field":"status","before":before.get("status"),"after":legacy_terminal,"source_ref":_source_ref(source_refs,"status")})
+            changes.append({"id":record.get("id"),"field":"status","before":original_status,"after":legacy_terminal,"source_ref":_source_ref(source_refs,"status")})
         if legacy_terminal=="CLOSED" and not record.get("historical_acceptance_result"):
             historical=record.get("legacy_acceptance_result")
             if historical in {ACCEPTANCE_PASS,ACCEPTANCE_FAIL}:
