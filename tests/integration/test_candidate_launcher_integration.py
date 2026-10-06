@@ -91,8 +91,7 @@ def test_verification_only_missing_inputs_is_truthful_and_side_effect_bounded(tm
     assert result["status"]=="WAITING_FOR_APPROVED_INPUT"
     assert result["provider_invoked"] is False
     assert result["runner_invoked"] is False
-    assert result["fx"]["status"]=="COMBINED_NAV_GAP"
-    assert result["fx"]["reporting_nav"] is None
+    assert result["fx"]["status"]=="COMBINED_NAV_GAP"\n    assert result["fx"]["valuation_timing"]=="VERIFY_ONLY_PRE_CYCLE"\n    assert result["fx"]["reporting_nav"] is None
     assert not (runtime/FX_NAME).exists()
     persisted=json.loads((runtime/RESULT_NAME).read_text())
     assert persisted==result
@@ -112,8 +111,7 @@ def test_supplied_fx_provenance_is_preserved_and_test_only_never_promoted(tmp_pa
         workspace_root=ROOT,runtime_dir=runtime,mode=VERIFY_ONLY,settings=settings(),
         fx_receipts_path=supplied,now=T0,
     )
-    assert result["fx"]["status"]=="AVAILABLE"
-    exact=json.loads((runtime/FX_NAME).read_text())["receipts"][0]
+    assert result["fx"]["status"]=="AVAILABLE"\n    assert result["fx"]["valuation_timing"]=="VERIFY_ONLY_PRE_CYCLE"\n    exact=json.loads((runtime/FX_NAME).read_text())["receipts"][0]
     assert exact["source_date"]=="2026-10-05"
     assert exact["source_url"]=="https://fred.stlouisfed.org/series/DEXTAUS"
     assert exact["provenance"]=="OFFICIAL_SOURCE"
@@ -124,10 +122,16 @@ def test_supplied_fx_provenance_is_preserved_and_test_only_never_promoted(tmp_pa
         "source":"TEST_ONLY_SYNTHETIC_FX","source_url":"https://example.com/test-only-fx",
         "source_date":"2026-10-05","provenance":"TEST_ONLY"
     }]),encoding="utf-8")
+    failed_runtime=tmp_path/"prod-like"
     with pytest.raises(ValueError,match="TEST_ONLY_FX_NOT_ALLOWED"):
         run_candidate(
-            workspace_root=ROOT,runtime_dir=tmp_path/"prod-like",mode=VERIFY_ONLY,
+            workspace_root=ROOT,runtime_dir=failed_runtime,mode=VERIFY_ONLY,
             settings=settings(),fx_receipts_path=test_fx,now=T0,allow_test_only=False)
+    failed=read_candidate_result(failed_runtime)
+    assert failed["status"]=="FAILED_CANDIDATE"
+    assert failed["failure_stage"]=="FX_RECEIPT_SETUP"
+    assert failed["reason"]=="CANDIDATE_FX_RECEIPT_SETUP_FAILED"
+    assert failed["completed_at"]==T0.isoformat()
     tagged=run_candidate(
         workspace_root=ROOT,runtime_dir=tmp_path/"test-runtime",mode=VERIFY_ONLY,
         settings=settings(),fx_receipts_path=test_fx,now=T0,allow_test_only=True)
@@ -156,9 +160,7 @@ def test_authenticated_test_only_consumer_calls_real_runner_and_persists_lineage
     assert context_id and result["research_lineage"][0]["daily_plan_review"] is True
     assert result["cycle"]["decisions"][0]["action"]=="NO_TRADE"
     assert result["cycle"]["fills"] if "fills" in result["cycle"] else True
-    assert result["fx"]["status"]=="COMBINED_NAV_GAP"
-    assert not (runtime/FX_NAME).exists()
-
+    assert result["fx"]["status"]=="COMBINED_NAV_GAP"\n    assert result["fx"]["valuation_timing"]=="POST_CYCLE"\n    assert not (runtime/FX_NAME).exists()\n
     proc=subprocess.run([
         sys.executable,str(HELPER),
         "--workspace-root",str(ROOT),
