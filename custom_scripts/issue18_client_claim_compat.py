@@ -171,13 +171,6 @@ def _raw_alias_tree_conflicts(value: Any, *, path: str) -> list[dict[str,Any]]:
             conflicts.extend(_raw_alias_tree_conflicts(child,path=f"{path}.{key}"))
     elif isinstance(value,list):
         for index,child in enumerate(value):
-            if not isinstance(child,Mapping):
-                conflicts.append({
-                    "kind":"LEGACY_RESULT_ROW_DOMAIN_INVALID",
-                    "path":f"{path}[{index}]",
-                    "value":copy.deepcopy(child),
-                })
-                continue
             conflicts.extend(_raw_alias_tree_conflicts(child,path=f"{path}[{index}]"))
     return conflicts
 
@@ -303,7 +296,15 @@ def adapt_legacy_manifest(raw: Mapping[str,Any]) -> tuple[dict[str,Any],dict[str
             if not isinstance(out[field],list):
                 conflicts.append({"kind":"LEGACY_RESULTS_DOMAIN_INVALID","path":field,"value":copy.deepcopy(out[field])})
             else:
-                conflicts.extend(_raw_alias_tree_conflicts(out[field],path=field))
+                for index,row in enumerate(out[field]):
+                    if not isinstance(row,Mapping):
+                        conflicts.append({
+                            "kind":"LEGACY_RESULT_ROW_DOMAIN_INVALID",
+                            "path":f"{field}[{index}]",
+                            "value":copy.deepcopy(row),
+                        })
+                    else:
+                        conflicts.extend(_raw_alias_tree_conflicts(row,path=f"{field}[{index}]"))
 
     if isinstance(out.get("execution_scope"),Mapping) and isinstance(out.get("scope"),Mapping):
         if not _alias_values_equal(out["execution_scope"],out["scope"]):
