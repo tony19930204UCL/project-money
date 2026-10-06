@@ -379,9 +379,23 @@ def adapt_legacy_manifest(raw: Mapping[str,Any]) -> tuple[dict[str,Any],dict[str
 
 def evaluate_manifest(registry: Mapping[str,Any], manifest: Mapping[str,Any], *, now: Optional[datetime]=None) -> dict[str,Any]:
     observed=(now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    if manifest.get("_legacy_alias_conflicts"):
-        kinds=",".join(str(x.get("kind")) for x in manifest["_legacy_alias_conflicts"] if isinstance(x,Mapping))
-        return {"status":"CLIENT_EXECUTION_CLAIM_BLOCKED","reason":"LEGACY_MANIFEST_ALIAS_CONFLICT:"+kinds,"completion_claim_allowed":False}
+    original=manifest
+    normalized,raw_report=adapt_legacy_manifest(manifest)
+    if original!=manifest:
+        return {"status":"CLIENT_EXECUTION_CLAIM_BLOCKED","reason":"MANIFEST_INPUT_MUTATED_DURING_VALIDATION","completion_claim_allowed":False}
+    preexisting=manifest.get("_legacy_alias_conflicts") if isinstance(manifest,Mapping) else None
+    conflicts=list(raw_report.get("conflicts") or [])
+    if isinstance(preexisting,list):
+        conflicts.extend(copy.deepcopy(preexisting))
+    if conflicts:
+        kinds=",".join(str(x.get("kind")) for x in conflicts if isinstance(x,Mapping))
+        return {
+            "status":"CLIENT_EXECUTION_CLAIM_BLOCKED",
+            "reason":"LEGACY_MANIFEST_ALIAS_CONFLICT:"+kinds,
+            "completion_claim_allowed":False,
+            "manifest_conflicts":conflicts,
+        }
+    manifest=normalized
     try:
         required_ids=_validate_scope(registry,manifest)
     except ClaimGateError as exc:
