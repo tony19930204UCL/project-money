@@ -883,3 +883,92 @@ def test_equivalent_aliases_remain_positive_across_registry_scope_and_legacy_man
     adapted_manifest,report=adapt_legacy_manifest(legacy)
     assert report["conflicts"]==[]
     assert evaluate_manifest(reg,adapted_manifest,now=NOW)["status"]=="CLIENT_EXECUTION_CLAIM_PASS"
+
+
+def test_raw_scope_alias_trees_block_shadow_schedule_conflicts_in_both_directions():
+    reg=scoped_registry(completed_record("done"),assigned_ids=["done"])
+    base=_passing_claim_manifest("done")
+
+    raw=deepcopy(base)
+    raw["scope"]=deepcopy(raw["execution_scope"])
+    raw["scope"]["executor_binding"]["run_at"]="2026-10-09T10:00:00+00:00"
+    before=deepcopy(raw)
+    adapted,report=adapt_legacy_manifest(raw)
+    assert raw==before and report["input_unchanged"] is True
+    assert any(
+        x["kind"]=="LEGACY_RAW_SCHEDULE_ALIAS_CONFLICT" and x["path"]=="scope.executor_binding"
+        for x in report["conflicts"]
+    )
+    result=evaluate_manifest(reg,adapted,now=NOW)
+    assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+    assert result["completion_claim_allowed"] is False
+
+    raw=deepcopy(base)
+    raw["scope"]=deepcopy(raw["execution_scope"])
+    raw["execution_scope"]["executor_binding"]["run_at"]="2026-10-09T10:00:00+00:00"
+    before=deepcopy(raw)
+    adapted,report=adapt_legacy_manifest(raw)
+    assert raw==before and report["input_unchanged"] is True
+    assert any(
+        x["kind"]=="LEGACY_RAW_SCHEDULE_ALIAS_CONFLICT" and x["path"]=="execution_scope.executor_binding"
+        for x in report["conflicts"]
+    )
+    result=evaluate_manifest(reg,adapted,now=NOW)
+    assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+    assert result["completion_claim_allowed"] is False
+
+
+def test_raw_scope_alias_trees_allow_semantically_equal_offset_schedules_on_both_sides():
+    reg=scoped_registry(completed_record("done"),assigned_ids=["done"])
+    raw=_passing_claim_manifest("done")
+    raw["scope"]=deepcopy(raw["execution_scope"])
+    raw["execution_scope"]["executor_binding"]["run_at"]="2026-10-09T11:00:00+02:00"
+    raw["scope"]["executor_binding"]["run_at"]="2026-10-09T11:00:00+02:00"
+    before=deepcopy(raw)
+    adapted,report=adapt_legacy_manifest(raw)
+    assert raw==before and report["input_unchanged"] is True
+    assert report["conflicts"]==[]
+    assert evaluate_manifest(reg,adapted,now=NOW)["status"]=="CLIENT_EXECUTION_CLAIM_PASS"
+
+
+def test_result_alias_domain_invalid_values_block_selected_and_shadow_results_without_mutation():
+    reg=scoped_registry(completed_record("done"),assigned_ids=["done"])
+    for bad in ("BLOCKED","UNKNOWN",{"state":"PASS"},17):
+        raw=_passing_claim_manifest("done")
+        raw["obligation_results"][0]["result"]=deepcopy(bad)
+        before=deepcopy(raw)
+        adapted,report=adapt_legacy_manifest(raw)
+        assert raw==before and report["input_unchanged"] is True
+        assert any(x["kind"]=="LEGACY_ACCEPTANCE_RESULT_DOMAIN_INVALID" for x in report["conflicts"])
+        result=evaluate_manifest(reg,adapted,now=NOW)
+        assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+        assert result["completion_claim_allowed"] is False
+
+        raw=_passing_claim_manifest("done")
+        raw["results"]=deepcopy(raw["obligation_results"])
+        raw["results"][0]["result"]=deepcopy(bad)
+        before=deepcopy(raw)
+        adapted,report=adapt_legacy_manifest(raw)
+        assert raw==before and report["input_unchanged"] is True
+        assert any(
+            x["kind"]=="LEGACY_ACCEPTANCE_RESULT_DOMAIN_INVALID"
+            and x["path"].startswith("results[0]")
+            for x in report["conflicts"]
+        )
+        result=evaluate_manifest(reg,adapted,now=NOW)
+        assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+        assert result["completion_claim_allowed"] is False
+
+
+def test_result_alias_valid_equivalence_passes_in_selected_and_shadow_results():
+    reg=scoped_registry(completed_record("done"),assigned_ids=["done"])
+    raw=_passing_claim_manifest("done")
+    raw["obligation_results"][0]["result"]="PASS"
+    raw["results"]=deepcopy(raw["obligation_results"])
+    raw["results"][0]["obligation_id"]="done"
+    before=deepcopy(raw)
+    adapted,report=adapt_legacy_manifest(raw)
+    assert raw==before and report["input_unchanged"] is True
+    assert report["conflicts"]==[]
+    assert adapted["obligation_results"][0]["acceptance_result"]=="PASS"
+    assert evaluate_manifest(reg,adapted,now=NOW)["status"]=="CLIENT_EXECUTION_CLAIM_PASS"
