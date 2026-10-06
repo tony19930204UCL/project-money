@@ -74,6 +74,29 @@ def semantic_research_digest(evidence: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(semantic, sort_keys=True, default=str).encode()).hexdigest()
 
 
+def normalize_reference_quote(reference_quote: dict[str, Any] | None, *, now: datetime) -> dict[str, Any] | None:
+    if reference_quote is None:
+        return None
+    if not isinstance(reference_quote, dict):
+        raise ValueError('reference quote must be a mapping')
+    quote=dict(reference_quote)
+    quote.setdefault('observed_at', now.astimezone(timezone.utc).isoformat())
+    quote['timestamp_semantics']={
+        'source_timestamp_or_date':'market/source time identifies the trading observation; date-only official EOD data does not imply an intraday timestamp',
+        'observed_at':'collector observation time; it does not replace or advance the source trading date',
+    }
+    return quote
+
+
+def semantic_reference_quote_digest(reference_quote: dict[str, Any] | None) -> str:
+    if reference_quote is None:
+        return 'none'
+    semantic={k: reference_quote.get(k) for k in (
+        'symbol','price','close','last_price','source','timestamp','source_timestamp','source_date','date'
+    )}
+    return hashlib.sha256(json.dumps(semantic,sort_keys=True,default=str).encode()).hexdigest()
+
+
 def validate_plan_against_inputs(plan: DailyPlanJudgment, evidence: dict[str, Any], *, maximum_ceiling: float):
     if not evidence.get('verified_facts'):
         raise ValueError('no verified official facts')
@@ -147,8 +170,20 @@ class DailyResearchPlanProducer:
                     raise
         if len(response.content) > MAX_BYTES:
             raise ValueError('OFFICIAL_DOCUMENT_OVERSIZE')
-        raw = parse_official_document(url, response.content, response.headers.get('Content-Type','')) if disclosure else response.json()
         digest = hashlib.sha256(response.content).hexdigest()
+        raw = parse_official_document(url, response.content, response.headers.get('Content-Type','')) if disclosure else response.json()
+        if disclosure and isinstance(raw,list):
+            enriched=[]
+            for row in raw:
+                current=dict(row)
+                current.update({
+                    'source_url':url,
+                    'document_sha256':digest,
+                    'observed_at':now.isoformat(),
+                    'body_provenance':'EXTRACTED_FROM_CAPTURED_WIRE_BYTES',
+                })
+                enriched.append(current)
+            raw=enriched
         if disclosure:
             wire = self.root / 'raw_official' / (digest + '.wire')
             if not wire.exists():
@@ -205,9 +240,17 @@ class DailyResearchPlanProducer:
         if market == 'TW' and not meta.get('raw_row'):
             raise ValueError('TW current official monthly revenue row missing')
         atomic_json(self.root / 'official_baselines' / (symbol + '.json'), evidence)
+        blocked_documents=list(meta.get('blocked_official_documents') or [])
+        if blocked_documents:
+            # Keep the independently verified intake on disk, but never promote
+            # a research plan while a required linked official statement is blocked.
+            blocked_urls=','.join(str(row.get('source_url') or '') for row in blocked_documents)
+            raise RuntimeError('OFFICIAL_DISCLOSURE_DOCUMENT_BLOCKED:'+blocked_urls)
         digest = semantic_research_digest(evidence)
+        quote_context=normalize_reference_quote(reference_quote,now=now)
+        quote_digest=semantic_reference_quote_digest(quote_context)
         date = plan_session_date(symbol, now)
-        key = f'{symbol}-{date}-{digest[:16]}-quote{int(reference_quote is not None)}'
+        key = f'{symbol}-{date}-{digest[:16]}-quote-{quote_digest[:16]}'
         prior = self.root / 'authenticated_plans' / (key + '.json')
         if prior.exists() and (self.packet_root/(symbol+'.json')).exists():
             # Loader independently verifies source lineage and trusted receipt hash.
@@ -216,7 +259,7 @@ class DailyResearchPlanProducer:
                 return {'status':'CACHED_IMMUTABLE_PLAN', 'symbol':symbol, 'plan_path':str(prior), 'packet_path':str(self.packet_root/(symbol+'.json')), 'model_called':False}
         prompt = {'purpose':'DAILY_FROZEN_PAPER_RESEARCH_PLAN_NOT_ORDER', 'symbol':symbol, 'market':market,
                   'observed_at':now.isoformat(), 'market_session_date':date,
-                  'official_evidence':evidence, 'reference_quote_for_valuation_only':reference_quote,
+                  'official_evidence':evidence, 'reference_quote_for_valuation_only':quote_context,
                   'position_ceiling_fraction':self.maximum_ceiling,
                   'prior_lessons':self.learning_store.retrieve_context_lessons(symbol=symbol, as_of=now, limit=5),
                   'matured_past_outcomes':self.learning_store.retrieve_past_outcomes(symbol=symbol, as_of=now, limit=5)}
