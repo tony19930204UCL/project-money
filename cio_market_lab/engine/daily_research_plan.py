@@ -225,9 +225,16 @@ class DailyResearchPlanProducer:
             wire = self.root / 'raw_official' / (digest + '.wire')
             if not wire.exists():
                 wire.write_bytes(response.content)
-        atomic_json(path, {'source_url': url, 'observed_at': now.isoformat(), 'tls_verified': True,
-                           'sha256_of_wire_bytes': digest, 'capture_schema':schema,
-                           'is_fixture': False, 'content': raw})
+        capture={'source_url': url, 'observed_at': now.isoformat(), 'tls_verified': True,
+                 'sha256_of_wire_bytes': digest, 'capture_schema':schema,
+                 'is_fixture': False, 'content': raw}
+        atomic_json(path, capture)
+        # Backward-compatible content-addressed snapshot for existing audit
+        # readers. It is immutable and never used as the canonical identity;
+        # captures_by_url always points at URL+wire+schema identity above.
+        legacy_path=self.root/'raw_official'/(digest+'.json')
+        if not legacy_path.exists():
+            atomic_json(legacy_path, {**capture,'canonical_capture_identity':capture_identity})
         self.captures_by_url[url] = path
         return raw
 
