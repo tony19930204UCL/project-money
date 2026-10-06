@@ -4,8 +4,12 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import json
 
-from custom_scripts.client_execution_claim_gate import evaluate_manifest
-from custom_scripts.obligation_deadline_registry import (
+from custom_scripts.issue18_client_claim_compat import (
+    adapt_legacy_manifest,
+    evaluate_manifest,
+    main as claim_main,
+)
+from custom_scripts.issue18_obligation_compat import (
     acceptance_check,
     adapt_canonical_registry_snapshot,
     main as registry_main,
@@ -106,7 +110,7 @@ def completed_record(rid="completed-1"):
         "original_deadline_source_ref":"artifact://deadline-completed",
         "execution_history":original_history(),
         "acceptance_result":"PASS",
-        "completed_at":"2026-10-09T08:30:00+00:00",
+        "completed_at":"2026-10-06T10:30:00+00:00",
         "completed_at_source_ref":"artifact://original-completion-record",
         "completed_at_source_kind":"ORIGINAL_ARTIFACT",
         "original_criteria":["criterion-a"],
@@ -360,12 +364,12 @@ def test_scoped_claim_requires_exact_authenticated_scope_and_all_assigned_cases(
         "id":"a","status":"ACTIVE","acceptance_result":"FAIL",
         "external_blocker":{"classification":"EXTERNAL","source_ref":"artifact://blocker-a"},
     }]
-    result=evaluate_manifest(reg,manifest)
+    result=evaluate_manifest(reg,manifest,now=NOW)
     assert result["reason"]=="ASSIGNED_CASES_OMITTED:b"
 
     forged=scoped_manifest(["a","b"])
     forged["execution_scope"]["authorization_source"]="decision://forged"
-    result=evaluate_manifest(reg,forged)
+    result=evaluate_manifest(reg,forged,now=NOW)
     assert result["reason"]=="EXECUTION_SCOPE_AUTHORIZATION_MISMATCH"
 
 
@@ -385,7 +389,7 @@ def test_full_main_cio_requires_authenticated_canonical_scope_including_terminal
             "historical_evidence":{"classification":"HISTORICAL_FAILURE","source_ref":"artifact://failed-evidence"},
         },
     ]
-    result=evaluate_manifest(reg,manifest)
+    result=evaluate_manifest(reg,manifest,now=NOW)
     assert result["status"]=="CLIENT_EXECUTION_CLAIM_RECORDED_NONCOMPLETION"
     assert result["completion_claim_allowed"] is False
     assert {x["id"] for x in result["case_results"]}=={"done","failed"}
@@ -395,7 +399,7 @@ def test_full_main_cio_empty_results_and_incomplete_terminal_scope_never_pass_va
     done=completed_record("done")
     reg=scoped_registry(done,assigned_ids=["done"],mode="FULL_MAIN_CIO")
     manifest=scoped_manifest(["done"],mode="FULL_MAIN_CIO")
-    result=evaluate_manifest(reg,manifest)
+    result=evaluate_manifest(reg,manifest,now=NOW)
     assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
     assert result["reason"]=="EMPTY_OBLIGATION_RESULTS_CANNOT_COMPLETE"
     assert result["completion_claim_allowed"] is False
@@ -410,7 +414,7 @@ def test_full_main_cio_empty_results_and_incomplete_terminal_scope_never_pass_va
 def test_full_scope_with_no_owner_obligations_is_noncompletion_not_pass():
     reg=scoped_registry(assigned_ids=[],mode="FULL_MAIN_CIO")
     manifest=scoped_manifest([],mode="FULL_MAIN_CIO")
-    result=evaluate_manifest(reg,manifest)
+    result=evaluate_manifest(reg,manifest,now=NOW)
     assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
     assert result["reason"]=="EXECUTION_SCOPE_HAS_NO_ASSIGNED_OBLIGATIONS"
     assert result["completion_claim_allowed"] is False
@@ -425,13 +429,13 @@ def test_terminal_or_cancelled_pass_claims_and_status_only_fail_are_rejected():
         "completion_evidence":{"source_ref":"artifact://fake"},
         "effect_evidence":{"verified":True,"source_ref":"artifact://fake-effect"},
     }]
-    assert evaluate_manifest(reg,manifest)["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+    assert evaluate_manifest(reg,manifest,now=NOW)["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
 
     active=active_record("a")
     reg=scoped_registry(active,assigned_ids=["a"])
     manifest=scoped_manifest(["a"])
     manifest["obligation_results"]=[{"id":"a","status":"ACTIVE","acceptance_result":"FAIL"}]
-    result=evaluate_manifest(reg,manifest)
+    result=evaluate_manifest(reg,manifest,now=NOW)
     assert result["case_results"][0]["reason"]=="FAIL_REQUIRES_VERIFIED_CASE_EVIDENCE"
 
 
@@ -442,7 +446,7 @@ def test_evidence_backed_scoped_recovery_fail_is_recorded_without_completion_cla
         "id":"a","status":"ACTIVE","acceptance_result":"FAIL",
         "external_blocker":{"classification":"EXTERNAL_DATA_PREREQUISITE","source_ref":"artifact://gap"},
     }]
-    result=evaluate_manifest(reg,manifest)
+    result=evaluate_manifest(reg,manifest,now=NOW)
     assert result["status"]=="CLIENT_EXECUTION_CLAIM_RECORDED_NONCOMPLETION"
     assert result["completion_claim_allowed"] is False
 
@@ -452,25 +456,34 @@ def test_completed_pass_still_requires_completion_and_effect_evidence():
     reg=scoped_registry(done,assigned_ids=["done"])
     manifest=scoped_manifest(["done"])
     manifest["obligation_results"]=[{"id":"done","status":"COMPLETED","acceptance_result":"PASS"}]
-    result=evaluate_manifest(reg,manifest)
+    result=evaluate_manifest(reg,manifest,now=NOW)
     assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
     assert result["case_results"][0]["reason"]=="COMPLETION_EVIDENCE_REQUIRED"
 
 
-def canonical_shape_fixture():
+def canonical_shape_fixture(status="REGISTERED", *, run_at="2026-10-09T09:00:00+00:00"):
+    canonical_job={
+        "job_id":"job-1",
+        "run_id":"run-1",
+        "model":"local-model",
+        "provider":"local-provider",
+        "route_kind":"local",
+        "state":"ENABLED",
+        "run_at":run_at,
+    }
     return {
         "schema_version":"installed-v1",
-        "executor_readback":{"job-1":live_job()},
+        "executor_readback":{"job-1":canonical_job},
         "obligations":[{
             "obligation_id":"canonical-active",
             "owner":"Main CIO",
-            "status":"ACTIVE",
+            "status":status,
             "deadline":"2026-10-10T09:00:00+00:00",
             "deadline_source_ref":"artifact://canonical-deadline",
             "acceptance_criteria":[{"criterion_id":"criterion-a"}],
             "acceptance_evidence":criterion(False),
             "execution_one_shot":{
-                **live_job(),
+                **canonical_job,
                 "source_ref":"artifact://canonical-one-shot",
             },
             "acceptance_result":"FAIL",
@@ -490,27 +503,137 @@ def test_canonical_installed_shape_adapter_is_nonmutating_and_validates_without_
     assert report["adapted_ids"]==["canonical-active"]
     row=adapted["obligations"][0]
     assert row["id"]=="canonical-active"
+    assert row["canonical_status"]=="REGISTERED"
+    assert row["status"]=="PENDING"
     assert row["original_criteria"]==["criterion-a"]
     assert row["execution_history"][0]["scheduled_at"]=="2026-10-09T09:00:00+00:00"
+    assert row["executor_binding"]["scheduled_at"]=="2026-10-09T09:00:00+00:00"
+    assert adapted["live_jobs"]["job-1"]["scheduled_at"]=="2026-10-09T09:00:00+00:00"
     assert row["original_deadline"]=="2026-10-10T09:00:00+00:00"
     assert validate_registry(adapted,now=NOW)["status"]=="DEADLINE_REGISTRY_VALID"
 
 
-def test_cli_preserves_validate_command_shape_via_source_backed_env_and_both_registry_option_orders(tmp_path,monkeypatch,capsys):
+def test_namespaced_registry_adapter_cli_does_not_replace_installed_register_complete_interface(tmp_path,capsys):
     raw=canonical_shape_fixture()
     path=tmp_path/"canonical.json"
     path.write_text(json.dumps(raw),encoding="utf-8")
 
-    monkeypatch.setenv("PROJECT_MONEY_OBLIGATION_REGISTRY",str(path))
-    assert registry_main(["validate"])==0
+    assert registry_main(["--registry",str(path),"validate"])==0
     payload=json.loads(capsys.readouterr().out)
     assert payload["status"]=="DEADLINE_REGISTRY_VALID"
     assert payload["compatibility"]["mode"]=="CANONICAL_SHAPE_ADAPTER"
 
-    assert registry_main(["--registry",str(path),"validate"])==0
-    capsys.readouterr()
-    assert registry_main(["validate","--registry",str(path)])==0
-    capsys.readouterr()
+
+def test_legacy_claim_manifest_adapter_and_positional_manifest_root_cli(tmp_path,capsys):
+    done=completed_record("done")
+    reg=scoped_registry(done,assigned_ids=["done"])
+    canonical_path=tmp_path/"obligation_registry.json"
+    canonical_path.write_text(json.dumps(reg),encoding="utf-8")
+    legacy_manifest={
+        "scope":scoped_manifest(["done"])["execution_scope"],
+        "results":[{
+            "obligation_id":"done",
+            "status":"COMPLETED",
+            "result":"PASS",
+            "completion_evidence":{"source_ref":"artifact://completion"},
+            "effect_evidence":{"verified":True,"source_ref":"artifact://effect"},
+        }],
+    }
+    manifest_path=tmp_path/"manifest.json"
+    manifest_path.write_text(json.dumps(legacy_manifest),encoding="utf-8")
+
+    adapted,report=adapt_legacy_manifest(legacy_manifest)
+    assert report["input_unchanged"] is True
+    assert adapted["obligation_results"][0]["id"]=="done"
+    assert adapted["obligation_results"][0]["acceptance_result"]=="PASS"
+    assert evaluate_manifest(reg,adapted,now=NOW)["status"]=="CLIENT_EXECUTION_CLAIM_PASS"
+
+    assert claim_main([str(manifest_path),"--root",str(tmp_path)])==0
+    payload=json.loads(capsys.readouterr().out)
+    assert payload["status"]=="CLIENT_EXECUTION_CLAIM_PASS"
+    assert payload["manifest_compatibility"]["mode"]=="LEGACY_MANIFEST_ADAPTER"
+
+
+def test_future_completion_timestamp_is_blocked_in_registry_and_claim_clock():
+    future=completed_record("future")
+    future["completed_at"]="2026-10-06T12:01:00+00:00"
+    reg=registry(future)
+    result=validate_registry(reg,now=NOW)
+    assert result["status"]=="DEADLINE_REGISTRY_INVALID"
+    assert any("COMPLETION_IN_FUTURE" in e for e in result["errors"])
+    assert acceptance_check(reg,"future",now=NOW)["status"]=="OBLIGATION_ACCEPTANCE_BLOCKED"
+
+    scoped=scoped_registry(future,assigned_ids=["future"])
+    manifest=scoped_manifest(["future"])
+    manifest["obligation_results"]=[{
+        "id":"future","status":"COMPLETED","acceptance_result":"PASS",
+        "completion_evidence":{"source_ref":"artifact://future"},
+        "effect_evidence":{"verified":True,"source_ref":"artifact://effect"},
+    }]
+    claim=evaluate_manifest(scoped,manifest,now=NOW)
+    assert claim["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+    assert claim["case_results"][0]["reason"]=="CANONICAL_ACCEPTANCE_NOT_PASS"
+
+
+def test_scope_disabled_and_missing_required_metadata_are_rejected_even_when_copies_match():
+    done=completed_record("done")
+    for mutation,reason in (
+        (lambda b: b.update({"state":"DISABLED"}),"EXECUTOR_NOT_EXECUTABLE"),
+        (lambda b: b.pop("provider"),"provider:REQUIRED"),
+        (lambda b: b.update({"run_id":None}),"run_id:REQUIRED"),
+    ):
+        reg=scoped_registry(done,assigned_ids=["done"])
+        manifest=scoped_manifest(["done"])
+        mutation(reg["execution_scopes"]["scope-1"]["executor_binding"])
+        mutation(manifest["execution_scope"]["executor_binding"])
+        mutation(reg["live_jobs"]["job-1"])
+        manifest["obligation_results"]=[{
+            "id":"done","status":"COMPLETED","acceptance_result":"PASS",
+            "completion_evidence":{"source_ref":"artifact://completion"},
+            "effect_evidence":{"verified":True,"source_ref":"artifact://effect"},
+        }]
+        result=evaluate_manifest(reg,manifest,now=NOW)
+        assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+        assert result["completion_claim_allowed"] is False
+        assert reason in result["reason"]
+
+
+def test_canonical_registered_in_progress_and_overdue_statuses_preserve_originals_and_semantics():
+    registered,_=adapt_canonical_registry_snapshot(canonical_shape_fixture("REGISTERED"))
+    row=registered["obligations"][0]
+    assert row["canonical_status"]=="REGISTERED" and row["status"]=="PENDING"
+    assert validate_registry(registered,now=NOW)["status"]=="DEADLINE_REGISTRY_VALID"
+
+    progress,_=adapt_canonical_registry_snapshot(canonical_shape_fixture("IN_PROGRESS"))
+    row=progress["obligations"][0]
+    assert row["canonical_status"]=="IN_PROGRESS" and row["status"]=="ACTIVE"
+    assert validate_registry(progress,now=NOW)["status"]=="DEADLINE_REGISTRY_VALID"
+
+    overdue=canonical_shape_fixture("OVERDUE",run_at="2026-10-01T08:00:00+00:00")
+    overdue["obligations"][0]["deadline"]="2026-10-01T09:00:00+00:00"
+    overdue["obligations"][0]["execution_one_shot"]["run_at"]="2026-10-01T08:00:00+00:00"
+    overdue["executor_readback"]["job-1"]["run_at"]="2026-10-01T08:00:00+00:00"
+    adapted,_=adapt_canonical_registry_snapshot(overdue)
+    row=adapted["obligations"][0]
+    assert row["canonical_status"]=="OVERDUE" and row["status"]=="RECOVERY"
+    blocked=validate_registry(adapted,now=NOW)
+    assert blocked["status"]=="DEADLINE_REGISTRY_INVALID"
+    assert any("AUTHORIZED_RECOVERY_REQUIRED" in e for e in blocked["errors"])
+
+
+def test_unknown_canonical_status_and_missing_run_at_remain_truthfully_blocked():
+    unknown,_=adapt_canonical_registry_snapshot(canonical_shape_fixture("WAITING_ON_MAGIC"))
+    result=validate_registry(unknown,now=NOW)
+    assert result["status"]=="DEADLINE_REGISTRY_INVALID"
+    assert any("status:UNSUPPORTED" in e for e in result["errors"])
+
+    missing=canonical_shape_fixture("REGISTERED")
+    missing["obligations"][0]["execution_one_shot"].pop("run_at")
+    missing["executor_readback"]["job-1"].pop("run_at")
+    adapted,_=adapt_canonical_registry_snapshot(missing)
+    result=validate_registry(adapted,now=NOW)
+    assert result["status"]=="DEADLINE_REGISTRY_INVALID"
+    assert any("scheduled_at:TIMESTAMP_REQUIRED" in e for e in result["errors"])
 
 
 def test_canonical_shape_adapter_never_invents_missing_source_backed_schedule_or_deadline():
