@@ -633,7 +633,7 @@ def test_unknown_canonical_status_and_missing_run_at_remain_truthfully_blocked()
     adapted,_=adapt_canonical_registry_snapshot(missing)
     result=validate_registry(adapted,now=NOW)
     assert result["status"]=="DEADLINE_REGISTRY_INVALID"
-    assert any("scheduled_at:TIMESTAMP_REQUIRED" in e for e in result["errors"])
+    assert any("ORIGINAL_SCHEDULE_REQUIRED" in e for e in result["errors"])
 
 
 def test_canonical_shape_adapter_never_invents_missing_source_backed_schedule_or_deadline():
