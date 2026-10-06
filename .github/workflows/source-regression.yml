@@ -66,7 +66,12 @@ jobs:
         run: npm run build
 
       - name: Install Python package and test dependencies
-        run: python -m pip install -e '.[test]'
+        run: python -m pip install -e '.[test,official]'
+
+      - name: Verify official PDF parser dependency
+        run: |
+          python -c "import pypdf; assert pypdf.__version__ == '6.19.0'; print('pypdf', pypdf.__version__)"
+          python -m pip check
 
       - name: Run Issue 15 focused candidate integration
         run: python -m pytest -q tests/integration/test_candidate_launcher_integration.py tests/test_research_inlet_single_path_regression.py
