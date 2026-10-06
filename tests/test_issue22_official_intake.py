@@ -12,6 +12,7 @@ from cio_market_lab.engine.daily_research_plan import (
     DailyResearchPlanProducer,
     normalize_reference_quote,
     semantic_reference_quote_digest,
+    semantic_research_digest,
 )
 from cio_market_lab.research.financial_periods import aligned_cash_flow_derivations
 from cio_market_lab.research.official import OfficialResearchProducer
@@ -153,10 +154,12 @@ def test_capture_records_wire_digest_observed_time_and_body_provenance(tmp_path,
     assert rows[0]["document_sha256"]==digest
     assert rows[0]["observed_at"]==NOW.isoformat()
     assert rows[0]["body_provenance"]=="EXTRACTED_FROM_CAPTURED_WIRE_BYTES"
-    assert (p.root/"raw_official"/(digest+".wire")).read_bytes()==body
-    stored=json.loads((p.root/"raw_official"/(digest+".json")).read_text())
+    capture=p.captures_by_url[TSMC_PDF]
+    stored=json.loads(capture.read_text())
     assert stored["sha256_of_wire_bytes"]==digest
+    assert stored["capture_schema"]=="official-document-enriched-v1"
     assert stored["content"]==rows
+    assert capture.with_suffix(".wire").read_bytes()==body
 
 
 def _cash_rows(start,ocf,capex):
@@ -192,3 +195,117 @@ def test_quote_revision_identity_uses_source_observation_not_retrieval_clock():
 
     later=normalize_reference_quote(q6,now=datetime(2026,10,6,13,tzinfo=timezone.utc))
     assert semantic_reference_quote_digest(c6)==semantic_reference_quote_digest(later)
+
+
+
+def test_same_url_same_wire_reuses_canonical_rows_and_stable_semantics(tmp_path, monkeypatch):
+    body=_minimal_text_pdf("2Q 2026 NTD millions operating cash flow 783365")
+    class Response:
+        status_code=200
+        content=body
+        headers={"Content-Type":"application/pdf"}
+        def raise_for_status(self): pass
+    class Reader:
+        def add_evidence(self,row,now=None): return True,"accepted"
+
+    clock=[NOW]
+    p=DailyResearchPlanProducer(
+        root=tmp_path/"research",packet_root=tmp_path/"packets",
+        session_id="TEST_ONLY",workspace_root=str(tmp_path),
+        learning_store=SimpleNamespace(),reader=Reader(),now_fn=lambda:clock[0],
+    )
+    monkeypatch.setattr(p.network,"get",lambda *a,**kw:Response())
+    first=p._capture_official(TSMC_PDF)
+    first_path=p.captures_by_url[TSMC_PDF]
+    clock[0]=datetime(2026,10,6,13,tzinfo=timezone.utc)
+    second=p._capture_official(TSMC_PDF)
+
+    assert second==first
+    assert p.captures_by_url[TSMC_PDF]==first_path
+    assert second[0]["observed_at"]==NOW.isoformat()
+    supplemental=lambda rows: {
+        "symbol":"2330.TW","market":"TW","source_url":"https://openapi.twse.com.tw/test",
+        "published_at":"2026-07-16","verified_facts":["same material fact"],
+        "raw_metadata":{"supplemental_source_rows":[{"source_url":TSMC_PDF,"raw_row":rows[0]}]},
+    }
+    later=json.loads(json.dumps(supplemental(second)))
+    later["raw_metadata"]["supplemental_source_rows"][0]["raw_row"]["observed_at"]="2026-10-06T13:00:00+00:00"
+    assert semantic_research_digest(supplemental(first))==semantic_research_digest(later)
+
+
+def test_material_body_change_changes_capture_and_semantic_digest(tmp_path, monkeypatch):
+    bodies=[
+        _minimal_text_pdf("2Q 2026 NTD millions operating cash flow 783365"),
+        _minimal_text_pdf("2Q 2026 NTD millions operating cash flow 783366"),
+    ]
+    class Response:
+        status_code=200
+        headers={"Content-Type":"application/pdf"}
+        def __init__(self,content): self.content=content
+        def raise_for_status(self): pass
+    class Reader:
+        def add_evidence(self,row,now=None): return True,"accepted"
+
+    p=DailyResearchPlanProducer(
+        root=tmp_path/"research",packet_root=tmp_path/"packets",
+        session_id="TEST_ONLY",workspace_root=str(tmp_path),
+        learning_store=SimpleNamespace(),reader=Reader(),now_fn=lambda:NOW,
+    )
+    monkeypatch.setattr(p.network,"get",lambda *a,**kw:Response(bodies.pop(0)))
+    first=p._capture_official(TSMC_PDF)
+    first_path=p.captures_by_url[TSMC_PDF]
+    second=p._capture_official(TSMC_PDF)
+    second_path=p.captures_by_url[TSMC_PDF]
+    assert first_path!=second_path
+    assert first[0]["document_sha256"]!=second[0]["document_sha256"]
+    def evidence(row):
+        return {"symbol":"2330.TW","market":"TW","source_url":"x","published_at":"2026-07-16",
+                "verified_facts":[row["text"]],"raw_metadata":{"supplemental_source_rows":[{"source_url":TSMC_PDF,"raw_row":row}]}}
+    assert semantic_research_digest(evidence(first[0]))!=semantic_research_digest(evidence(second[0]))
+
+
+def test_same_wire_different_url_has_distinct_capture_identity(tmp_path, monkeypatch):
+    body=_minimal_text_pdf("same official bytes")
+    other="https://investor.tsmc.com/english/quarterly-results/2026/q2-copy.pdf"
+    class Response:
+        status_code=200
+        content=body
+        headers={"Content-Type":"application/pdf"}
+        def raise_for_status(self): pass
+    class Reader:
+        def add_evidence(self,row,now=None): return True,"accepted"
+    p=DailyResearchPlanProducer(
+        root=tmp_path/"research",packet_root=tmp_path/"packets",session_id="TEST_ONLY",
+        workspace_root=str(tmp_path),learning_store=SimpleNamespace(),reader=Reader(),now_fn=lambda:NOW,
+    )
+    monkeypatch.setattr(p.network,"get",lambda *a,**kw:Response())
+    p._capture_official(TSMC_PDF); first=p.captures_by_url[TSMC_PDF]
+    p._capture_official(other); second=p.captures_by_url[other]
+    assert first!=second
+    assert json.loads(first.read_text())["source_url"]==TSMC_PDF
+    assert json.loads(second.read_text())["source_url"]==other
+
+
+def test_legacy_wire_hash_capture_is_not_silently_reused(tmp_path, monkeypatch):
+    body=_minimal_text_pdf("legacy same wire")
+    digest=hashlib.sha256(body).hexdigest()
+    class Response:
+        status_code=200
+        content=body
+        headers={"Content-Type":"application/pdf"}
+        def raise_for_status(self): pass
+    class Reader:
+        def add_evidence(self,row,now=None): return True,"accepted"
+    root=tmp_path/"research"
+    (root/"raw_official").mkdir(parents=True)
+    legacy=root/"raw_official"/(digest+".json")
+    legacy.write_text(json.dumps({"source_url":TSMC_PDF,"sha256_of_wire_bytes":digest,"content":[{"legacy":True}]}))
+    p=DailyResearchPlanProducer(
+        root=root,packet_root=tmp_path/"packets",session_id="TEST_ONLY",workspace_root=str(tmp_path),
+        learning_store=SimpleNamespace(),reader=Reader(),now_fn=lambda:NOW,
+    )
+    monkeypatch.setattr(p.network,"get",lambda *a,**kw:Response())
+    rows=p._capture_official(TSMC_PDF)
+    assert p.captures_by_url[TSMC_PDF]!=legacy
+    assert rows[0].get("legacy") is None
+    assert json.loads(p.captures_by_url[TSMC_PDF].read_text())["capture_schema"]=="official-document-enriched-v1"
