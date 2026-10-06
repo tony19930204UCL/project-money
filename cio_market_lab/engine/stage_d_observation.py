@@ -286,8 +286,8 @@ def apply_verified_quote_edges(observation: dict[str, Any], quote: Any, now: dat
     return result
 
 
-def make_packet_observation_provider(packet_root: Path, max_age_seconds: float = 36 * 3600, *, trusted_manifest: Path | None = None):
-    loader = PersistedResearchPacketLoader(packet_root, max_age_seconds, trusted_manifest=trusted_manifest)
+def make_packet_observation_provider(packet_root: Path, max_age_seconds: float = 36 * 3600, *, trusted_manifest: Path | None = None, allow_fixture: bool = False):
+    loader = PersistedResearchPacketLoader(packet_root, max_age_seconds, trusted_manifest=trusted_manifest, allow_fixture=allow_fixture)
     contexts: dict[str, FrozenDecisionContext] = {}
 
     def provide(*, symbol: str, inputs: dict[str, Any], now: datetime) -> dict[str, Any]:
