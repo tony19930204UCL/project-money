@@ -18,7 +18,16 @@ from cio_market_lab.domain.models import Bar, Market
 from cio_market_lab.engine.autonomous_runner import AutonomousPaperRunner, DurableQuoteSnapshot
 
 
-TEST_NOW = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)\n\n\ndef _freeze_app_clock(app, now=TEST_NOW):\n    app.state.app_state.runner._now_fn = lambda: now\n    return app\n\n\nclass MockMarketAdapter:\n    def __init__(self):
+TEST_NOW = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+
+
+def _freeze_app_clock(app, now=TEST_NOW):
+    app.state.app_state.runner._now_fn = lambda: now
+    return app
+
+
+class MockMarketAdapter:
+    def __init__(self):
         self.last_fetch_mode = "test_mock"
         self.last_error = None
 
