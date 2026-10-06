@@ -1043,7 +1043,7 @@ def test_alias_domain_matrix_present_invalid_schedule_fail_closed_selected_and_s
 
 def test_alias_domain_matrix_present_invalid_scope_and_results_top_level_fail_closed():
     reg=scoped_registry(completed_record("done"),assigned_ids=["done"])
-    invalid=(None,"","   ",17,{"unexpected":"shape"})
+    invalid=(None,"","   ",17,["not-a-scope"])
 
     for bad in invalid:
         raw=_passing_claim_manifest("done")
