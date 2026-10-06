@@ -34,7 +34,7 @@ Unknown status values remain unsupported. `OVERDUE` does not become a synthetic 
 
 The adapter is nonmutating: it deep-copies the source object, preserves canonical originals, reports before/after SHA-256, and never invents a missing run time, source reference, completion timestamp, criterion result, recovery authorization, or live executor.
 
-Canonical alias adaptation is fail-closed. If both sides of an alias pair are present, the adapter must prove semantic equivalence before normalization. Conflicting `id/obligation_id`, `deadline/original_deadline`, `original_criteria/acceptance_criteria`, or `execution_one_shot.run_at` versus `execution_history[0].scheduled_at` are retained in diagnostics and block validation; no preferred alias silently wins. Timestamp aliases may differ textually only when they resolve to the same instant.
+Canonical alias adaptation is fail-closed. If both sides of an alias pair are present, the adapter must prove semantic equivalence before normalization. Conflicting `id/obligation_id`, `deadline/original_deadline`, `deadline_source_ref/original_deadline_source_ref`, `original_criteria/acceptance_criteria`, `criteria_evidence/acceptance_evidence`, or schedule aliases are retained in diagnostics and block validation; no preferred alias silently wins. Complete evidence mappings must agree exactly; a PASS-valued alias cannot override conflicting canonical evidence. Timestamp aliases may differ textually only when they resolve to the same instant.
 
 Acceptance criteria are also count/order preserving. String criteria and mappings with one unambiguous `criterion_id`/`id`/`name` are supported; malformed or ambiguously named entries block adaptation instead of being discarded. Thus a mandatory criterion can never disappear merely because the adapter cannot name it.
 
@@ -69,7 +69,7 @@ At both ordinary execution and authenticated scope boundaries, job metadata is n
 
 The live state must be executable: `ENABLED`, `SCHEDULED`, `ACTIVE`, or `READY`. `DISABLED` is rejected even when canonical scope, presented manifest scope, and live readback all say `DISABLED`.
 
-If a schedule/run_at is present in the canonical scope binding, the live readback must match it exactly.
+If a schedule/run_at is present in the canonical scope binding, the live readback must match it semantically. A binding that itself carries conflicting `scheduled_at` and `run_at` is rejected at every canonical-scope, presented-scope, and live-readback boundary, even when all three copies carry the same contradiction.
 
 ## Existing installed CLI / manifest compatibility boundary
 
@@ -103,7 +103,7 @@ The adapter also accepts sanitized legacy manifest aliases without mutating the 
 - row `obligation_id -> id`;
 - row `result -> acceptance_result` for explicit PASS/FAIL.
 
-Unknown/missing fields remain fail-closed.
+Unknown/missing fields remain fail-closed. Legacy aliases are compatibility inputs, not precedence rules: if both `scope/execution_scope`, `results/obligation_results`, row `id/obligation_id`, or row `result/acceptance_result` are present, they must be provably equivalent or the complete claim is blocked. Both originals are preserved for review and the input object remains unchanged.
 
 ## FULL_MAIN_CIO and scoped claims
 
