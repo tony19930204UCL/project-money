@@ -88,7 +88,8 @@ Its migration command is preview-only:
 python3 custom_scripts/issue18_obligation_compat.py --registry /path/to/sanitized-registry.json migrate-preview --source-refs /path/to/sanitized-source-refs.json
 ```
 
-The namespaced client-claim adapter preserves the installed **invocation shape** for a positional manifest and optional root:
+The namespaced client-claim adapter preserves the installed **invocation shape** for a positional manifest and optional root. The public `evaluate_manifest()` entry point now enforces the same complete nonmutating raw-manifest boundary as the adapter before selecting canonical branches: both `execution_scope/scope` and `obligation_results/results` are domain-checked, raw alias conflicts are collected, dual branches must be semantically equivalent, and only then are legacy aliases normalized for evaluation. Direct callers therefore cannot bypass shadow-tree validation by skipping `adapt_legacy_manifest()`.
+
 
 ```bash
 python3 custom_scripts/issue18_client_claim_compat.py /path/to/manifest.json --root /path/to/sanitized-root
@@ -96,7 +97,7 @@ python3 custom_scripts/issue18_client_claim_compat.py /path/to/manifest.json --r
 
 For the namespaced adapter only, `--registry` can be used instead of `--root`.
 
-The adapter also accepts sanitized legacy manifest aliases without mutating the input:
+The adapter and direct evaluator both accept sanitized legacy manifest aliases without mutating the input:
 
 - top-level `scope -> execution_scope`;
 - top-level `results -> obligation_results`;
