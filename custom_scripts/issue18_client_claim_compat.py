@@ -31,7 +31,49 @@ def _require_scope_field(mapping: Mapping[str,Any], key: str, prefix: str) -> An
     return mapping[key]
 
 
+def _semantic_time(value: Any) -> Any:
+    if not isinstance(value,str):
+        return value
+    try:
+        parsed=datetime.fromisoformat(value.replace("Z","+00:00"))
+    except Exception:
+        return value
+    if parsed.tzinfo is None:
+        return value
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
+def _schedule_alias_conflict(mapping: Mapping[str,Any]) -> bool:
+    return (
+        mapping.get("_canonical_schedule_alias_conflict") is not None
+        or (
+            _present(mapping,"scheduled_at")
+            and _present(mapping,"run_at")
+            and _semantic_time(mapping.get("scheduled_at"))!=_semantic_time(mapping.get("run_at"))
+        )
+    )
+
+
+def _semantic_alias_value(value: Any) -> Any:
+    if isinstance(value,Mapping):
+        out={str(k):_semantic_alias_value(v) for k,v in value.items() if not str(k).startswith("_legacy_alias_conflicts")}
+        if _present(value,"scheduled_at") or _present(value,"run_at"):
+            scheduled=value.get("scheduled_at") if _present(value,"scheduled_at") else value.get("run_at")
+            out.pop("run_at",None)
+            out["scheduled_at"]=_semantic_time(scheduled)
+        return out
+    if isinstance(value,list):
+        return [_semantic_alias_value(v) for v in value]
+    return value
+
+
+def _alias_values_equal(left: Any, right: Any) -> bool:
+    return _semantic_alias_value(left)==_semantic_alias_value(right)
+
+
 def _normalize_binding(binding: Mapping[str,Any]) -> dict[str,Any]:
+    if _schedule_alias_conflict(binding):
+        raise ClaimGateError("SCHEDULE_ALIAS_CONFLICT")
     out=copy.deepcopy(dict(binding))
     if not _present(out,"scheduled_at") and _present(out,"run_at"):
         out["scheduled_at"]=out["run_at"]
@@ -39,6 +81,8 @@ def _normalize_binding(binding: Mapping[str,Any]) -> dict[str,Any]:
 
 
 def _binding_equal(expected: Mapping[str,Any], actual: Mapping[str,Any], *, prefix: str) -> bool:
+    if _schedule_alias_conflict(expected) or _schedule_alias_conflict(actual):
+        raise ClaimGateError(f"{prefix}:SCHEDULE_ALIAS_CONFLICT")
     left=_normalize_binding(expected); right=_normalize_binding(actual)
     for key in ("job_id","run_id","model","provider","route_kind","state"):
         _require_scope_field(left,key,prefix)
@@ -135,10 +179,16 @@ def _evidence_backed_failure(claimed: Mapping[str,Any]) -> bool:
 
 def adapt_legacy_manifest(raw: Mapping[str,Any]) -> tuple[dict[str,Any],dict[str,Any]]:
     """Nonmutating adapter for the installed client's manifest field aliases."""
-    before=copy.deepcopy(raw); out=copy.deepcopy(raw); changed=[]
-    if not isinstance(out.get("execution_scope"),Mapping) and isinstance(out.get("scope"),Mapping):
+    before=copy.deepcopy(raw); out=copy.deepcopy(raw); changed=[]; conflicts=[]
+    if isinstance(out.get("execution_scope"),Mapping) and isinstance(out.get("scope"),Mapping):
+        if not _alias_values_equal(out["execution_scope"],out["scope"]):
+            conflicts.append({"kind":"LEGACY_SCOPE_ALIAS_CONFLICT","execution_scope":copy.deepcopy(out["execution_scope"]),"scope":copy.deepcopy(out["scope"])})
+    elif not isinstance(out.get("execution_scope"),Mapping) and isinstance(out.get("scope"),Mapping):
         out["execution_scope"]=copy.deepcopy(out["scope"]); changed.append("scope->execution_scope")
-    if not isinstance(out.get("obligation_results"),list) and isinstance(out.get("results"),list):
+    if isinstance(out.get("obligation_results"),list) and isinstance(out.get("results"),list):
+        if not _alias_values_equal(out["obligation_results"],out["results"]):
+            conflicts.append({"kind":"LEGACY_RESULTS_ALIAS_CONFLICT","obligation_results":copy.deepcopy(out["obligation_results"]),"results":copy.deepcopy(out["results"])})
+    elif not isinstance(out.get("obligation_results"),list) and isinstance(out.get("results"),list):
         out["obligation_results"]=copy.deepcopy(out["results"]); changed.append("results->obligation_results")
     rows=out.get("obligation_results")
     if isinstance(rows,list):
@@ -146,17 +196,30 @@ def adapt_legacy_manifest(raw: Mapping[str,Any]) -> tuple[dict[str,Any],dict[str
         for raw_row in rows:
             row=copy.deepcopy(raw_row)
             if isinstance(row,dict):
-                if not row.get("id") and row.get("obligation_id"):
+                row_conflicts=[]
+                if _present(row,"id") and _present(row,"obligation_id") and row["id"]!=row["obligation_id"]:
+                    row_conflicts.append({"kind":"LEGACY_RESULT_ID_ALIAS_CONFLICT","id":copy.deepcopy(row["id"]),"obligation_id":copy.deepcopy(row["obligation_id"])})
+                elif not row.get("id") and row.get("obligation_id"):
                     row["id"]=row["obligation_id"]; changed.append("obligation_id->id")
-                if not row.get("acceptance_result") and row.get("result") in {ACCEPTANCE_PASS,ACCEPTANCE_FAIL}:
+                if _present(row,"acceptance_result") and _present(row,"result") and row["result"] in {ACCEPTANCE_PASS,ACCEPTANCE_FAIL} and row["acceptance_result"]!=row["result"]:
+                    row_conflicts.append({"kind":"LEGACY_ACCEPTANCE_RESULT_ALIAS_CONFLICT","acceptance_result":copy.deepcopy(row["acceptance_result"]),"result":copy.deepcopy(row["result"])})
+                elif not row.get("acceptance_result") and row.get("result") in {ACCEPTANCE_PASS,ACCEPTANCE_FAIL}:
                     row["acceptance_result"]=row["result"]; changed.append("result->acceptance_result")
+                if row_conflicts:
+                    row["_legacy_alias_conflicts"]=row_conflicts
+                    conflicts.extend(row_conflicts)
             adapted.append(row)
         out["obligation_results"]=adapted
-    return out,{"mode":"LEGACY_MANIFEST_ADAPTER","input_unchanged":raw==before,"adaptations":sorted(set(changed))}
+    if conflicts:
+        out["_legacy_alias_conflicts"]=copy.deepcopy(conflicts)
+    return out,{"mode":"LEGACY_MANIFEST_ADAPTER","input_unchanged":raw==before,"adaptations":sorted(set(changed)),"conflicts":copy.deepcopy(conflicts)}
 
 
 def evaluate_manifest(registry: Mapping[str,Any], manifest: Mapping[str,Any], *, now: Optional[datetime]=None) -> dict[str,Any]:
     observed=(now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    if manifest.get("_legacy_alias_conflicts"):
+        kinds=",".join(str(x.get("kind")) for x in manifest["_legacy_alias_conflicts"] if isinstance(x,Mapping))
+        return {"status":"CLIENT_EXECUTION_CLAIM_BLOCKED","reason":"LEGACY_MANIFEST_ALIAS_CONFLICT:"+kinds,"completion_claim_allowed":False}
     try:
         required_ids=_validate_scope(registry,manifest)
     except ClaimGateError as exc:
