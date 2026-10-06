@@ -1113,3 +1113,139 @@ def test_alias_domain_matrix_absent_and_valid_equivalent_aliases_remain_compatib
     assert raw==before and report["input_unchanged"] is True
     assert report["conflicts"]==[]
     assert evaluate_manifest(reg,adapted,now=NOW)["status"]=="CLIENT_EXECUTION_CLAIM_PASS"
+
+
+
+def test_result_row_completeness_matrix_blocks_selected_and_shadow_before_normalization():
+    reg=scoped_registry(completed_record("done"),assigned_ids=["done"])
+    invalid_rows=(
+        {},
+        {"acceptance_result":"PASS"},
+        {"acceptance_result":"FAIL"},
+        {"completion_evidence":{"source_ref":"artifact://orphan"}},
+        {"id":"done"},
+        {"obligation_id":"done"},
+        {"id":None,"acceptance_result":"PASS"},
+        {"id":"","acceptance_result":"PASS"},
+        {"id":"   ","acceptance_result":"PASS"},
+    )
+
+    for bad_row in invalid_rows:
+        raw=_passing_claim_manifest("done")
+        raw["obligation_results"].append(deepcopy(bad_row))
+        before=deepcopy(raw)
+        adapted,report=adapt_legacy_manifest(raw)
+        assert raw==before and report["input_unchanged"] is True
+        assert len(adapted["obligation_results"])==len(raw["obligation_results"])
+        assert any(
+            x["kind"] in {"LEGACY_RESULT_ROW_IDENTITY_REQUIRED","LEGACY_RESULT_ROW_OUTCOME_REQUIRED","LEGACY_RESULT_ID_DOMAIN_INVALID"}
+            for x in report["conflicts"]
+        )
+        result=evaluate_manifest(reg,adapted,now=NOW)
+        assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+        assert result["completion_claim_allowed"] is False
+
+        raw=_passing_claim_manifest("done")
+        raw["results"]=deepcopy(raw["obligation_results"])
+        raw["results"].append(deepcopy(bad_row))
+        before=deepcopy(raw)
+        adapted,report=adapt_legacy_manifest(raw)
+        assert raw==before and report["input_unchanged"] is True
+        assert len(adapted["results"])==len(raw["results"])
+        assert any(
+            x["path"].startswith("results[1]")
+            and x["kind"] in {"LEGACY_RESULT_ROW_IDENTITY_REQUIRED","LEGACY_RESULT_ROW_OUTCOME_REQUIRED","LEGACY_RESULT_ID_DOMAIN_INVALID"}
+            for x in report["conflicts"]
+        )
+        result=evaluate_manifest(reg,adapted,now=NOW)
+        assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+        assert result["completion_claim_allowed"] is False
+
+
+def test_direct_evaluator_never_filters_or_drops_invalid_unresolved_or_fail_rows():
+    reg=scoped_registry(completed_record("done"),assigned_ids=["done"])
+    bad_rows=(
+        {},
+        {"acceptance_result":"PASS"},
+        {"acceptance_result":"FAIL","historical_evidence":{"classification":"FAIL","source_ref":"artifact://orphan"}},
+        {"id":"done"},
+        {"obligation_id":"done"},
+        {"id":None,"acceptance_result":"PASS"},
+        {"id":"","acceptance_result":"PASS"},
+        {"id":"other","acceptance_result":"PASS"},
+    )
+
+    for bad_row in bad_rows:
+        manifest=_passing_claim_manifest("done")
+        manifest["obligation_results"].append(deepcopy(bad_row))
+        before=deepcopy(manifest)
+        result=evaluate_manifest(reg,manifest,now=NOW)
+        assert manifest==before
+        assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+        assert result["completion_claim_allowed"] is False
+
+    duplicate=_passing_claim_manifest("done")
+    duplicate["obligation_results"].append(deepcopy(duplicate["obligation_results"][0]))
+    result=evaluate_manifest(reg,duplicate,now=NOW)
+    assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+    assert result["reason"]=="DUPLICATE_MANIFEST_OBLIGATION_ID"
+
+
+def test_direct_evaluator_valid_legacy_only_row_and_valid_fail_row_are_accounted_one_to_one():
+    reg=scoped_registry(completed_record("done"),assigned_ids=["done"])
+
+    legacy=_passing_claim_manifest("done")
+    legacy["obligation_results"]=[{
+        "obligation_id":"done",
+        "status":"COMPLETED",
+        "result":"PASS",
+        "completion_evidence":{"source_ref":"artifact://completion"},
+        "effect_evidence":{"verified":True,"source_ref":"artifact://effect"},
+    }]
+    before=deepcopy(legacy)
+    result=evaluate_manifest(reg,legacy,now=NOW)
+    assert legacy==before
+    assert result["status"]=="CLIENT_EXECUTION_CLAIM_PASS"
+    assert result["completion_claim_allowed"] is True
+    assert result["required_ids"]==["done"]
+    assert [x["id"] for x in result["case_results"]]==["done"]
+
+    active=active_record("a")
+    fail_reg=scoped_registry(active,assigned_ids=["a"])
+    fail_manifest=scoped_manifest(["a"])
+    fail_manifest["obligation_results"]=[{
+        "obligation_id":"a",
+        "status":"ACTIVE",
+        "result":"FAIL",
+        "historical_evidence":{"classification":"VERIFIED_NONCOMPLETION","source_ref":"artifact://failure-a"},
+    }]
+    before=deepcopy(fail_manifest)
+    result=evaluate_manifest(fail_reg,fail_manifest,now=NOW)
+    assert fail_manifest==before
+    assert result["status"]=="CLIENT_EXECUTION_CLAIM_RECORDED_NONCOMPLETION"
+    assert result["completion_claim_allowed"] is False
+    assert result["required_ids"]==["a"]
+    assert [x["id"] for x in result["case_results"]]==["a"]
+    assert result["case_results"][0]["status"]=="FAIL"
+
+
+def test_selected_and_shadow_equal_but_structurally_incomplete_rows_still_block():
+    reg=scoped_registry(completed_record("done"),assigned_ids=["done"])
+    for bad_row in (
+        {},
+        {"acceptance_result":"PASS"},
+        {"id":"done"},
+        {"id":"done","acceptance_result":"BLOCKED"},
+    ):
+        raw=_passing_claim_manifest("done")
+        raw["obligation_results"].append(deepcopy(bad_row))
+        raw["results"]=deepcopy(raw["obligation_results"])
+        before=deepcopy(raw)
+        adapted,report=adapt_legacy_manifest(raw)
+        assert raw==before and report["input_unchanged"] is True
+        assert len(adapted["obligation_results"])==2
+        assert any(x["path"].startswith("obligation_results[1]") for x in report["conflicts"])
+        assert any(x["path"].startswith("results[1]") for x in report["conflicts"])
+        result=evaluate_manifest(reg,adapted,now=NOW)
+        assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+        assert result["completion_claim_allowed"] is False
