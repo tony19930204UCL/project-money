@@ -103,38 +103,78 @@ class OfficialResearchProducer:
         return datetime.fromisoformat(text).replace(tzinfo=timezone.utc)
 
     def _attach_company_disclosures(self, item, gaps):
-        """Attach raw official excerpts with period/units intact; no numeric inference."""
+        """Attach independent official rows without letting one blocked document erase others."""
         symbol=item['symbol']; urls=[]
+        metadata=item.setdefault('raw_metadata',{})
+        supplements=metadata.setdefault('supplemental_source_rows',[])
+        blocked=metadata.setdefault('blocked_official_documents',[])
         if symbol == 'MSFT':
-            fy=str(item.get('raw_metadata',{}).get('fy',''))
-            fp=str(item.get('raw_metadata',{}).get('fp',''))
+            fy=str(metadata.get('fy',''))
+            fp=str(metadata.get('fp',''))
             quarter='4' if fp=='FY' else fp.removeprefix('Q')
             if not re.fullmatch(r'20\d{2}',fy) or quarter not in {'1','2','3','4'}:
                 return
             urls=[f'https://www.microsoft.com/en-us/Investor/earnings/FY-{fy}-Q{quarter}/press-release-webcast']
         elif symbol == '2330.TW':
-            row=item.get('raw_metadata',{}).get('raw_row',{})
+            row=metadata.get('raw_row',{})
             year=str(row.get('年度',''));quarter=str(row.get('季別',''))
             if not re.fullmatch(r'\d{3}',year) or quarter not in {'1','2','3','4'}:
                 return
             urls=[f'https://investor.tsmc.com/english/quarterly-results/{int(year)+1911}/q{quarter}']
-        for url in urls:
+        for landing_url in urls:
             try:
-                rows=self._get(url)
-                if not isinstance(rows,list): raise ValueError('INVALID_DISCLOSURE_ROWS')
-                if symbol=='2330.TW':
-                    link=next((r for r in rows if r.get('document_part')=='link' and r.get('text')=='Financial Statements'),None)
-                    if not link: raise ValueError('OFFICIAL_STATEMENT_LINK_MISSING')
-                    # Keep the exact discovery row as well as the linked report pages.
-                    item['raw_metadata'].setdefault('supplemental_source_rows',[]).append({'source_url':url,'raw_row':link})
-                    url=link['href'];rows=self._get(url)
-                for row in rows:
-                    if row.get('document_part')=='link' or not row.get('text'): continue
-                    item['raw_metadata'].setdefault('supplemental_source_rows',[]).append({'source_url':url,'raw_row':row})
-                    item['verified_facts'].append(f"Official company disclosure [{url}, {row['document_part']}]: {row['text']}")
-                item['limitations'].append('Company report excerpts retain original headers, reporting units, comparisons and annual/cumulative/quarterly flow labels. No annualization or valuation inferred. Extraction is limited to first ten PDF pages and supported HTML tables/paragraphs; unextracted notes remain unknown.')
+                landing_rows=self._get(landing_url)
+                if not isinstance(landing_rows,list): raise ValueError('INVALID_DISCLOSURE_ROWS')
             except Exception as exc:
                 gaps.append({'symbol':symbol,'reason':f'COMPANY_DISCLOSURE_SUPPLEMENT_UNAVAILABLE:{type(exc).__name__}'})
+                continue
+
+            # Preserve every independently verified HTML fact before following a
+            # linked document. A blocked PDF must not erase already verified HTML.
+            for row in landing_rows:
+                if row.get('document_part')=='link' or not row.get('text'):
+                    continue
+                supplements.append({'source_url':landing_url,'raw_row':row})
+                item['verified_facts'].append(
+                    f"Official company disclosure [{landing_url}, {row['document_part']}]: {row['text']}"
+                )
+
+            statement_url=None
+            statement_rows=[]
+            if symbol=='2330.TW':
+                link=next((r for r in landing_rows if r.get('document_part')=='link' and r.get('text')=='Financial Statements'),None)
+                if not link:
+                    blocked.append({'source_url':landing_url,'reason':'OFFICIAL_STATEMENT_LINK_MISSING'})
+                    gaps.append({'symbol':symbol,'reason':'COMPANY_DISCLOSURE_DOCUMENT_BLOCKED:OFFICIAL_STATEMENT_LINK_MISSING'})
+                    continue
+                supplements.append({'source_url':landing_url,'raw_row':link})
+                statement_url=link['href']
+                try:
+                    statement_rows=self._get(statement_url)
+                    if not isinstance(statement_rows,list):
+                        raise ValueError('INVALID_DISCLOSURE_ROWS')
+                except Exception as exc:
+                    reason=str(exc) if str(exc) in {'PDF_PARSER_UNAVAILABLE','OFFICIAL_DOCUMENT_OVERSIZE'} else type(exc).__name__
+                    blocked.append({'source_url':statement_url,'discovered_from':landing_url,'reason':reason})
+                    gaps.append({'symbol':symbol,'reason':f'COMPANY_DISCLOSURE_DOCUMENT_BLOCKED:{reason}'})
+                    continue
+            else:
+                statement_url=landing_url
+                statement_rows=landing_rows
+
+            for row in statement_rows:
+                if row.get('document_part')=='link' or not row.get('text'):
+                    continue
+                supplements.append({'source_url':statement_url,'raw_row':row})
+                item['verified_facts'].append(
+                    f"Official company disclosure [{statement_url}, {row['document_part']}]: {row['text']}"
+                )
+
+            item['limitations'].append(
+                'Company report excerpts retain original headers, reporting units, comparisons and annual/cumulative/quarterly flow labels. '
+                'No annualization or valuation inferred. Extraction is limited to first ten PDF pages and supported HTML tables/paragraphs; '
+                'unextracted notes remain unknown.'
+            )
 
     def acquire(self, symbols: list[str], reader: Any, now: datetime) -> dict[str, Any]:
         """Return verified counts and explicit source gaps; never claim no-news success."""
