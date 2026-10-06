@@ -37,6 +37,46 @@ def _valid_result_alias(value: Any) -> bool:
     return isinstance(value,str) and value in {ACCEPTANCE_PASS,ACCEPTANCE_FAIL}
 
 
+def _result_row_conflicts(row: Any, *, path: str) -> list[dict[str,Any]]:
+    conflicts=[]
+    if not isinstance(row,Mapping):
+        return [{
+            "kind":"LEGACY_RESULT_ROW_DOMAIN_INVALID",
+            "path":path,
+            "value":copy.deepcopy(row),
+        }]
+
+    identity_fields=[field for field in ("id","obligation_id") if _key_present(row,field)]
+    valid_identities=[field for field in identity_fields if _nonempty_string(row.get(field))]
+    if not valid_identities:
+        conflicts.append({
+            "kind":"LEGACY_RESULT_ROW_IDENTITY_REQUIRED",
+            "path":path,
+            "id":copy.deepcopy(row.get("id")) if _key_present(row,"id") else None,
+            "obligation_id":copy.deepcopy(row.get("obligation_id")) if _key_present(row,"obligation_id") else None,
+        })
+
+    outcome_fields=[field for field in ("acceptance_result","result") if _key_present(row,field)]
+    valid_outcomes=[field for field in outcome_fields if _valid_result_alias(row.get(field))]
+    if not valid_outcomes:
+        conflicts.append({
+            "kind":"LEGACY_RESULT_ROW_OUTCOME_REQUIRED",
+            "path":path,
+            "acceptance_result":copy.deepcopy(row.get("acceptance_result")) if _key_present(row,"acceptance_result") else None,
+            "result":copy.deepcopy(row.get("result")) if _key_present(row,"result") else None,
+        })
+    return conflicts
+
+
+def _normalize_result_row_for_evaluation(row: Mapping[str,Any]) -> dict[str,Any]:
+    out=copy.deepcopy(dict(row))
+    if "id" not in out and _nonempty_string(out.get("obligation_id")):
+        out["id"]=out["obligation_id"]
+    if "acceptance_result" not in out and _valid_result_alias(out.get("result")):
+        out["acceptance_result"]=out["result"]
+    return out
+
+
 def _parse_alias_time(value: Any) -> Optional[datetime]:
     if not _nonempty_string(value):
         return None
@@ -297,14 +337,10 @@ def adapt_legacy_manifest(raw: Mapping[str,Any]) -> tuple[dict[str,Any],dict[str
                 conflicts.append({"kind":"LEGACY_RESULTS_DOMAIN_INVALID","path":field,"value":copy.deepcopy(out[field])})
             else:
                 for index,row in enumerate(out[field]):
-                    if not isinstance(row,Mapping):
-                        conflicts.append({
-                            "kind":"LEGACY_RESULT_ROW_DOMAIN_INVALID",
-                            "path":f"{field}[{index}]",
-                            "value":copy.deepcopy(row),
-                        })
-                    else:
-                        conflicts.extend(_raw_alias_tree_conflicts(row,path=f"{field}[{index}]"))
+                    path=f"{field}[{index}]"
+                    conflicts.extend(_result_row_conflicts(row,path=path))
+                    if isinstance(row,Mapping):
+                        conflicts.extend(_raw_alias_tree_conflicts(row,path=path))
 
     if isinstance(out.get("execution_scope"),Mapping) and isinstance(out.get("scope"),Mapping):
         if not _alias_values_equal(out["execution_scope"],out["scope"]):
@@ -356,11 +392,30 @@ def evaluate_manifest(registry: Mapping[str,Any], manifest: Mapping[str,Any], *,
         return {"status":"CLIENT_EXECUTION_CLAIM_BLOCKED","reason":"OBLIGATION_RESULTS_LIST_REQUIRED","completion_claim_allowed":False}
     if not results:
         return {"status":"CLIENT_EXECUTION_CLAIM_BLOCKED","reason":"EMPTY_OBLIGATION_RESULTS_CANNOT_COMPLETE","completion_claim_allowed":False}
-    rows=[r for r in results if isinstance(r,Mapping) and r.get("id")]
-    ids=[str(r.get("id")) for r in rows]
+
+    row_errors=[]
+    rows=[]
+    for index,raw_row in enumerate(results):
+        path=f"obligation_results[{index}]"
+        row_errors.extend(_result_row_conflicts(raw_row,path=path))
+        if isinstance(raw_row,Mapping):
+            row_errors.extend(_raw_alias_tree_conflicts(raw_row,path=path))
+            rows.append(_normalize_result_row_for_evaluation(raw_row))
+    if row_errors:
+        reasons=",".join(f"{x.get('path')}:{x.get('kind')}" for x in row_errors)
+        return {
+            "status":"CLIENT_EXECUTION_CLAIM_BLOCKED",
+            "reason":"INVALID_RESULT_ROWS:"+reasons,
+            "completion_claim_allowed":False,
+            "row_errors":row_errors,
+        }
+
+    ids=[str(r["id"]) for r in rows]
+    if len(rows)!=len(results):
+        return {"status":"CLIENT_EXECUTION_CLAIM_BLOCKED","reason":"RESULT_ROW_COUNT_MISMATCH","completion_claim_allowed":False}
     if len(ids)!=len(set(ids)):
         return {"status":"CLIENT_EXECUTION_CLAIM_BLOCKED","reason":"DUPLICATE_MANIFEST_OBLIGATION_ID","completion_claim_allowed":False}
-    by_id={str(r.get("id")):r for r in rows}
+    by_id={str(r["id"]):r for r in rows}
     missing=[rid for rid in required_ids if rid not in by_id]
     extra=sorted(set(by_id)-set(required_ids))
     if missing:
