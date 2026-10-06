@@ -259,13 +259,18 @@ def run_candidate(
         for decision in decisions:
             inputs = decision.get("inputs") or {}
             frozen = inputs.get("frozen_decision_context")
+            context_id = (
+                frozen.get("context_id") if isinstance(frozen, dict)
+                else inputs.get("frozen_context_id")
+            )
             gate = inputs.get("material_delta_gate")
-            if frozen:
+            if context_id:
                 lineage.append({
                     "symbol": decision.get("symbol"),
-                    "context_id": frozen.get("context_id"),
-                    "research_digest": frozen.get("research_digest"),
+                    "context_id": context_id,
+                    "research_digest": frozen.get("research_digest") if isinstance(frozen, dict) else None,
                     "material_gate": gate,
+                    "daily_plan_review": bool(inputs.get("daily_plan_review")),
                 })
         if not lineage:
             status = "WAITING_FOR_APPROVED_INPUT"
