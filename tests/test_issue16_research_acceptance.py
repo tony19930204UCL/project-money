@@ -479,3 +479,159 @@ def test_receipt_consumer_persists_ack_and_restart_dedup(tmp_path):
 
     no_message={**receipt,"platform_message_id":""}
     assert restarted.consume(_expected(),no_message)["reason"]=="PLATFORM_MESSAGE_ID_MISSING"
+
+
+
+def _discovery_response():
+    return json.dumps({
+        "candidate_sources":["https://www.sec.gov/test"],
+        "discovery_summary":"Bounded public discovery.",
+        "missing_evidence":[],
+    })
+
+
+@pytest.mark.parametrize("mutation,match",[
+    (lambda r: r["runtime_metadata"].pop("auth_verified"), "auth_verified"),
+    (lambda r: r["runtime_metadata"].update({"auth_verified":False}), "auth_verified"),
+    (lambda r: r["runtime_metadata"].pop("is_success_response"), "is_success_response"),
+    (lambda r: r["runtime_metadata"].update({"is_success_response":False}), "is_success_response"),
+    (lambda r: r["runtime_metadata"].pop("is_fixture"), "is_fixture"),
+    (lambda r: r["runtime_metadata"].update({"is_fixture":True}), "is_fixture"),
+    (lambda r: r.pop("returncode"), "RETURNCODE_REQUIRED"),
+    (lambda r: r.update({"returncode":None}), "RETURNCODE_REQUIRED"),
+    (lambda r: r.update({"returncode":False}), "RETURNCODE_REQUIRED"),
+    (lambda r: r.update({"returncode":1}), "RETURNCODE_FAILED"),
+    (lambda r: r.update({"is_fixture":True}), "RUNTIME_UNAVAILABLE"),
+])
+def test_hermes_inference_requires_explicit_authenticated_nonfixture_success_and_actual_returncode(mutation,match):
+    def transport(message,**kwargs):
+        result={
+            "response":_discovery_response(),
+            "returncode":0,
+            "runtime_metadata":{
+                "resolved_provider":"test-local-provider",
+                "resolved_model":"test-local-model-a",
+                "auth_verified":True,
+                "is_success_response":True,
+                "is_fixture":False,
+                "fallback_active":False,
+            },
+        }
+        mutation(result)
+        return result
+
+    engine=HermesLocalInference(
+        InferenceContract(
+            provider="test-local-provider",model="test-local-model-a",
+            session_id="issue16-negative",workspace_root="/workspace",
+            is_free_or_local_authorized=True,purpose="TEST_ONLY negative evidence",
+        ),
+        transport=transport,
+    )
+    with pytest.raises(RuntimeError,match=match):
+        engine.infer("discovery",{"public_evidence":[{"source_url":"https://www.sec.gov/test"}]},DiscoveryOutput)
+
+
+def test_hermes_inference_rejects_contradictory_runtime_metadata_even_with_provider_model_labels():
+    def transport(message,**kwargs):
+        return {
+            "response":_discovery_response(),
+            "returncode":0,
+            "runtime_metadata":{
+                "resolved_provider":"test-local-provider",
+                "resolved_model":"test-local-model-a",
+                "auth_verified":True,
+                "is_success_response":True,
+                "is_fixture":True,
+                "fallback_active":False,
+            },
+        }
+    engine=HermesLocalInference(
+        InferenceContract(
+            provider="test-local-provider",model="test-local-model-a",
+            session_id="issue16-contradiction",workspace_root="/workspace",
+            is_free_or_local_authorized=True,purpose="TEST_ONLY contradictory evidence",
+        ),
+        transport=transport,
+    )
+    with pytest.raises(RuntimeError,match="is_fixture"):
+        engine.infer("discovery",{},DiscoveryOutput)
+
+
+@pytest.mark.parametrize("underwriting_status,expected_action",[
+    ("INCOMPLETE","RESOLVE_UNDERWRITING_MISSING_EVIDENCE"),
+    ("REJECT","UNDERWRITING_REJECTED_RESEARCH_CANDIDATE"),
+])
+def test_underwriting_nonready_status_cannot_be_promoted_by_challenge_pass(underwriting_status,expected_action):
+    stages=inference_map()
+    stages["underwriting"]=StubInference("local:underwriter-a",{
+        "underwriting_status":underwriting_status,
+        "thesis":"Evidence is not acceptable for a completion candidate.",
+        "evidence_used":["official-msft-20261006"],
+        "missing_evidence":["missing-required-evidence"] if underwriting_status=="INCOMPLETE" else [],
+    })
+    stages["challenge"]=StubInference("local:challenge-b",{
+        "verdict":"PASS_PUBLIC_RESEARCH_ONLY",
+        "challenge_summary":"Challenge is positive but cannot override underwriting.",
+        "blockers":[],
+        "next_action":"IGNORED_FOR_NONREADY_UNDERWRITING",
+    })
+    result=PublicOnlyResearchWorkflowAdapter(
+        coordinator=FakeCoordinator(),stage_inference=stages
+    ).run("MSFT",now=NOW)
+    assert result["status"]=="BLOCKED"
+    assert result["underwriting_status"]==underwriting_status
+    assert result["challenge_verdict"]=="PASS_PUBLIC_RESEARCH_ONLY"
+    assert result["exact_next_action"]==expected_action
+    assert result["live_acceptance_claimed"] is False
+
+
+def test_fixture_receipt_rejected_before_identity_or_history_then_real_receipt_can_ack_after_restart(tmp_path):
+    root=tmp_path/"receipts"
+    expected=_expected()
+    fixture={
+        **expected,
+        "transport_status":"ACKNOWLEDGED",
+        "delivered":True,
+        "platform_message_id":"msg-1",
+        "is_fixture":True,
+    }
+
+    first_history=CIOSessionHistory(root,"issue16-fixture-first")
+    fixture_result=DeliveryReceiptConsumer(first_history).consume(expected,fixture)
+    assert fixture_result["status"]=="UNKNOWN"
+    assert fixture_result["reason"]=="FIXTURE_RECEIPT_REJECTED"
+    assert fixture_result["acknowledged"] is False
+    assert "receipt_identity" not in fixture_result
+    assert first_history.history()==[]
+
+    restarted_history=CIOSessionHistory(root,"issue16-fixture-first")
+    assert restarted_history.history()==[]
+    real={**fixture,"is_fixture":False}
+    real_result=DeliveryReceiptConsumer(restarted_history).consume(expected,real)
+    assert real_result["status"]=="ACKNOWLEDGED"
+    assert real_result["acknowledged"] is True
+    assert real_result["receipt_identity"]
+    rows=CIOSessionHistory(root,"issue16-fixture-first").history()
+    assert len(rows)==1
+    assert rows[0]["kind"]=="PLATFORM_ACK"
+    assert rows[0]["receipt_identity"]==real_result["receipt_identity"]
+
+
+def test_fixture_receipt_never_turns_existing_unknown_state_into_ack(tmp_path):
+    root=tmp_path/"receipts"
+    expected=_expected()
+    consumer=DeliveryReceiptConsumer(CIOSessionHistory(root,"issue16-fixture-unknown"))
+    missing=consumer.consume(expected,None)
+    assert missing["status"]=="UNKNOWN"
+    fixture={
+        **expected,
+        "transport_status":"ACKNOWLEDGED",
+        "delivered":True,
+        "platform_message_id":"fixture-msg",
+        "is_fixture":True,
+    }
+    rejected=consumer.consume(expected,fixture)
+    assert rejected["status"]=="UNKNOWN"
+    assert rejected["reason"]=="FIXTURE_RECEIPT_REJECTED"
+    assert CIOSessionHistory(root,"issue16-fixture-unknown").history()==[]
