@@ -476,7 +476,7 @@ def create_app(
         # Resume enabled, unexpired paper experiments after a service restart.
         # This never connects to a broker; it only restores local simulation threads.
         now = datetime.now(timezone.utc)
-        if not state.is_read_only:
+        if not state.is_read_only and not state.fixture_mode:
             for settings in state.paper_orders.list_experiments():
                 if not settings.enabled:
                     continue
