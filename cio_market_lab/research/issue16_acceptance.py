@@ -69,8 +69,11 @@ def _reject_private_content(value: Any, path: str="payload") -> None:
     elif isinstance(value,(list,tuple)):
         for i,child in enumerate(value):
             _reject_private_content(child,f"{path}[{i}]")
-    elif isinstance(value,str) and _SECRET_OR_LOCAL_VALUE.search(value):
-        raise ValueError(f"PUBLIC_OUTBOUND_VALUE_REJECTED:{path}")
+    elif isinstance(value,str):
+        lowered=value.lower()
+        local_path_markers=("/home/","/users/","/var/","/private/","/mnt/","/tmp/","\\\\users\\\\","\\\\windows\\\\","\\\\temp\\\\")
+        if _SECRET_OR_LOCAL_VALUE.search(value) or any(marker in lowered for marker in local_path_markers):
+            raise ValueError(f"PUBLIC_OUTBOUND_VALUE_REJECTED:{path}")
 
 
 def seal_public_evidence(record: Mapping[str,Any], *, now: datetime) -> dict[str,Any]:
