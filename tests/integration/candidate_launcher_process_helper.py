@@ -2,6 +2,11 @@ from __future__ import annotations
 import argparse, json
 from datetime import datetime
 from pathlib import Path
+import sys
+
+ROOT=Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0,str(ROOT))
 
 from cio_market_lab.engine.candidate_launcher import AUTHENTICATED_PAPER, run_candidate
 from cio_market_lab.engine.paper_orders import PaperExperimentSettings
