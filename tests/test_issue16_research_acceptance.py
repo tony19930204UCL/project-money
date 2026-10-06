@@ -46,7 +46,7 @@ class FakeCoordinator:
             "record":{
                 "research_id":"official-msft-20261006",
                 "symbol":symbol,
-                "source_url":"https://www.sec.gov/Archives/edgar/data/789019/test",
+                "source_url":"https://data.sec.gov/submissions/CIK0000789019.json",
                 "source_tier":"official_filing",
                 "observed_at":now.isoformat(),
                 "published_at":"2026-10-06",
@@ -54,6 +54,7 @@ class FakeCoordinator:
                 "verified_facts":["Official public filing fact"],
                 "research_scope":"historical_company_facts_not_catalyst",
                 "limitations":["public source only"],
+                "raw_metadata":{"source":"official SEC EDGAR Company Facts"},
                 **(self.private_payload or {}),
             },
         }
@@ -94,7 +95,7 @@ class StubInference:
 def inference_map():
     return {
         "discovery":StubInference("local:discovery-a",{
-            "candidate_sources":["https://www.sec.gov/Archives/edgar/data/789019/test"],
+            "candidate_sources":["https://data.sec.gov/submissions/CIK0000789019.json"],
             "discovery_summary":"Official filing discovered.",
             "missing_evidence":[],
         }),
