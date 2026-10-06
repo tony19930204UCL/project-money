@@ -50,8 +50,8 @@ class PublicWorkerEvidence(BaseModel):
 
 
 _SECRET_OR_LOCAL_VALUE=re.compile(
-    r"(?i)(api[_ -]?key|bearer\s+[A-Za-z0-9._-]+|password|secret|token|"
-    r"(?:^|[\s"'=])/(?:home|users|var|private|mnt|tmp)/|[A-Za-z]:\\(?:Users|Windows|Temp)\\)"
+    r'(?i)(api[_ -]?key|bearer\\s+[A-Za-z0-9._-]+|password|secret|token|'
+    r'(?:^|[\\s"\'=])/(?:home|users|var|private|mnt|tmp)/|[A-Za-z]:\\\\(?:Users|Windows|Temp)\\\\)'
 )
 _FORBIDDEN_FIELD_PARTS=(
     "account","credential","secret","token","api_key","apikey","holding","order",
