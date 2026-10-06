@@ -650,3 +650,108 @@ def test_canonical_shape_adapter_never_invents_missing_source_backed_schedule_or
     result=validate_registry(adapted,now=NOW)
     assert result["status"]=="DEADLINE_REGISTRY_INVALID"
     assert any("original_deadline_source_ref:REQUIRED" in e for e in result["errors"])
+
+
+def test_canonical_criterion_adapter_blocks_unidentifiable_required_criterion_without_silent_drop():
+    raw=canonical_shape_fixture("COMPLETED")
+    row=raw["obligations"][0]
+    row["acceptance_criteria"]=[
+        "criterion-a",
+        {"description":"mandatory second criterion without usable ID"},
+    ]
+    row["acceptance_evidence"]=criterion(True)
+    row["completed_at"]="2026-10-06T10:30:00+00:00"
+    row["completed_at_source_ref"]="artifact://completion"
+    row["completed_at_source_kind"]="ORIGINAL_ARTIFACT"
+    row["acceptance_result"]="PASS"
+
+    adapted,report=adapt_canonical_registry_snapshot(raw)
+    assert report["input_unchanged"] is True
+    adapted_row=adapted["obligations"][0]
+    assert adapted_row["acceptance_criteria"]==raw["obligations"][0]["acceptance_criteria"]
+    assert "_criterion_adapter_error" in adapted_row
+    result=validate_registry(adapted,now=NOW)
+    assert result["status"]=="DEADLINE_REGISTRY_INVALID"
+    assert any("USABLE_CRITERION_ID_REQUIRED" in e for e in result["errors"])
+    assert acceptance_check(adapted,"canonical-active",now=NOW)["status"]=="OBLIGATION_ACCEPTANCE_BLOCKED"
+
+
+def test_canonical_criterion_adapter_accepts_valid_mixed_criteria_without_changing_order_or_count():
+    raw=canonical_shape_fixture("COMPLETED")
+    row=raw["obligations"][0]
+    row["acceptance_criteria"]=[
+        "criterion-a",
+        {"criterion_id":"criterion-b","description":"second criterion"},
+    ]
+    row["acceptance_evidence"]={
+        "criterion-a":{"satisfied":True,"source_ref":"artifact://criterion-a"},
+        "criterion-b":{"satisfied":True,"source_ref":"artifact://criterion-b"},
+    }
+    row["completed_at"]="2026-10-06T10:30:00+00:00"
+    row["completed_at_source_ref"]="artifact://completion"
+    row["completed_at_source_kind"]="ORIGINAL_ARTIFACT"
+    row["acceptance_result"]="PASS"
+
+    adapted,_=adapt_canonical_registry_snapshot(raw)
+    adapted_row=adapted["obligations"][0]
+    assert adapted_row["original_criteria"]==["criterion-a","criterion-b"]
+    assert len(adapted_row["original_criteria"])==len(row["acceptance_criteria"])
+    assert validate_registry(adapted,now=NOW)["status"]=="DEADLINE_REGISTRY_VALID"
+    assert acceptance_check(adapted,"canonical-active",now=NOW)["status"]=="OBLIGATION_ACCEPTANCE_PASS"
+
+
+def test_conflicting_canonical_alias_pairs_fail_closed_and_preserve_both_original_values():
+    mutations=[
+        ("identity",lambda row: row.update({"id":"done","obligation_id":"different-canonical-id"}),"CANONICAL_IDENTITY_ALIAS_CONFLICT"),
+        ("deadline",lambda row: row.update({"original_deadline":"2026-10-11T09:00:00+00:00"}),"CANONICAL_DEADLINE_ALIAS_CONFLICT"),
+        ("criteria",lambda row: row.update({"original_criteria":["criterion-b"]}),"CANONICAL_CRITERIA_ALIAS_CONFLICT"),
+    ]
+    for _name,mutate,reason in mutations:
+        raw=canonical_shape_fixture("COMPLETED")
+        row=raw["obligations"][0]
+        row["completed_at"]="2026-10-06T10:30:00+00:00"
+        row["completed_at_source_ref"]="artifact://completion"
+        row["completed_at_source_kind"]="ORIGINAL_ARTIFACT"
+        row["acceptance_result"]="PASS"
+        row["acceptance_evidence"]=criterion(True)
+        mutate(row)
+        before=deepcopy(raw)
+        adapted,_=adapt_canonical_registry_snapshot(raw)
+        assert raw==before
+        adapted_row=adapted["obligations"][0]
+        assert adapted_row["_canonical_alias_conflicts"]
+        assert adapted_row["_canonical_alias_conflicts"][0]["kind"]==reason
+        result=validate_registry(adapted,now=NOW)
+        assert result["status"]=="DEADLINE_REGISTRY_INVALID"
+        assert any(reason in e for e in result["errors"])
+        lookup=str(adapted_row.get("id") or adapted_row.get("obligation_id"))
+        assert acceptance_check(adapted,lookup,now=NOW)["status"]=="OBLIGATION_ACCEPTANCE_BLOCKED"
+
+
+def test_conflicting_schedule_run_at_alias_fails_closed_but_semantically_equal_time_aliases_pass():
+    raw=canonical_shape_fixture("REGISTERED")
+    row=raw["obligations"][0]
+    row["execution_history"]=[{
+        "kind":"ORIGINAL_SCHEDULE",
+        "scheduled_at":"2026-10-09T10:00:00+00:00",
+        "source_ref":"artifact://explicit-history",
+    }]
+    adapted,_=adapt_canonical_registry_snapshot(raw)
+    assert adapted["obligations"][0]["_canonical_alias_conflicts"][0]["kind"]=="CANONICAL_SCHEDULE_ALIAS_CONFLICT"
+    blocked=validate_registry(adapted,now=NOW)
+    assert blocked["status"]=="DEADLINE_REGISTRY_INVALID"
+    assert any("CANONICAL_SCHEDULE_ALIAS_CONFLICT" in e for e in blocked["errors"])
+
+    equivalent=canonical_shape_fixture("REGISTERED")
+    eqrow=equivalent["obligations"][0]
+    eqrow["id"]="canonical-active"
+    eqrow["original_deadline"]="2026-10-10T11:00:00+02:00"
+    eqrow["original_criteria"]=["criterion-a"]
+    eqrow["execution_history"]=[{
+        "kind":"ORIGINAL_SCHEDULE",
+        "scheduled_at":"2026-10-09T11:00:00+02:00",
+        "source_ref":"artifact://explicit-history",
+    }]
+    adapted,_=adapt_canonical_registry_snapshot(equivalent)
+    assert not adapted["obligations"][0].get("_canonical_alias_conflicts")
+    assert validate_registry(adapted,now=NOW)["status"]=="DEADLINE_REGISTRY_VALID"
