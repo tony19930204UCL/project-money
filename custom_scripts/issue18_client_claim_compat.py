@@ -102,14 +102,20 @@ def _raw_alias_tree_conflicts(value: Any, *, path: str) -> list[dict[str,Any]]:
             })
         has_acceptance=_present(value,"acceptance_result")
         has_result=_present(value,"result")
-        if has_acceptance and value.get("acceptance_result") not in {ACCEPTANCE_PASS,ACCEPTANCE_FAIL}:
+        if has_acceptance and not (
+            isinstance(value.get("acceptance_result"),str)
+            and value.get("acceptance_result") in {ACCEPTANCE_PASS,ACCEPTANCE_FAIL}
+        ):
             conflicts.append({
                 "kind":"LEGACY_ACCEPTANCE_RESULT_DOMAIN_INVALID",
                 "path":path,
                 "field":"acceptance_result",
                 "value":copy.deepcopy(value.get("acceptance_result")),
             })
-        if has_result and value.get("result") not in {ACCEPTANCE_PASS,ACCEPTANCE_FAIL}:
+        if has_result and not (
+            isinstance(value.get("result"),str)
+            and value.get("result") in {ACCEPTANCE_PASS,ACCEPTANCE_FAIL}
+        ):
             conflicts.append({
                 "kind":"LEGACY_ACCEPTANCE_RESULT_DOMAIN_INVALID",
                 "path":path,
