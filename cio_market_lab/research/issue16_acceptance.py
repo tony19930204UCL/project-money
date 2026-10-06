@@ -207,6 +207,9 @@ class PublicOnlyResearchWorkflowAdapter:
             record=part.get("record") if isinstance(part,Mapping) else None
             if not isinstance(record,Mapping):
                 continue
+            # Inspect the original adapter record before projection so secret/private
+            # extras cannot be silently dropped and then transported.
+            _reject_private_content(record,f"source_record.{name}")
             # Existing source adapters may expose richer records. Only the canonical
             # sanitized public evidence projection is allowed to leave this boundary.
             candidate={
