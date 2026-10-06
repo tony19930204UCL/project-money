@@ -112,7 +112,9 @@ A completion claim requires an authenticated canonical scope, exact assigned IDs
 - `FULL_MAIN_CIO` includes all obligations represented by its canonical full-owner scope, including terminal outcomes.
 - zero assigned obligations cannot pass;
 - empty results cannot pass;
-- duplicate or unassigned result IDs are blocked;
+- every submitted result row is authoritative input and must identify exactly one case through a valid `id` or legacy `obligation_id`, and must carry an explicit valid `acceptance_result` or legacy `result`; unidentified, identity-only, outcome-only, malformed, unresolved, or otherwise incomplete rows are never filtered or ignored;
+- selected and shadow result lists are validated row-for-row before alias normalization, and direct evaluator calls repeat the same row-completeness checks so callers cannot bypass them by skipping the adapter;
+- result rows map 1:1 to submitted cases: duplicate or unassigned result IDs are blocked, and no supplied FAIL/unresolved row may disappear from accounting;
 - terminal FAIL/CLOSED/CANCELLED outcomes cannot become PASS;
 - PASS requires canonical named acceptance plus completion and verified effect evidence;
 - source-backed FAIL evidence can be recorded only as noncompletion.
