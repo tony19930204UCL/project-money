@@ -61,6 +61,18 @@ def _semantic_alias_value(value: Any) -> Any:
             scheduled=value.get("scheduled_at") if _present(value,"scheduled_at") else value.get("run_at")
             out.pop("run_at",None)
             out["scheduled_at"]=_semantic_time(scheduled)
+        if _present(value,"id") or _present(value,"obligation_id"):
+            identity=value.get("id") if _present(value,"id") else value.get("obligation_id")
+            if _present(value,"id") and _present(value,"obligation_id") and value.get("id")!=value.get("obligation_id"):
+                return out
+            out.pop("obligation_id",None)
+            out["id"]=identity
+        if _present(value,"acceptance_result") or _present(value,"result"):
+            result=value.get("acceptance_result") if _present(value,"acceptance_result") else value.get("result")
+            if _present(value,"acceptance_result") and _present(value,"result") and value.get("acceptance_result")!=value.get("result"):
+                return out
+            out.pop("result",None)
+            out["acceptance_result"]=result
         return out
     if isinstance(value,list):
         return [_semantic_alias_value(v) for v in value]
