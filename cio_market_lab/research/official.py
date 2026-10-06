@@ -159,8 +159,10 @@ class OfficialResearchProducer:
                     gaps.append({'symbol':symbol,'reason':f'COMPANY_DISCLOSURE_DOCUMENT_BLOCKED:{reason}'})
                     continue
             else:
+                # Non-TSMC disclosures are already represented by the preserved
+                # landing-page HTML rows above; do not append them a second time.
                 statement_url=landing_url
-                statement_rows=landing_rows
+                statement_rows=[]
 
             for row in statement_rows:
                 if row.get('document_part')=='link' or not row.get('text'):
