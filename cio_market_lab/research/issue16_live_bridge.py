@@ -422,6 +422,8 @@ class LocalPositionReceiptBridge:
                 allow_fixture=self.allow_fixture_quotes,
             )
             monitor_row = dict(evaluated["results"][0])
+            if monitor_row.get("classification") == "UNKNOWN" and "stale" in str(monitor_row.get("reason", "")).lower():
+                monitor_row["classification"] = "STALE"
             contract_identity = _stable_hash(
                 {
                     "contract_id": contract.contract_id,
@@ -440,14 +442,31 @@ class LocalPositionReceiptBridge:
                 expected = dict(contract.expected_receipt)
                 receipt = self.receipt_provider(expected)
                 delivery = self.receipt_consumer.consume(expected, receipt)
+                pending_identity = self._pending_identity(contract, monitor_row)
                 if delivery.get("acknowledged") is not True:
-                    pending_identity = self._pending_identity(contract, monitor_row)
                     self._persist_pending_once(pending_identity, contract)
                     delivery = {
                         **delivery,
                         "pending_receipt": True,
                         "pending_identity": pending_identity,
                     }
+                else:
+                    pending_rows = [
+                        row for row in self.history.history()
+                        if row.get("kind") == "MONITOR_PENDING_RECEIPT"
+                        and row.get("pending_identity") == pending_identity
+                    ]
+                    resolved_rows = [
+                        row for row in self.history.history()
+                        if row.get("kind") == "MONITOR_PENDING_RESOLVED"
+                        and row.get("pending_identity") == pending_identity
+                    ]
+                    if pending_rows and not resolved_rows:
+                        self.history.append({
+                            "kind": "MONITOR_PENDING_RESOLVED",
+                            "pending_identity": pending_identity,
+                            "receipt_identity": delivery.get("receipt_identity"),
+                        })
 
             results.append(
                 {
@@ -461,10 +480,17 @@ class LocalPositionReceiptBridge:
                 }
             )
 
+        rows = self.history.history()
+        resolved = {
+            row.get("pending_identity")
+            for row in rows
+            if row.get("kind") == "MONITOR_PENDING_RESOLVED"
+        }
         pending = [
             row
-            for row in self.history.history()
+            for row in rows
             if row.get("kind") == "MONITOR_PENDING_RECEIPT"
+            and row.get("pending_identity") not in resolved
         ]
         return {
             "status": "EVALUATED",
