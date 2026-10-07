@@ -1315,7 +1315,11 @@ def test_original_run_case_unavailable_fetch_is_blocked_and_invocation_evidence_
     )
     assert second["status"] == "BLOCKED"
     assert "HOST_FETCH_PUBLIC_DOCUMENT_UNAVAILABLE" in second["reason"]
-    assert second["callback_evidence"] == []
+    assert len(second["callback_evidence"]) == 1
+    assert second["callback_evidence"][0]["stage"] == "fetch"
+    assert second["callback_evidence"][0]["status"] == "BLOCKED"
+    assert "PUBLIC_SOURCE_OFFLINE" in second["callback_evidence"][0]["reason"]
+    assert second["callback_evidence"][0]["provenance"][0]["extraction_succeeded"] is False
 
 
 def test_original_run_case_private_public_document_is_rejected_before_model_transport():
