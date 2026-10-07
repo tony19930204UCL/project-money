@@ -93,7 +93,9 @@ def research(args: argparse.Namespace) -> int:
         "live_acceptance_claimed": False,
     }
     print(json.dumps(result, sort_keys=True, default=str))
-    return 0 if result.get("status") == "COMPLETED_PUBLIC_RESEARCH_CANDIDATE" else 4
+    # Preserve the original host terminal. Only READY_FOR_CIO is a successful
+    # candidate CLI invocation; this remains source/synthetic evidence only.
+    return 0 if result.get("status") == "READY_FOR_CIO" else 4
 
 
 def monitor(args: argparse.Namespace) -> int:

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import json
 
 import cio_market_lab.research.issue16_live_bridge as live_bridge
+from custom_scripts import issue16_bridge_candidate as candidate_cli
 
 from cio_market_lab.engine.cio_session import CIOSessionHistory
 from cio_market_lab.research.issue16_acceptance import HermesLocalInference, InferenceContract
@@ -748,7 +749,7 @@ def _validate_original_stage_result(stage, result, seed_urls):
 
 def _validate_original_terminal_result(result, seed_urls):
     assert isinstance(result, dict), "terminal result must be dict"
-    assert result.get("status") in {"PASS", "BLOCK", "INCOMPLETE"}
+    assert result.get("status") in {"READY_FOR_CIO", "BLOCK", "INCOMPLETE", "FAILED"}
     assert isinstance(result.get("reason"), str) and result["reason"].strip()
     assert isinstance(result.get("source_urls"), list)
     assert set(result["source_urls"]) <= set(seed_urls)
@@ -824,7 +825,7 @@ def _faithful_original_run_case(
         terminal_status = "INCOMPLETE"
         terminal_reason = "original stage chain incomplete"
     else:
-        terminal_status = "PASS"
+        terminal_status = "READY_FOR_CIO"
         terminal_reason = "original stage chain passed"
 
     return _validate_original_terminal_result(
@@ -869,7 +870,7 @@ def test_original_run_case_faithful_contract_executes_all_five_stages():
         reader=_public_document_reader,
     )
 
-    assert result["status"] == "PASS"
+    assert result["status"] == "READY_FOR_CIO"
     assert result["live_acceptance_claimed"] is False
     assert [row["stage"] for row in result["callback_evidence"]] == [
         "fetch", "discovery", "commercial", "underwriting", "challenge"
@@ -1068,6 +1069,105 @@ def test_original_run_case_challenge_block_maps_terminal_to_block_and_preserves_
     assert seen["challenge"]["objections"] == objections
     assert result["callback_evidence"][-1]["model_identity"] == "local-provider:challenger-b"
     assert result["callback_evidence"][-1]["challenge_model_distinct"] is True
+
+
+def _run_candidate_cli(monkeypatch, capsys, *, routes, entrypoint):
+    monkeypatch.setattr(candidate_cli, "_routes", lambda path: routes)
+    monkeypatch.setattr(candidate_cli, "_load_entrypoint", lambda spec: entrypoint)
+    monkeypatch.setattr(
+        OriginalResearchCallbackBridge,
+        "_default_public_text_reader",
+        staticmethod(_public_document_reader),
+    )
+    exit_code = candidate_cli.main([
+        "research",
+        "--symbol", "MSFT",
+        "--case-id", "case-host-contract",
+        "--seed-url", SEED_URL,
+        "--directory", "/sanitized/candidate-dir",
+        "--routes", "/sanitized/routes.json",
+        "--entrypoint", "synthetic_original:run_case",
+        "--max-attempts", "2",
+        "--now", NOW.isoformat(),
+    ])
+    output = json.loads(capsys.readouterr().out.strip())
+    return exit_code, output
+
+
+def test_candidate_cli_ready_for_cio_exits_zero_and_preserves_host_output(monkeypatch, capsys):
+    exit_code, output = _run_candidate_cli(
+        monkeypatch,
+        capsys,
+        routes=_host_routes(),
+        entrypoint=_faithful_original_run_case,
+    )
+    assert exit_code == 0
+    assert output["status"] == "READY_FOR_CIO"
+    assert output["reason"] == "original stage chain passed"
+    assert output["source_urls"] == [SEED_URL]
+    assert output["live_acceptance_claimed"] is False
+    assert output["candidate_cli"] is True
+    assert output["host_entrypoint_spec"] == "synthetic_original:run_case"
+    assert [row["stage"] for row in output["callback_evidence"]] == [
+        "fetch", "discovery", "commercial", "underwriting", "challenge"
+    ]
+
+
+def test_candidate_cli_block_terminal_is_nonzero_and_preserved(monkeypatch, capsys):
+    exit_code, output = _run_candidate_cli(
+        monkeypatch,
+        capsys,
+        routes=_host_routes(
+            challenge_status="BLOCK",
+            challenge_objections=["Synthetic objection blocks candidate."],
+        ),
+        entrypoint=_faithful_original_run_case,
+    )
+    assert exit_code != 0
+    assert output["status"] == "BLOCK"
+    assert output["reason"] == "independent challenge blocks the candidate"
+    assert output["live_acceptance_claimed"] is False
+
+
+def test_candidate_cli_incomplete_terminal_is_nonzero_and_preserved(monkeypatch, capsys):
+    exit_code, output = _run_candidate_cli(
+        monkeypatch,
+        capsys,
+        routes=_host_routes(missing_underwriting=True),
+        entrypoint=_faithful_original_run_case,
+    )
+    assert exit_code != 0
+    assert output["status"] == "INCOMPLETE"
+    assert output["reason"] == "original stage chain incomplete"
+    assert output["live_acceptance_claimed"] is False
+
+
+def test_candidate_cli_failed_terminal_is_nonzero_and_preserved(monkeypatch, capsys):
+    def failed_after_full_contract(*args, **kwargs):
+        completed = _faithful_original_run_case(*args, **kwargs)
+        assert completed["status"] == "READY_FOR_CIO"
+        return _validate_original_terminal_result(
+            {
+                "status": "FAILED",
+                "reason": "synthetic terminal failure after full contract traversal",
+                "source_urls": completed["source_urls"],
+            },
+            completed["source_urls"],
+        )
+
+    exit_code, output = _run_candidate_cli(
+        monkeypatch,
+        capsys,
+        routes=_host_routes(),
+        entrypoint=failed_after_full_contract,
+    )
+    assert exit_code != 0
+    assert output["status"] == "FAILED"
+    assert output["reason"] == "synthetic terminal failure after full contract traversal"
+    assert output["live_acceptance_claimed"] is False
+    assert [row["stage"] for row in output["callback_evidence"]] == [
+        "fetch", "discovery", "commercial", "underwriting", "challenge"
+    ]
 
 
 def test_original_run_case_unavailable_fetch_is_blocked_and_invocation_evidence_resets():
