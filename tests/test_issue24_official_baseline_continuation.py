@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cio_market_lab.engine.daily_research_plan import DailyResearchPlanProducer
+from cio_market_lab.engine.daily_research_plan import DailyPlanJudgment, DailyResearchPlanProducer
 from cio_market_lab.research.official import (
     OfficialResearchProducer,
     SEC_TICKERS_URL,
@@ -292,3 +292,174 @@ def test_historical_scope_missing_official_source_provenance_remains_rejected():
     assert ok is False
     assert sanitized is None
     assert reason=="REJECTED_HISTORICAL_SCOPE_PROVENANCE"
+
+
+
+def _base_plan(**overrides):
+    plan={
+        "thesis":"Official evidence supports only a bounded PAPER research judgment.",
+        "valuation_scenarios":{"bear":{"value":90},"base":{"value":100},"bull":{"value":110}},
+        "catalysts":[],
+        "buy_zone":None,
+        "invalidation":"Fundamental invalidation remains prose and is not an execution alias.",
+        "invalidation_condition":None,
+        "exposure_ceiling":0,
+        "stance":"WAIT",
+        "missing_evidence":["valuation support"],
+        "review_trigger":"Review after the next official source update.",
+    }
+    plan.update(overrides)
+    return plan
+
+
+def test_daily_plan_schema_exposes_typed_zone_and_price_invalidation_contracts():
+    schema=DailyPlanJudgment.model_json_schema()
+    defs=schema["$defs"]
+    zone=defs["BuyZone"]
+    assert zone["additionalProperties"] is False
+    assert set(zone["required"])=={"low","high"}
+    assert zone["properties"]["low"]["type"]=="number"
+    assert "Lower positive finite price bound" in zone["properties"]["low"]["description"]
+    condition=defs["PriceInvalidationCondition"]
+    assert condition["additionalProperties"] is False
+    assert set(condition["required"])=={"field","operator","threshold"}
+    assert condition["properties"]["field"]["const"]=="last_price"
+    assert set(condition["properties"]["operator"]["enum"])=={"lt","lte","gt","gte"}
+    assert condition["properties"]["threshold"]["type"]=="number"
+    assert "Fundamental invalidation prose" in schema["properties"]["invalidation"]["description"]
+
+
+@pytest.mark.parametrize("bad_plan",[
+    _base_plan(
+        buy_zone={"lower_ntd":2500,"upper_ntd":2600},
+        invalidation_condition=None,
+    ),
+    _base_plan(
+        buy_zone=None,
+        invalidation_condition={"rule":"fundamental deterioration","action":"invalidate thesis"},
+    ),
+])
+def test_observed_host_failure_shapes_are_rejected_without_alias_guessing(bad_plan):
+    with pytest.raises(Exception):
+        DailyPlanJudgment.model_validate(bad_plan)
+
+
+def test_valid_wait_null_and_valid_scout_contracts_preserve_risk_rules():
+    wait=DailyPlanJudgment.model_validate(_base_plan())
+    assert wait.stance=="WAIT"
+    assert wait.buy_zone is None and wait.invalidation_condition is None
+    assert wait.exposure_ceiling==0
+
+    scout=DailyPlanJudgment.model_validate(_base_plan(
+        stance="SCOUT_REVIEW",
+        buy_zone={"low":95.0,"high":100.0},
+        invalidation_condition={"field":"last_price","operator":"lt","threshold":88.0},
+        exposure_ceiling=0.01,
+        missing_evidence=[],
+    ))
+    assert scout.buy_zone.low==95.0
+    assert scout.buy_zone.high==100.0
+    assert scout.invalidation_condition.field=="last_price"
+
+    with pytest.raises(Exception):
+        DailyPlanJudgment.model_validate(_base_plan(exposure_ceiling=0.01))
+
+
+def _retry_producer(tmp_path,monkeypatch,responses):
+    evidence={
+        "symbol":"2330.TW","source_url":TW_FINANCIAL_URL,"source_tier":"official_exchange",
+        "published_at":"2026-10-07T00:00:00+08:00","verified_facts":["TWSE current quarterly fact"],
+        "limitations":[],"research_scope":"historical_company_facts_not_catalyst",
+        "research_id":"TEST_ONLY_RETRY",
+        "raw_metadata":{
+            "source":"official TWSE financial statements",
+            "raw_row":{"公司代號":"2330","出表日期":"1151007","年度":"115","季別":"2","營業收入":"1000"},
+            "supplemental_source_rows":[],"blocked_official_documents":[],"historical_disclosure_gaps":[],
+        },
+        "observed_at":NOW.isoformat(),"verification_status":"verified","is_fixture":False,
+    }
+    class Reader:
+        def add_evidence(self,row,now=None): return True,"OK"
+    p=DailyResearchPlanProducer(
+        root=tmp_path/"research",packet_root=tmp_path/"packets",session_id="TEST_ONLY_RETRY",
+        workspace_root=str(tmp_path),
+        learning_store=SimpleNamespace(
+            retrieve_context_lessons=lambda **kwargs:[],
+            retrieve_past_outcomes=lambda **kwargs:[],
+        ),
+        reader=Reader(),now_fn=lambda:NOW,
+    )
+    calls={"acquire":0,"chat":[]}
+    def acquire(symbols,collector,now):
+        calls["acquire"]+=1
+        collector.add_evidence(evidence,now=now)
+        return {"accepted":[evidence["research_id"]],"gaps":[]}
+    monkeypatch.setattr(p.official,"acquire",acquire)
+    raw={"source_url":TW_FINANCIAL_URL,"tls_verified":True,"is_fixture":False,"content":[evidence["raw_metadata"]["raw_row"]]}
+    path=p.root/"raw_official"/"TEST_ONLY_PRIMARY.json"
+    path.write_text(json.dumps(raw,ensure_ascii=False))
+    p.captures_by_url[TW_FINANCIAL_URL]=path
+
+    queue=list(responses)
+    def fake_chat(message,*args,**kwargs):
+        calls["chat"].append(message)
+        response=queue.pop(0)
+        return {"response":json.dumps(response),"runtime_metadata":{"TEST_ONLY":True},
+                "session_id":"TEST_ONLY_AUTH","returncode":0,"is_fixture":False,"failed":False,"error":None}
+    monkeypatch.setattr("cio_market_lab.integrations.hermes_chat.run_hermes_cli_chat",fake_chat)
+    monkeypatch.setattr(
+        "cio_market_lab.integrations.runtime_evidence.RuntimeEvidenceAdapter.verify_runtime_evidence",
+        lambda self,**kwargs:SimpleNamespace(is_fixture=False,auth_verified=True,is_success_response=True),
+    )
+    return p,calls
+
+
+def test_schema_validation_failure_gets_one_bounded_retry_on_same_verified_input(tmp_path,monkeypatch):
+    invalid=_base_plan(
+        buy_zone={"lower_ntd":2500,"upper_ntd":2600},
+        invalidation_condition={"rule":"fundamental deterioration"},
+    )
+    valid=_base_plan()
+    p,calls=_retry_producer(tmp_path,monkeypatch,[invalid,valid])
+
+    result=p.refresh(
+        "2330.TW",now=NOW,
+        reference_quote={"symbol":"2330.TW","price":2585,"source":"TWSE_OPENAPI_DAILY","source_date":"2026-10-06"},
+    )
+    assert result["status"]=="AUTHENTICATED_RESEARCH_ONLY_PLAN"
+    assert calls["acquire"]==1
+    assert len(calls["chat"])==2
+    exact1=calls["chat"][0].split("\nExact input:\n",1)[1]
+    exact2=calls["chat"][1].split("\nExact input:\n",1)[1].split("\nSchema correction only.",1)[0]
+    assert exact1==exact2
+    receipts=list((p.root/"authenticated_model_receipts").glob("*"))
+    assert any("attempt-1-validation-failed" in x.name for x in receipts)
+    assert any("retry-success" in x.name for x in receipts)
+
+
+def test_schema_retry_exhaustion_fails_closed_without_plan_or_packet(tmp_path,monkeypatch):
+    bad_zone=_base_plan(
+        buy_zone={"lower_ntd":2500,"upper_ntd":2600},
+        invalidation_condition=None,
+    )
+    bad_condition=_base_plan(
+        buy_zone={"low":2500,"high":2600},
+        invalidation_condition={"rule":"fundamental deterioration","threshold":"n/a"},
+        exposure_ceiling=0.01,
+        stance="SCOUT_REVIEW",
+        missing_evidence=[],
+    )
+    p,calls=_retry_producer(tmp_path,monkeypatch,[bad_zone,bad_condition])
+
+    result=p.refresh(
+        "2330.TW",now=NOW,
+        reference_quote={"symbol":"2330.TW","price":2585,"source":"TWSE_OPENAPI_DAILY","source_date":"2026-10-06"},
+    )
+    assert result["status"]=="BLOCKED_MODEL_SCHEMA_RETRY_EXHAUSTED"
+    assert result["attempts"]==2
+    assert calls["acquire"]==1
+    assert len(calls["chat"])==2
+    assert not (p.packet_root/"2330.TW.json").exists()
+    assert not (p.root/"authenticated_plans").exists()
+    failures=list((p.root/"authenticated_model_receipts").glob("*validation-failed.json"))
+    assert len(failures)==2
