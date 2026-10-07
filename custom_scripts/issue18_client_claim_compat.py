@@ -255,6 +255,16 @@ def _canonical_scope(registry: Mapping[str,Any], scope_id: str) -> Mapping[str,A
     return scope
 
 
+def _binding_identity(binding: Mapping[str,Any]) -> dict[str,Any]:
+    normalized=_normalize_binding(binding)
+    identity={}
+    for key in ("job_id","run_id","model","provider","route_kind","state"):
+        identity[key]=_require_scope_field(normalized,key,"scope_identity.executor_binding")
+    if _present(normalized,"scheduled_at"):
+        identity["scheduled_at"]=_semantic_time(normalized["scheduled_at"])
+    return identity
+
+
 def _scope_identity(scope: Mapping[str,Any]) -> dict[str,Any]:
     binding=scope.get("executor_binding")
     if not isinstance(binding,Mapping):
@@ -263,14 +273,14 @@ def _scope_identity(scope: Mapping[str,Any]) -> dict[str,Any]:
     owner=_require_scope_field(scope,"owner","execution_scope")
     auth=_require_scope_field(scope,"authorization_source","execution_scope")
     assigned=scope.get("assigned_ids")
-    if not isinstance(assigned,list) or not assigned or not all(_nonempty_string(x) for x in assigned):
+    if not isinstance(assigned,list) or not all(_nonempty_string(x) for x in assigned):
         raise ClaimGateError("EXECUTION_SCOPE_ASSIGNED_IDS_REQUIRED")
     identity={
         "mode":mode,
         "owner":owner,
         "authorization_source":auth,
         "assigned_ids":sorted(str(x) for x in assigned),
-        "executor_binding":_normalize_binding(binding),
+        "executor_binding":_binding_identity(binding),
     }
     transfer=scope.get("merged_criteria_transfer")
     if mode=="SCOPED_RECOVERY":
@@ -347,8 +357,8 @@ def _validate_scope(registry: Mapping[str,Any], manifest: Mapping[str,Any]) -> l
     auth=_require_scope_field(scope,"authorization_source","execution_scope")
     if canonical.get("authorization_source")!=auth:
         raise ClaimGateError("EXECUTION_SCOPE_AUTHORIZATION_MISMATCH")
-    _validate_scope_authentication(registry,canonical,scope)
     _validate_scope_binding(registry,canonical,scope,str(mode))
+    _validate_scope_authentication(registry,canonical,scope)
 
     expected=sorted(str(x) for x in (canonical.get("assigned_ids") or []))
     provided=sorted(str(x) for x in (scope.get("assigned_ids") or []))
