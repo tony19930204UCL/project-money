@@ -11,7 +11,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Optional
+from typing import Any, Callable, Iterable, Literal, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -145,6 +145,74 @@ class InferenceContract(BaseModel):
     purpose: str=Field(min_length=1)
 
 
+
+
+class StageRouteContract(BaseModel):
+    """Explicit bounded primary/fallback route contract for one research stage."""
+    model_config=ConfigDict(extra="forbid")
+    stage: Literal["discovery","commercial","underwriting","challenge"]
+    primary: InferenceContract
+    fallback: list[InferenceContract]=Field(default_factory=list, max_length=2)
+
+    def ordered(self) -> list[InferenceContract]:
+        routes=[self.primary,*self.fallback]
+        if not all(route.is_free_or_local_authorized for route in routes):
+            raise RuntimeError("INFERENCE_ROUTE_NOT_FREE_OR_LOCAL_AUTHORIZED")
+        identities=[(route.provider,route.model) for route in routes]
+        if len(set(identities))!=len(identities):
+            raise RuntimeError("INFERENCE_ROUTE_DUPLICATE_PROVIDER_MODEL")
+        return routes
+
+
+class AuthorizedStageInference:
+    """Bounded free/local route selector over the existing Hermes transport.
+
+    Every attempted route still passes HermesLocalInference's affirmative
+    authenticated/non-fixture/returncode verification. Failed routes are
+    retained for audit and never converted into success.
+    """
+    def __init__(
+        self,
+        route: StageRouteContract,
+        *,
+        transport: Callable[...,dict[str,Any]]=run_hermes_cli_chat,
+        timeout_seconds: int=180,
+    ):
+        self.route=route
+        self.transport=transport
+        self.timeout_seconds=timeout_seconds
+        self.last_route_attempts:list[dict[str,Any]]=[]
+
+    def infer(self,stage:str,payload:Mapping[str,Any],schema:type[BaseModel])->tuple[str,dict[str,Any]]:
+        if stage!=self.route.stage:
+            raise RuntimeError("INFERENCE_STAGE_ROUTE_MISMATCH")
+        self.last_route_attempts=[]
+        last_error:Optional[Exception]=None
+        for index,contract in enumerate(self.route.ordered()):
+            try:
+                identity,output=HermesLocalInference(
+                    contract,transport=self.transport,timeout_seconds=self.timeout_seconds
+                ).infer(stage,payload,schema)
+                self.last_route_attempts.append({
+                    "route":"PRIMARY" if index==0 else f"FALLBACK_{index}",
+                    "provider":contract.provider,"model":contract.model,
+                    "status":"AUTHENTICATED_NONFIXTURE_SUCCESS",
+                    "model_identity":identity,
+                })
+                return identity,output
+            except (RuntimeError,ValidationError,ValueError) as exc:
+                last_error=exc
+                self.last_route_attempts.append({
+                    "route":"PRIMARY" if index==0 else f"FALLBACK_{index}",
+                    "provider":contract.provider,"model":contract.model,
+                    "status":"BLOCKED",
+                    "reason":f"{type(exc).__name__}:{exc}",
+                })
+        raise RuntimeError(
+            "ALL_AUTHORIZED_INFERENCE_ROUTES_BLOCKED:"
+            + (f"{type(last_error).__name__}:{last_error}" if last_error else "NO_ROUTE")
+        )
+
 class HermesLocalInference:
     """Thin adapter over the repository's actual Hermes CLI + runtime verifier."""
 
@@ -264,12 +332,16 @@ class PublicOnlyResearchWorkflowAdapter:
             # Validate a second time at the final outbound boundary.
             validated=STAGE_SCHEMAS[stage].model_validate(output).model_dump(mode="json")
             _reject_private_content(validated)
-            return {
+            row={
                 "stage":stage,"status":"COMPLETED","schema_valid":True,
                 "observed_at":_utc(now).isoformat(),"model_identity":model_identity,
                 "input_sha256":_stable_hash(payload),"output_sha256":_stable_hash(validated),
                 "output":validated,
             }
+            route_attempts=getattr(engine,"last_route_attempts",None)
+            if isinstance(route_attempts,list):
+                row["route_attempts"]=json.loads(json.dumps(route_attempts))
+            return row
         except (ValidationError,ValueError,RuntimeError) as exc:
             return {
                 "stage":stage,"status":"BLOCKED","schema_valid":False,
@@ -339,6 +411,137 @@ class PublicOnlyResearchWorkflowAdapter:
     def _blocked(symbol:str,attempts:list[dict[str,Any]],action:str)->dict[str,Any]:
         return {"status":"BLOCKED","symbol":symbol,"attempts":attempts,"owner":"MAIN_CIO",
                 "exact_next_action":action,"live_acceptance_claimed":False}
+
+
+
+# ---------------- original research-engine callback bridge ----------------
+
+class OriginalResearchEngineCallbackBridge:
+    """Wire the portable public-only adapter into the original engine callback seam.
+
+    The host keeps ownership of the original engine. This bridge supplies only
+    its live fetch/generate/challenge callbacks and a deterministic verdict
+    reducer. It does not create a second research engine.
+    """
+    GENERATE_STAGES=("discovery","commercial","underwriting")
+
+    def __init__(
+        self,
+        coordinator: Optional[FreeSourceCoordinator]=None,
+        *,
+        stage_inference: Mapping[str,Any],
+        max_serialized_bytes: int=250_000,
+    ):
+        self.workflow=PublicOnlyResearchWorkflowAdapter(
+            coordinator=coordinator,
+            stage_inference=stage_inference,
+            max_serialized_bytes=max_serialized_bytes,
+        )
+
+    def fetch(self, *, symbol:str, now:datetime, reader:Any=None)->dict[str,Any]:
+        observed=_utc(now)
+        try:
+            bundle=self.workflow.coordinator.refresh_symbol(symbol,observed,reader=reader)
+            raw=json.dumps(bundle,default=str,ensure_ascii=False).encode()
+            if len(raw)>self.workflow.max_serialized_bytes:
+                raise ValueError("PUBLIC_RESEARCH_BUNDLE_OVERSIZE")
+            records=self.workflow._records(bundle,observed)
+        except Exception as exc:
+            raise RuntimeError(f"FETCH_CALLBACK_BLOCKED:{type(exc).__name__}:{exc}") from exc
+        official=any(r["source_tier"] in {"official_filing","regulatory_filing","official_exchange"} for r in records)
+        if not records:
+            raise RuntimeError("FETCH_CALLBACK_BLOCKED:NO_PUBLIC_RECORDS")
+        if not official:
+            raise RuntimeError("FETCH_CALLBACK_BLOCKED:NO_GENUINE_OFFICIAL_SOURCE")
+        payload={
+            "symbol":symbol,
+            "public_evidence":records,
+            "gaps":list(bundle.get("gaps") or []),
+            "observed_at":observed.isoformat(),
+            "provenance":[{
+                "source_url":row["source_url"],
+                "observed_at":row["observed_at"],
+                "content_sha256":_stable_hash(row),
+            } for row in records],
+        }
+        _reject_private_content(payload)
+        return payload
+
+    def generate(self, *, stage:str, payload:Mapping[str,Any], now:datetime)->dict[str,Any]:
+        if stage not in self.GENERATE_STAGES:
+            raise RuntimeError("ORIGINAL_ENGINE_GENERATE_STAGE_UNSUPPORTED")
+        row=self.workflow._run_stage(stage,payload,_utc(now))
+        if row.get("status")!="COMPLETED":
+            raise RuntimeError(f"{stage.upper()}_CALLBACK_BLOCKED:{row.get('reason','UNKNOWN')}")
+        return row
+
+    def challenge(self, *, payload:Mapping[str,Any], now:datetime)->dict[str,Any]:
+        row=self.workflow._run_stage("challenge",payload,_utc(now))
+        if row.get("status")!="COMPLETED":
+            raise RuntimeError(f"CHALLENGE_CALLBACK_BLOCKED:{row.get('reason','UNKNOWN')}")
+        return row
+
+    @staticmethod
+    def verdict(*, underwriting:Mapping[str,Any], challenge:Mapping[str,Any])->dict[str,Any]:
+        uw_identity=str(underwriting.get("model_identity") or "")
+        challenge_identity=str(challenge.get("model_identity") or "")
+        if not uw_identity or not challenge_identity:
+            return {"status":"BLOCKED","reason":"VERIFIED_MODEL_IDENTITY_REQUIRED"}
+        if uw_identity==challenge_identity:
+            return {"status":"BLOCKED","reason":"HETEROGENEOUS_CHALLENGE_MODEL_REQUIRED"}
+        uw_output=underwriting.get("output")
+        ch_output=challenge.get("output")
+        try:
+            uw=UnderwritingOutput.model_validate(uw_output)
+            ch=ChallengeOutput.model_validate(ch_output)
+        except ValidationError as exc:
+            return {"status":"BLOCKED","reason":f"STAGE_OUTPUT_SCHEMA_INVALID:{exc}"}
+        if uw.underwriting_status=="INCOMPLETE":
+            return {"status":"BLOCKED","underwriting_status":"INCOMPLETE",
+                    "challenge_verdict":ch.verdict,"reason":"UNDERWRITING_INCOMPLETE"}
+        if uw.underwriting_status=="REJECT":
+            return {"status":"BLOCKED","underwriting_status":"REJECT",
+                    "challenge_verdict":ch.verdict,"reason":"UNDERWRITING_REJECT"}
+        if ch.verdict!="PASS_PUBLIC_RESEARCH_ONLY":
+            return {"status":"BLOCKED","underwriting_status":uw.underwriting_status,
+                    "challenge_verdict":ch.verdict,"reason":"CHALLENGE_DID_NOT_PASS"}
+        return {
+            "status":"COMPLETED_PUBLIC_RESEARCH_CANDIDATE",
+            "underwriting_status":uw.underwriting_status,
+            "challenge_verdict":ch.verdict,
+            "challenge_model_distinct":True,
+            "live_acceptance_claimed":False,
+        }
+
+    def callbacks(self)->dict[str,Callable[...,Any]]:
+        return {
+            "fetch":self.fetch,
+            "generate":self.generate,
+            "challenge":self.challenge,
+            "verdict":self.verdict,
+        }
+
+    def run_original_entrypoint(
+        self,
+        entrypoint:Callable[...,Any],
+        *,
+        symbol:str,
+        now:datetime,
+        reader:Any=None,
+    )->Any:
+        if not callable(entrypoint):
+            return {
+                "status":"BLOCKED",
+                "owner":"MAIN_CIO",
+                "exact_next_action":"SUPPLY_ORIGINAL_RESEARCH_ENGINE_ENTRYPOINT",
+                "live_acceptance_claimed":False,
+            }
+        return entrypoint(
+            symbol=symbol,
+            now=_utc(now),
+            reader=reader,
+            **self.callbacks(),
+        )
 
 
 # ---------------- role bindings: validate actual caller-supplied existing contracts ----------------
@@ -413,6 +616,9 @@ class ReceiptAwarePositionConsumer:
             stable_identity=_stable_hash({
                 "symbol":symbol,
                 "session_id":observation.get("session_id"),
+                "condition_id":observation.get("condition_id"),
+                "condition_version":observation.get("condition_version"),
+                "observation_identity":observation.get("observation_identity"),
                 "official_material_ids":observation.get("official_material_ids") or [],
                 "buy_zone":observation.get("buy_zone"),
                 "invalidation_condition":observation.get("invalidation_condition"),
@@ -472,6 +678,139 @@ class ReceiptAwarePositionConsumer:
 
 
 # ---------------- durable receipt consumer over existing CIOSessionHistory ----------------
+
+
+class LocalPositionReceiptBridge:
+    """Join caller-supplied local monitor contracts to existing trigger + receipt consumers.
+
+    Private holdings remain caller-local. Only sanitized trigger classifications
+    and receipt linkage outcomes leave this bridge. Pending replay uses the same
+    CIOSessionHistory as DeliveryReceiptConsumer; no second ACK store exists.
+    """
+    def __init__(
+        self,
+        position_consumer: ReceiptAwarePositionConsumer,
+        receipt_consumer: "DeliveryReceiptConsumer",
+    ):
+        self.position_consumer=position_consumer
+        self.receipt_consumer=receipt_consumer
+        self.history=receipt_consumer.history
+
+    @staticmethod
+    def _contract_observation(contract:Mapping[str,Any])->tuple[str,dict[str,Any]]:
+        contract_id=str(contract.get("contract_id") or "").strip()
+        condition_id=str(contract.get("condition_id") or "").strip()
+        condition_version=str(contract.get("condition_version") or "").strip()
+        observation=contract.get("observation")
+        if not contract_id or not condition_id or not condition_version or not isinstance(observation,Mapping):
+            raise ValueError("LOCAL_MONITOR_CONTRACT_INCOMPLETE")
+        symbol=str(observation.get("symbol") or contract.get("symbol") or "").strip().upper()
+        if not symbol:
+            raise ValueError("LOCAL_MONITOR_SYMBOL_REQUIRED")
+        semantic={
+            "contract_id":contract_id,
+            "condition_id":condition_id,
+            "condition_version":condition_version,
+            "symbol":symbol,
+            "session_id":observation.get("session_id"),
+            "official_material_ids":observation.get("official_material_ids") or [],
+            "buy_zone":observation.get("buy_zone"),
+            "invalidation_condition":observation.get("invalidation_condition"),
+            "research_only":observation.get("research_only",False),
+        }
+        obs={
+            **dict(observation),
+            "symbol":symbol,
+            "condition_id":condition_id,
+            "condition_version":condition_version,
+            "observation_identity":_stable_hash(semantic),
+        }
+        return contract_id,obs
+
+    def evaluate_contracts(
+        self,
+        contracts:Iterable[Mapping[str,Any]],
+        quotes:Mapping[str,Any],
+        *,
+        now:datetime,
+        max_age_seconds:float=300,
+    )->dict[str,Any]:
+        rows=[]
+        vti=False
+        for contract in contracts:
+            try:
+                contract_id,observation=self._contract_observation(contract)
+            except ValueError as exc:
+                rows.append({"classification":"UNKNOWN","triggered":None,"reason":str(exc)})
+                continue
+            symbol=observation["symbol"]
+            vti=vti or symbol=="VTI"
+            evaluated=self.position_consumer.evaluate(
+                {symbol:observation},quotes,now=now,max_age_seconds=max_age_seconds,allow_fixture=False
+            )["results"][0]
+            rows.append({
+                "contract_id":contract_id,
+                "symbol":symbol,
+                "condition_id":observation["condition_id"],
+                "condition_version":observation["condition_version"],
+                "observation_identity":observation["observation_identity"],
+                "stable_identity":evaluated["stable_identity"],
+                "classification":evaluated["classification"],
+                "triggered":evaluated["triggered"],
+                **({"reason":evaluated["reason"]} if evaluated.get("reason") else {}),
+                **({"quote_edge_status":evaluated["quote_edge_status"]} if evaluated.get("quote_edge_status") else {}),
+            })
+        return {
+            "status":"EVALUATED",
+            "vti_contract_covered":vti,
+            "results":rows,
+            "private_positions_exported":False,
+        }
+
+    @staticmethod
+    def _expected_linkage_hash(expected:Mapping[str,Any])->str:
+        missing=[k for k in DeliveryReceiptConsumer.REQUIRED_LINKS if not expected.get(k)]
+        if missing:
+            raise ValueError("PENDING_DELIVERY_LINKAGE_REQUIRED:"+",".join(sorted(missing)))
+        return _stable_hash({k:expected.get(k) for k in DeliveryReceiptConsumer.REQUIRED_LINKS})
+
+    def record_pending(self, *, contract_id:str, expected:Mapping[str,Any], observation_identity:str)->dict[str,Any]:
+        linkage_hash=self._expected_linkage_hash(expected)
+        prior=self.pending_replay()
+        if any(row.get("linkage_hash")==linkage_hash for row in prior):
+            return {"status":"PENDING_DUPLICATE","linkage_hash":linkage_hash}
+        self.history.append({
+            "kind":"PENDING_DELIVERY",
+            "contract_id":contract_id,
+            "observation_identity":observation_identity,
+            "linkage_hash":linkage_hash,
+            "expected":{k:expected.get(k) for k in DeliveryReceiptConsumer.REQUIRED_LINKS},
+        })
+        return {"status":"PENDING_RECORDED","linkage_hash":linkage_hash}
+
+    def consume_receipt(self, expected:Mapping[str,Any], receipt:Optional[Mapping[str,Any]])->dict[str,Any]:
+        return self.receipt_consumer.consume(expected,receipt)
+
+    def pending_replay(self)->list[dict[str,Any]]:
+        rows=self.history.history()
+        acknowledged={
+            _stable_hash({k:(row.get("linked") or {}).get(k) for k in DeliveryReceiptConsumer.REQUIRED_LINKS})
+            for row in rows if row.get("kind")=="PLATFORM_ACK" and isinstance(row.get("linked"),Mapping)
+        }
+        pending={}
+        for row in rows:
+            if row.get("kind")!="PENDING_DELIVERY":
+                continue
+            linkage_hash=row.get("linkage_hash")
+            if linkage_hash and linkage_hash not in acknowledged:
+                pending[linkage_hash]={
+                    "contract_id":row.get("contract_id"),
+                    "observation_identity":row.get("observation_identity"),
+                    "linkage_hash":linkage_hash,
+                    "expected":row.get("expected"),
+                }
+        return list(pending.values())
+
 
 class DeliveryReceiptConsumer:
     REQUIRED_LINKS=("execution_hash","body_hash","job_id","platform","target","thread_id")
