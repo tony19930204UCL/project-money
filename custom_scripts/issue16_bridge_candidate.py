@@ -63,11 +63,25 @@ def _routes(path: Path) -> dict[str, StageRoute]:
             raise ValueError(f"route config missing stage: {stage}")
         primary = value.get("primary")
         fallback = value.get("fallback")
+        primary_model_family = value.get("primary_model_family")
+        fallback_model_family = value.get("fallback_model_family")
         if not isinstance(primary, dict):
             raise ValueError(f"primary route missing for stage: {stage}")
+        if not isinstance(primary_model_family, str) or not primary_model_family.strip():
+            raise ValueError(f"primary_model_family missing for stage: {stage}")
+        if isinstance(fallback, dict) and (
+            not isinstance(fallback_model_family, str) or not fallback_model_family.strip()
+        ):
+            raise ValueError(f"fallback_model_family missing for stage: {stage}")
         routes[stage] = StageRoute(
             primary=_engine(primary),
+            primary_model_family=primary_model_family.strip(),
             fallback=_engine(fallback) if isinstance(fallback, dict) else None,
+            fallback_model_family=(
+                fallback_model_family.strip()
+                if isinstance(fallback_model_family, str) and fallback_model_family.strip()
+                else None
+            ),
         )
     return routes
 
