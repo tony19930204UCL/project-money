@@ -621,7 +621,11 @@ class OriginalResearchCallbackBridge:
         return {
             "status": "BLOCKED",
             "stage": stage,
-            "reason": "ALL_AUTHORIZED_INFERENCE_ROUTES_BLOCKED",
+            "reason": (
+                str(attempts[-1].get("reason"))
+                if attempts and attempts[-1].get("reason")
+                else "ALL_AUTHORIZED_INFERENCE_ROUTES_BLOCKED"
+            ),
             "attempts": attempts,
             "observed_at": _utc(now).isoformat(),
         }
