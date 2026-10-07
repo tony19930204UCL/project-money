@@ -8,14 +8,18 @@ import pytest
 
 from cio_market_lab.engine.cio_session import CIOSessionHistory
 from cio_market_lab.research.issue16_acceptance import (
+    AuthorizedStageInference,
     ChallengeOutput,
     CommercialOutput,
     DeliveryReceiptConsumer,
     DiscoveryOutput,
     HermesLocalInference,
     InferenceContract,
+    LocalPositionReceiptBridge,
+    OriginalResearchEngineCallbackBridge,
     PublicOnlyResearchWorkflowAdapter,
     ReceiptAwarePositionConsumer,
+    StageRouteContract,
     UnderwritingOutput,
     original_role_acceptance,
     seal_public_evidence,
@@ -635,3 +639,321 @@ def test_fixture_receipt_never_turns_existing_unknown_state_into_ack(tmp_path):
     assert rejected["status"]=="UNKNOWN"
     assert rejected["reason"]=="FIXTURE_RECEIPT_REJECTED"
     assert CIOSessionHistory(root,"issue16-fixture-unknown").history()==[]
+
+
+
+def _runtime_transport_for(outputs_by_model, *, blocked_models=()):
+    calls=[]
+    def transport(message,**kwargs):
+        model=kwargs["model"]
+        calls.append((message,dict(kwargs)))
+        if model in blocked_models:
+            return {
+                "response":"",
+                "returncode":1,
+                "failed":True,
+                "error":"TEST_ONLY blocked route",
+                "runtime_metadata":{
+                    "resolved_provider":kwargs["provider"],
+                    "resolved_model":model,
+                    "auth_verified":True,
+                    "is_success_response":False,
+                    "is_fixture":False,
+                },
+            }
+        payload=outputs_by_model[model]
+        return {
+            "response":json.dumps(payload),
+            "returncode":0,
+            "runtime_metadata":{
+                "resolved_provider":kwargs["provider"],
+                "resolved_model":model,
+                "auth_verified":True,
+                "is_success_response":True,
+                "is_fixture":False,
+                "fallback_active":False,
+            },
+        }
+    return transport,calls
+
+
+def _route(stage, model, *, fallback_model=None):
+    def contract(m):
+        return InferenceContract(
+            provider="test-local-provider",model=m,
+            session_id=f"issue16-{stage}-{m}",workspace_root="/workspace",
+            is_free_or_local_authorized=True,purpose=f"TEST_ONLY {stage}",
+        )
+    return StageRouteContract(
+        stage=stage,
+        primary=contract(model),
+        fallback=[contract(fallback_model)] if fallback_model else [],
+    )
+
+
+def test_authorized_stage_inference_retains_blocked_primary_and_authenticated_fallback_identity():
+    outputs={
+        "discovery-fallback":{
+            "candidate_sources":["https://www.sec.gov/test"],
+            "discovery_summary":"Authenticated local fallback.",
+            "missing_evidence":[],
+        },
+    }
+    transport,calls=_runtime_transport_for(outputs,blocked_models=("discovery-primary",))
+    engine=AuthorizedStageInference(
+        _route("discovery","discovery-primary",fallback_model="discovery-fallback"),
+        transport=transport,
+    )
+    identity,out=engine.infer("discovery",{"public_evidence":[{"source_url":"https://www.sec.gov/test"}]},DiscoveryOutput)
+    assert identity=="test-local-provider:discovery-fallback"
+    assert out["discovery_summary"]=="Authenticated local fallback."
+    assert [x["status"] for x in engine.last_route_attempts]==[
+        "BLOCKED","AUTHENTICATED_NONFIXTURE_SUCCESS"
+    ]
+    assert [x["model"] for x in engine.last_route_attempts]==[
+        "discovery-primary","discovery-fallback"
+    ]
+    assert len(calls)==2
+
+    with pytest.raises(RuntimeError,match="STAGE_ROUTE_MISMATCH"):
+        engine.infer("commercial",{},CommercialOutput)
+
+    unauthorized=_route("discovery","discovery-fallback")
+    unauthorized.primary.is_free_or_local_authorized=False
+    with pytest.raises(RuntimeError,match="NOT_FREE_OR_LOCAL_AUTHORIZED"):
+        AuthorizedStageInference(unauthorized,transport=transport).infer(
+            "discovery",{},DiscoveryOutput
+        )
+
+
+def test_original_engine_entrypoint_bridge_runs_real_callback_shape_without_second_engine():
+    outputs={
+        "discovery-model":{
+            "candidate_sources":["https://data.sec.gov/submissions/CIK0000789019.json"],
+            "discovery_summary":"Official source discovered.",
+            "missing_evidence":[],
+        },
+        "commercial-model":{
+            "commercial_summary":"Commercial evidence reviewed.",
+            "evidence_used":["official-msft-20261006"],
+            "missing_evidence":[],
+        },
+        "underwriting-model":{
+            "underwriting_status":"PUBLIC_EVIDENCE_READY",
+            "thesis":"Public evidence supports research-only review.",
+            "evidence_used":["official-msft-20261006"],
+            "missing_evidence":[],
+        },
+        "challenge-model":{
+            "verdict":"PASS_PUBLIC_RESEARCH_ONLY",
+            "challenge_summary":"Independent verified model challenge passed.",
+            "blockers":[],
+            "next_action":"MAIN_CIO_REVIEW",
+        },
+    }
+    transport,calls=_runtime_transport_for(outputs)
+    stage_inference={
+        stage:AuthorizedStageInference(_route(stage,model),transport=transport)
+        for stage,model in (
+            ("discovery","discovery-model"),
+            ("commercial","commercial-model"),
+            ("underwriting","underwriting-model"),
+            ("challenge","challenge-model"),
+        )
+    }
+    bridge=OriginalResearchEngineCallbackBridge(
+        coordinator=FakeCoordinator(),stage_inference=stage_inference
+    )
+
+    def original_entrypoint(*,symbol,now,reader,fetch,generate,challenge,verdict):
+        public=fetch(symbol=symbol,now=now,reader=reader)
+        discovery=generate(stage="discovery",payload=public,now=now)
+        commercial=generate(
+            stage="commercial",
+            payload={**public,"discovery":discovery["output"]},
+            now=now,
+        )
+        underwriting=generate(
+            stage="underwriting",
+            payload={
+                **public,
+                "discovery":discovery["output"],
+                "commercial":commercial["output"],
+            },
+            now=now,
+        )
+        challenged=challenge(
+            payload={
+                **public,
+                "discovery":discovery["output"],
+                "commercial":commercial["output"],
+                "underwriting":underwriting["output"],
+            },
+            now=now,
+        )
+        return {
+            **verdict(underwriting=underwriting,challenge=challenged),
+            "callback_stages":[
+                discovery["stage"],commercial["stage"],
+                underwriting["stage"],challenged["stage"],
+            ],
+            "fetch_provenance":public["provenance"],
+        }
+
+    result=bridge.run_original_entrypoint(
+        original_entrypoint,symbol="MSFT",now=NOW,reader=None
+    )
+    assert result["status"]=="COMPLETED_PUBLIC_RESEARCH_CANDIDATE"
+    assert result["callback_stages"]==[
+        "discovery","commercial","underwriting","challenge"
+    ]
+    assert result["challenge_model_distinct"] is True
+    assert result["live_acceptance_claimed"] is False
+    assert result["fetch_provenance"][0]["source_url"].startswith("https://data.sec.gov/")
+    assert len(calls)==4
+    assert all(call[1]["provider"]=="test-local-provider" for call in calls)
+
+    missing=bridge.run_original_entrypoint(None,symbol="MSFT",now=NOW)
+    assert missing["status"]=="BLOCKED"
+    assert missing["exact_next_action"]=="SUPPLY_ORIGINAL_RESEARCH_ENGINE_ENTRYPOINT"
+
+
+def test_original_callback_verdict_never_promotes_incomplete_reject_or_same_model():
+    ready={
+        "stage":"underwriting","status":"COMPLETED","schema_valid":True,
+        "model_identity":"local:uw",
+        "output":{
+            "underwriting_status":"PUBLIC_EVIDENCE_READY",
+            "thesis":"ready","evidence_used":["x"],"missing_evidence":[],
+        },
+    }
+    pass_challenge={
+        "stage":"challenge","status":"COMPLETED","schema_valid":True,
+        "model_identity":"local:challenge",
+        "output":{
+            "verdict":"PASS_PUBLIC_RESEARCH_ONLY",
+            "challenge_summary":"pass","blockers":[],"next_action":"review",
+        },
+    }
+    same={**pass_challenge,"model_identity":"local:uw"}
+    assert OriginalResearchEngineCallbackBridge.verdict(
+        underwriting=ready,challenge=same
+    )["reason"]=="HETEROGENEOUS_CHALLENGE_MODEL_REQUIRED"
+
+    incomplete={**ready,"output":{
+        **ready["output"],"underwriting_status":"INCOMPLETE",
+        "missing_evidence":["second source"],
+    }}
+    rejected={**ready,"output":{
+        **ready["output"],"underwriting_status":"REJECT",
+    }}
+    assert OriginalResearchEngineCallbackBridge.verdict(
+        underwriting=incomplete,challenge=pass_challenge
+    )["reason"]=="UNDERWRITING_INCOMPLETE"
+    assert OriginalResearchEngineCallbackBridge.verdict(
+        underwriting=rejected,challenge=pass_challenge
+    )["reason"]=="UNDERWRITING_REJECT"
+
+
+def _local_monitor_contract(contract_id,condition_id,version,*,symbol="VTI",threshold=90.0):
+    observation=_observation(symbol)
+    observation["invalidation_condition"]={
+        "field":"last_price","operator":"lt","threshold":threshold,
+    }
+    return {
+        "contract_id":contract_id,
+        "condition_id":condition_id,
+        "condition_version":version,
+        "observation":observation,
+        # This caller-local field is deliberately not emitted by the bridge.
+        "local_position_context":{"synthetic_units":123},
+    }
+
+
+def test_local_position_receipt_bridge_preserves_sibling_condition_identity_vti_and_freshness(tmp_path):
+    history=CIOSessionHistory(tmp_path/"receipt-bridge","issue16-local-monitor")
+    bridge=LocalPositionReceiptBridge(
+        ReceiptAwarePositionConsumer(),DeliveryReceiptConsumer(history)
+    )
+    contracts=[
+        _local_monitor_contract("contract-vti","entry-v1","1",threshold=90.0),
+        _local_monitor_contract("contract-vti","risk-v2","2",threshold=80.0),
+    ]
+    first=bridge.evaluate_contracts(contracts,{"VTI":_quote()},now=NOW)
+    later=bridge.evaluate_contracts(
+        contracts,{"VTI":_quote(at=NOW+timedelta(seconds=10))},
+        now=NOW+timedelta(seconds=10),
+    )
+    assert first["vti_contract_covered"] is True
+    assert first["private_positions_exported"] is False
+    assert len(first["results"])==2
+    assert {row["condition_id"] for row in first["results"]}=={"entry-v1","risk-v2"}
+    assert len({row["stable_identity"] for row in first["results"]})==2
+    assert [r["stable_identity"] for r in first["results"]]==[
+        r["stable_identity"] for r in later["results"]
+    ]
+    assert all("local_position_context" not in row for row in first["results"])
+
+    stale_quote=_quote(at=NOW-timedelta(hours=1))
+    stale=bridge.evaluate_contracts(contracts,{"VTI":stale_quote},now=NOW)
+    assert all(row["classification"]=="UNKNOWN" for row in stale["results"])
+    assert all(row["triggered"] is None for row in stale["results"])
+
+
+def test_local_receipt_bridge_restart_pending_replay_unknown_fixture_and_exact_ack(tmp_path):
+    root=tmp_path/"receipt-bridge"
+    history=CIOSessionHistory(root,"issue16-pending")
+    bridge=LocalPositionReceiptBridge(
+        ReceiptAwarePositionConsumer(),DeliveryReceiptConsumer(history)
+    )
+    expected=_expected()
+    pending=bridge.record_pending(
+        contract_id="contract-vti",
+        expected=expected,
+        observation_identity="obs-stable-1",
+    )
+    assert pending["status"]=="PENDING_RECORDED"
+    assert len(bridge.pending_replay())==1
+
+    restarted=LocalPositionReceiptBridge(
+        ReceiptAwarePositionConsumer(),
+        DeliveryReceiptConsumer(CIOSessionHistory(root,"issue16-pending")),
+    )
+    assert len(restarted.pending_replay())==1
+
+    fixture={
+        **expected,"transport_status":"ACKNOWLEDGED","delivered":True,
+        "platform_message_id":"fixture-msg","is_fixture":True,
+    }
+    assert restarted.consume_receipt(expected,fixture)["status"]=="UNKNOWN"
+    assert len(restarted.pending_replay())==1
+
+    failed={
+        **expected,"transport_status":"FAILED","delivered":False,
+        "platform_message_id":"failed-msg","is_fixture":False,
+    }
+    assert restarted.consume_receipt(expected,failed)["status"]=="UNKNOWN"
+    assert len(restarted.pending_replay())==1
+
+    wrong={
+        **expected,"body_hash":"wrong","transport_status":"ACKNOWLEDGED",
+        "delivered":True,"platform_message_id":"wrong-msg","is_fixture":False,
+    }
+    assert restarted.consume_receipt(expected,wrong)["status"]=="UNKNOWN"
+    assert len(restarted.pending_replay())==1
+
+    real={
+        **expected,"transport_status":"ACKNOWLEDGED","delivered":True,
+        "platform_message_id":"real-msg","is_fixture":False,
+    }
+    ack=restarted.consume_receipt(expected,real)
+    assert ack["status"]=="ACKNOWLEDGED"
+    assert restarted.pending_replay()==[]
+
+    final_restart=LocalPositionReceiptBridge(
+        ReceiptAwarePositionConsumer(),
+        DeliveryReceiptConsumer(CIOSessionHistory(root,"issue16-pending")),
+    )
+    assert final_restart.pending_replay()==[]
+    duplicate=final_restart.consume_receipt(expected,real)
+    assert duplicate["status"]=="ACKNOWLEDGED_DUPLICATE"
