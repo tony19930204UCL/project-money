@@ -693,7 +693,7 @@ def _host_routes(
             "status": "PASS",
             "reason": "seed public source accepted",
             "source_urls": source_urls,
-        }, model="discover-a")),
+        }, model="discover-a"), primary_model_family="discovery-family"),
         "commercial": StageRoute(primary=_engine("commercial", {
             "status": "PASS",
             "reason": "commercial review completed from public seed source",
@@ -988,8 +988,9 @@ def test_original_run_case_faithful_contract_executes_all_five_stages():
     ]
     fetch_evidence = result["callback_evidence"][0]
     assert set(fetch_evidence["provenance"][0]) == {
-        "source_url", "observed_at", "content_sha256"
+        "source_url", "observed_at", "content_sha256", "extracted_content_sha256", "extraction_succeeded"
     }
+    assert fetch_evidence["provenance"][0]["extraction_succeeded"] is True
     assert len(fetch_evidence["provenance"][0]["content_sha256"]) == 64
     assert result["callback_evidence"][3]["model_identity"] == "local-provider:underwriter-a"
     assert result["callback_evidence"][4]["model_identity"] == "local-provider:challenger-b"
@@ -1341,7 +1342,11 @@ def test_original_run_case_private_public_document_is_rejected_before_model_tran
     )
     assert result["status"] == "BLOCKED"
     assert "PUBLIC_OUTBOUND_VALUE_REJECTED" in result["reason"]
-    assert result["callback_evidence"] == []
+    assert len(result["callback_evidence"]) == 1
+    assert result["callback_evidence"][0]["stage"] == "fetch"
+    assert result["callback_evidence"][0]["status"] == "BLOCKED"
+    assert "PUBLIC_OUTBOUND_VALUE_REJECTED" in result["callback_evidence"][0]["reason"]
+    assert result["callback_evidence"][0]["provenance"][0]["extraction_succeeded"] is False
 
 
 def test_original_run_case_same_model_family_challenge_is_blocked_even_when_model_names_differ():
