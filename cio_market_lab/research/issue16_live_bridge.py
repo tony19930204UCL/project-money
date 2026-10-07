@@ -335,6 +335,7 @@ class OriginalResearchCallbackBridge:
             "challenge_model_distinct": result.get("challenge_model_distinct"),
             "observed_at": result.get("observed_at"),
             "provenance": result.get("provenance") if result.get("stage") == "fetch" else None,
+            "fetch_diagnostics": result.get("fetch_diagnostics") if result.get("stage") == "fetch" else None,
         }
         _reject_private_content(evidence)
         self.callback_evidence.append(evidence)
@@ -511,15 +512,33 @@ class OriginalResearchCallbackBridge:
             diagnostic["provenance"][0]["content_sha256"] = raw_hash
             rows = parse_official_document(url, raw_bytes, content_type)
             extracted_parts = []
-            for row in rows:
+            rejected_parts: list[str] = []
+            first_rejection: Optional[ValueError] = None
+            for index, row in enumerate(rows):
                 if not isinstance(row, Mapping):
                     continue
                 part = str(row.get("document_part") or "").strip()
                 text = str(row.get("text") or "").strip()
                 if not text:
                     continue
-                extracted_parts.append(f"[{part}] {text}" if part else text)
+                candidate = f"[{part}] {text}" if part else text
+                try:
+                    _reject_private_content(candidate, f"host_fetch.document.parts[{index}]")
+                except ValueError as exc:
+                    if first_rejection is None:
+                        first_rejection = exc
+                    rejected_parts.append(f"{part or 'part'}:{exc}")
+                    continue
+                extracted_parts.append(candidate)
+            diagnostic["fetch_diagnostics"] = {
+                "parsed_parts": len(rows),
+                "accepted_parts": len(extracted_parts),
+                "rejected_parts": len(rejected_parts),
+                "rejection_reasons": rejected_parts[:8],
+            }
             if not extracted_parts:
+                if first_rejection is not None:
+                    raise first_rejection
                 raise RuntimeError("HOST_FETCH_OFFICIAL_EXTRACTION_EMPTY")
             text_value = "\n\n".join(extracted_parts)
             _reject_private_content(text_value, "host_fetch.document.text")
@@ -796,9 +815,9 @@ class OriginalResearchCallbackBridge:
             identity_conflict = result.get("status") == "COMPLETED" and result.get("model_identity") == identity
             if family_conflict or identity_conflict:
                 reason = (
-                    "CHALLENGE_MODEL_FAMILY_NOT_HETEROGENEOUS"
-                    if family_conflict
-                    else "CHALLENGE_MODEL_NOT_HETEROGENEOUS"
+                    "CHALLENGE_MODEL_NOT_HETEROGENEOUS"
+                    if identity_conflict
+                    else "CHALLENGE_MODEL_FAMILY_NOT_HETEROGENEOUS"
                 )
                 result = {
                     **result,
