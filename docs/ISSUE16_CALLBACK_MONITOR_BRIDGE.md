@@ -16,23 +16,48 @@ The bridge never supplies paid-route authority. The caller must construct `Infer
 
 ### Candidate host invocation
 
-The original host entrypoint is deliberately injected rather than imported by name because source CI does not contain the installed original host module:
+PR #28 is the authoritative Issue #16 candidate. PR #27 is a superseded
+overlapping candidate, not a second research engine or deployment lane.
 
-```python
-from datetime import datetime, timezone
-from cio_market_lab.research.issue16_live_bridge import (
-    OriginalResearchCallbackBridge, StageRoute,
-)
-# Build StageRoute objects from already-authorized free/local HermesLocalInference
-# contracts, then pass the installed/original callable:
-result = bridge.run_original_entrypoint(
-    installed_original_research_entrypoint,
-    symbol="MSFT",
-    now=datetime.now(timezone.utc),
-)
+This PR includes a runnable candidate CLI and maps the host signature actually
+reported by Main:
+
+`run_case(case_id,ticker,seed_urls,directory,fetch,generate,challenge,max_attempts)`
+
+```bash
+python3 custom_scripts/issue16_bridge_candidate.py research \
+  --symbol MSFT \
+  --case-id issue16-main-acceptance \
+  --seed-url https://www.sec.gov/example \
+  --directory /local/main-owned/research-case \
+  --routes /local/main-owned/issue16-routes.json \
+  --entrypoint REAL_INSTALLED_MODULE:run_case \
+  --max-attempts 2
 ```
 
-If the installed callable is absent or does not expose `fetch_callback`, `generate_callback`, and `challenge_callback`, the candidate returns an explicit host blocker. It never substitutes fixture success.
+`REAL_INSTALLED_MODULE:run_case` is deliberately supplied by Main. The
+repository does not invent a private host module. Main also supplies the actual
+local directory, credentials and host authorization. If the module/adapter is
+missing or callback shapes differ, the candidate remains BLOCKED with an exact
+next action.
+
+The route JSON contains only free/local route contracts, never credentials:
+
+```json
+{
+  "discovery": {"primary": {"provider":"...","model":"...","session_id":"...","workspace_root":"...","is_free_or_local_authorized":true,"purpose":"..."}, "fallback": null},
+  "commercial": {"primary": {"provider":"...","model":"...","session_id":"...","workspace_root":"...","is_free_or_local_authorized":true,"purpose":"..."}, "fallback": null},
+  "underwriting": {"primary": {"provider":"...","model":"...","session_id":"...","workspace_root":"...","is_free_or_local_authorized":true,"purpose":"..."}, "fallback": null},
+  "challenge": {"primary": {"provider":"...","model":"...","session_id":"...","workspace_root":"...","is_free_or_local_authorized":true,"purpose":"..."}, "fallback": null}
+}
+```
+
+Successful stage callbacks retain resolved provider/model plus affirmative auth,
+non-fixture and successful-returncode evidence. Missing adapter/route,
+unauthorized inference, schema failure, private output or same-model challenge
+stays BLOCKED. The tested success path remains fetch -> discovery -> commercial
+-> underwriting -> genuinely heterogeneous model challenge -> verdict; fixed
+rules only validate/reduce model outputs and do not replace model inference.
 
 ## Local position-contract -> receipt consumer mapping
 
@@ -47,23 +72,42 @@ It reuses `ReceiptAwarePositionConsumer` for quote-edge evaluation and `Delivery
 
 The sanitized contract carries only contract/condition/version/observation identity, symbol, the existing observation contract, and expected receipt linkage. Holdings/account fields are not part of the schema and private-field inspection remains fail-closed.
 
-For triggered conditions the receipt must still match exact execution/body/job/platform/target/thread linkage and have a nonempty platform message ID. Fixture/generation-only evidence remains UNKNOWN. Unknown/failed receipt results are persisted only as `MONITOR_PENDING_RECEIPT` audit rows; after restart, a later genuine receipt is processed by the same `DeliveryReceiptConsumer` and the pending identity is marked resolved. This pending audit is not an ACK store.
+For triggered conditions the receipt must still match exact execution/body/job/platform/target/thread linkage and have a nonempty platform message ID. Fixture/generation-only/failed/mismatched evidence remains UNKNOWN.
+
+When a trigger first lacks a genuine ACK, the existing `CIOSessionHistory`
+stores one `MONITOR_PENDING_RECEIPT` row with the original contract,
+condition/version/observation identity and an immutable sanitized snapshot of
+only the exact expected execution/body/job/platform/target/thread linkage.
+Every later `evaluate` replays unresolved pending rows through the same
+`DeliveryReceiptConsumer` **before** current quote/registry evaluation. Thus a
+stale, missing or out-of-zone current quote, or removal/change of the current
+registry condition, cannot strand the original receipt. The new observation
+identity is never applied to the old receipt. Historical replay cannot create a
+new trigger or order.
+
+A matching genuine receipt writes the canonical `PLATFORM_ACK` once and marks
+that exact pending identity resolved; replay after resolution is idempotent.
+There is no second ACK store.
 
 The bridge preserves sibling conditions separately through `condition_id`, `condition_version`, and `observation_identity`; quote/poll time does not enter the stable contract identity. It reports FRESH, STALE, UNKNOWN, and research-only classifications while keeping `private_positions_exported=false`.
 
 ### Main-owned local invocation
 
-```python
-bridge = LocalPositionReceiptBridge(
-    registry_loader=load_existing_local_contract_registry,
-    quote_provider=load_existing_quote,
-    receipt_provider=load_existing_platform_receipt,
-    history=existing_cio_session_history,
-)
-audit = bridge.evaluate(now=datetime.now(timezone.utc))
+The same CLI can perform a local-only monitor audit. Main supplies all private
+paths locally; none are uploaded by this source PR:
+
+```bash
+python3 custom_scripts/issue16_bridge_candidate.py monitor \
+  --contracts /private/local/contracts.json \
+  --quotes /private/local/current-quotes.json \
+  --history-root /private/local/cio-history \
+  --session-id issue16-host-monitor \
+  --receipt /private/local/platform-receipt.json
 ```
 
-Main supplies the private local registry/holdings join on the host. Source tests use synthetic VTI contracts only and contain no client holdings.
+Main supplies the private local registry/holdings join and genuine receipt on
+the host. Source tests use synthetic VTI contracts only and contain no client
+holdings or real delivery evidence.
 
 ## Source-only acceptance commands
 
