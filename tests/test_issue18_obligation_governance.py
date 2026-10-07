@@ -152,20 +152,47 @@ def documented_late_recovery(rid="late-1"):
     }
 
 
+def _scope_fixture(assigned_ids, mode="SCOPED_RECOVERY"):
+    scope={
+        "mode":mode,
+        "scope_id":"scope-1",
+        "owner":"Main CIO",
+        "authorization_source":"decision://main-cio/scope-1",
+        "authentication_receipt_id":"scope-receipt-1",
+        "assigned_ids":list(assigned_ids),
+        "executor_binding":live_job(),
+        "merged_criteria_transfer":{
+            "source_ids":["legacy-container-a","legacy-container-b"],
+            "target_ids":list(assigned_ids),
+            "source_ref":"artifact://merged-criteria-transfer",
+        } if mode=="SCOPED_RECOVERY" else None,
+    }
+    return scope
+
+
+def _scope_identity_fixture(scope):
+    identity={
+        "mode":scope["mode"],
+        "owner":scope["owner"],
+        "authorization_source":scope["authorization_source"],
+        "assigned_ids":sorted(scope["assigned_ids"]),
+        "executor_binding":deepcopy(scope["executor_binding"]),
+    }
+    if scope["mode"]=="SCOPED_RECOVERY":
+        identity["merged_criteria_transfer"]=deepcopy(scope["merged_criteria_transfer"])
+    return identity
+
+
 def scoped_registry(*records, assigned_ids, mode="SCOPED_RECOVERY"):
     reg=registry(*records)
-    reg["execution_scopes"]={
-        "scope-1":{
-            "mode":mode,
-            "owner":"Main CIO",
-            "authorization_source":"decision://main-cio/scope-1",
-            "assigned_ids":list(assigned_ids),
-            "executor_binding":live_job(),
-            "merged_criteria_transfer":{
-                "source_ids":["legacy-container-a","legacy-container-b"],
-                "target_ids":list(assigned_ids),
-                "source_ref":"artifact://merged-criteria-transfer",
-            } if mode=="SCOPED_RECOVERY" else None,
+    scope=_scope_fixture(assigned_ids,mode)
+    reg["execution_scopes"]={"scope-1":deepcopy(scope)}
+    reg["execution_scope_receipts"]={
+        "scope-receipt-1":{
+            "status":"AUTHENTICATED",
+            "scope_id":"scope-1",
+            "source_ref":"artifact://authenticated-scope-receipt",
+            "scope_identity":_scope_identity_fixture(scope),
         }
     }
     return reg
@@ -173,19 +200,7 @@ def scoped_registry(*records, assigned_ids, mode="SCOPED_RECOVERY"):
 
 def scoped_manifest(assigned_ids, mode="SCOPED_RECOVERY"):
     return {
-        "execution_scope":{
-            "mode":mode,
-            "scope_id":"scope-1",
-            "owner":"Main CIO",
-            "authorization_source":"decision://main-cio/scope-1",
-            "assigned_ids":list(assigned_ids),
-            "executor_binding":live_job(),
-            "merged_criteria_transfer":{
-                "source_ids":["legacy-container-a","legacy-container-b"],
-                "target_ids":list(assigned_ids),
-                "source_ref":"artifact://merged-criteria-transfer",
-            } if mode=="SCOPED_RECOVERY" else None,
-        },
+        "execution_scope":_scope_fixture(assigned_ids,mode),
         "obligation_results":[],
     }
 
@@ -1380,3 +1395,73 @@ def test_complete_raw_manifest_boundary_parity_legacy_only_and_fail_noncompletio
         assert result["status"]=="CLIENT_EXECUTION_CLAIM_RECORDED_NONCOMPLETION"
         assert result["completion_claim_allowed"] is False
         assert result["case_results"][0]["status"]=="FAIL"
+
+
+
+def test_execution_scope_requires_known_authenticated_receipt_bound_to_canonical_identity():
+    reg=scoped_registry(active_record("a"),assigned_ids=["a"])
+    manifest=scoped_manifest(["a"])
+    manifest["obligation_results"]=[{
+        "id":"a","status":"ACTIVE","acceptance_result":"FAIL",
+        "external_blocker":{"classification":"EXTERNAL_DATA_PREREQUISITE","source_ref":"artifact://gap"},
+    }]
+
+    unknown=deepcopy(manifest)
+    unknown["execution_scope"]["authentication_receipt_id"]="unknown-receipt"
+    result=evaluate_manifest(reg,unknown,now=NOW)
+    assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+    assert result["reason"]=="EXECUTION_SCOPE_AUTHENTICATION_RECEIPT_MISMATCH"
+
+    missing_registry=deepcopy(reg)
+    missing_registry["execution_scope_receipts"]={}
+    result=evaluate_manifest(missing_registry,manifest,now=NOW)
+    assert result["reason"]=="EXECUTION_SCOPE_AUTHENTICATION_RECEIPT_UNKNOWN"
+
+    forged_status=deepcopy(reg)
+    forged_status["execution_scope_receipts"]["scope-receipt-1"]["status"]="UNVERIFIED"
+    result=evaluate_manifest(forged_status,manifest,now=NOW)
+    assert result["reason"]=="EXECUTION_SCOPE_NOT_AUTHENTICATED"
+
+    forged_identity=deepcopy(reg)
+    forged_identity["execution_scope_receipts"]["scope-receipt-1"]["scope_identity"]["assigned_ids"]=["a","hidden"]
+    result=evaluate_manifest(forged_identity,manifest,now=NOW)
+    assert result["reason"]=="EXECUTION_SCOPE_AUTHENTICATION_IDENTITY_MISMATCH"
+
+
+def test_scoped_recovery_authentication_binds_executor_and_criterion_transfer_identity():
+    reg=scoped_registry(active_record("a"),assigned_ids=["a"])
+    manifest=scoped_manifest(["a"])
+    manifest["obligation_results"]=[{
+        "id":"a","status":"ACTIVE","acceptance_result":"FAIL",
+        "external_blocker":{"classification":"EXTERNAL_DATA_PREREQUISITE","source_ref":"artifact://gap"},
+    }]
+
+    forged_executor=deepcopy(manifest)
+    forged_executor["execution_scope"]["executor_binding"]["run_id"]="forged-run"
+    result=evaluate_manifest(reg,forged_executor,now=NOW)
+    assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+    assert result["reason"]=="EXECUTION_SCOPE_IDENTITY_MISMATCH"
+
+    forged_transfer=deepcopy(manifest)
+    forged_transfer["execution_scope"]["merged_criteria_transfer"]["source_ids"]=["omitted-container"]
+    result=evaluate_manifest(reg,forged_transfer,now=NOW)
+    assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
+    assert result["reason"]=="EXECUTION_SCOPE_IDENTITY_MISMATCH"
+
+
+def test_authenticated_scoped_recovery_records_external_blocker_without_completion_claim():
+    reg=scoped_registry(active_record("a"),assigned_ids=["a"])
+    manifest=scoped_manifest(["a"])
+    manifest["obligation_results"]=[{
+        "id":"a","status":"ACTIVE","acceptance_result":"FAIL",
+        "external_blocker":{
+            "classification":"EXTERNAL_DATA_PREREQUISITE",
+            "source_ref":"artifact://sanitized-external-blocker",
+        },
+    }]
+    result=evaluate_manifest(reg,manifest,now=NOW)
+    assert result["status"]=="CLIENT_EXECUTION_CLAIM_RECORDED_NONCOMPLETION"
+    assert result["completion_claim_allowed"] is False
+    assert result["case_results"]==[{
+        "id":"a","status":"FAIL","reason":"EVIDENCE_BACKED_NONCOMPLETION",
+    }]
