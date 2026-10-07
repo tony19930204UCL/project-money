@@ -635,7 +635,15 @@ def _public_document_reader(url):
     return "<html><body><p>Public issuer revenue and operating income disclosure for source-only contract testing.</p></body></html>"
 
 
-def _host_routes(*, missing_underwriting=False, same_challenge=False, outside_seed=False):
+def _host_routes(
+    *,
+    missing_underwriting=False,
+    same_challenge=False,
+    outside_seed=False,
+    challenge_status="PASS",
+    challenge_objections=None,
+    omit_challenge_objections=False,
+):
     source_urls = ["https://example.com/not-a-seed"] if outside_seed else [SEED_URL]
     underwriting = {
         "status": "PASS",
@@ -661,6 +669,21 @@ def _host_routes(*, missing_underwriting=False, same_challenge=False, outside_se
     if missing_underwriting:
         underwriting.pop("financials")
     challenge_model = "underwriter-a" if same_challenge else "challenger-b"
+    challenge_output = {
+        "status": challenge_status,
+        "reason": (
+            "independent challenge completed"
+            if challenge_status == "PASS"
+            else "independent challenge blocks the candidate"
+        ),
+        "source_urls": source_urls,
+    }
+    if not omit_challenge_objections:
+        challenge_output["objections"] = (
+            ["Public-source challenge found no blocking contradiction."]
+            if challenge_objections is None
+            else challenge_objections
+        )
     return {
         "discovery": StageRoute(primary=_engine("discovery", {
             "status": "PASS",
@@ -677,15 +700,71 @@ def _host_routes(*, missing_underwriting=False, same_challenge=False, outside_se
             underwriting,
             model="underwriter-a",
         )),
-        "challenge": StageRoute(primary=_engine("challenge", {
-            "status": "PASS",
-            "reason": "independent challenge completed",
-            "source_urls": source_urls,
-        }, model=challenge_model)),
+        "challenge": StageRoute(primary=_engine(
+            "challenge",
+            challenge_output,
+            model=challenge_model,
+        )),
     }
 
 
-def _strict_original_run_case(case_id, ticker, seed_urls, directory, fetch, generate, challenge, max_attempts):
+def _validate_original_stage_result(stage, result, seed_urls):
+    """Sanitized mirror of the Main-reported original validate_stage_result contract."""
+    assert isinstance(result, dict), f"{stage} result must be dict"
+    assert isinstance(result.get("reason"), str) and result["reason"].strip(), (
+        f"{stage} requires nonempty reason"
+    )
+    assert isinstance(result.get("source_urls"), list), f"{stage} requires list source_urls"
+    assert all(isinstance(url, str) and url for url in result["source_urls"])
+    assert set(result["source_urls"]) <= set(seed_urls), f"{stage} source_urls outside seeds"
+
+    if stage == "challenge":
+        assert result.get("status") in {"PASS", "BLOCK", "INCOMPLETE"}
+        assert isinstance(result.get("objections"), list), "Challenge requires list objections"
+        return result
+
+    assert result.get("status") in {"PASS", "REJECT", "INCOMPLETE"}
+    if stage == "underwriting" and result["status"] == "PASS":
+        required = {
+            "financials",
+            "business_maturity",
+            "valuation_scenarios",
+            "buy_zone",
+            "invalidation_conditions",
+            "review_by",
+            "four_sentences",
+        }
+        assert required <= set(result), "Underwriting PASS missing required facts"
+        assert isinstance(result["financials"], dict) and result["financials"]
+        assert isinstance(result["business_maturity"], str) and result["business_maturity"].strip()
+        assert isinstance(result["valuation_scenarios"], dict) and result["valuation_scenarios"]
+        assert isinstance(result["buy_zone"], dict) and result["buy_zone"]
+        assert isinstance(result["invalidation_conditions"], list) and result["invalidation_conditions"]
+        assert isinstance(result["review_by"], str) and result["review_by"].strip()
+        assert isinstance(result["four_sentences"], list) and len(result["four_sentences"]) == 4
+        assert all(isinstance(sentence, str) and sentence.strip() for sentence in result["four_sentences"])
+    return result
+
+
+def _validate_original_terminal_result(result, seed_urls):
+    assert isinstance(result, dict), "terminal result must be dict"
+    assert result.get("status") in {"PASS", "BLOCK", "INCOMPLETE"}
+    assert isinstance(result.get("reason"), str) and result["reason"].strip()
+    assert isinstance(result.get("source_urls"), list)
+    assert set(result["source_urls"]) <= set(seed_urls)
+    return result
+
+
+def _faithful_original_run_case(
+    case_id,
+    ticker,
+    seed_urls,
+    directory,
+    fetch,
+    generate,
+    challenge,
+    max_attempts,
+):
     assert case_id == "case-host-contract"
     assert ticker == "MSFT"
     assert directory == "/sanitized/candidate-dir"
@@ -696,56 +775,66 @@ def _strict_original_run_case(case_id, ticker, seed_urls, directory, fetch, gene
     assert set(document) == {"url", "text", "observed_at"}
     assert document["url"] == seed_urls[0]
     assert document["observed_at"] == NOW.isoformat()
-    assert "Public issuer revenue" in document["text"]
+    assert isinstance(document["text"], str) and "Public issuer revenue" in document["text"]
 
-    discovery = generate("discovery", {
-        "documents": [document],
-        "seed_urls": seed_urls,
-    })
-    assert set(discovery) == {"status", "reason", "source_urls"}
-    assert discovery["status"] in {"PASS", "REJECT", "INCOMPLETE"}
-    assert discovery["reason"]
-    assert set(discovery["source_urls"]) <= set(seed_urls)
+    discovery = _validate_original_stage_result(
+        "discovery",
+        generate("discovery", {
+            "documents": [document],
+            "seed_urls": seed_urls,
+        }),
+        seed_urls,
+    )
+    commercial = _validate_original_stage_result(
+        "commercial",
+        generate("commercial", {
+            "documents": [document],
+            "discovery": discovery,
+        }),
+        seed_urls,
+    )
+    underwriting = _validate_original_stage_result(
+        "underwriting",
+        generate("underwriting", {
+            "documents": [document],
+            "discovery": discovery,
+            "commercial": commercial,
+        }),
+        seed_urls,
+    )
+    challenged = _validate_original_stage_result(
+        "challenge",
+        challenge({
+            "documents": [document],
+            "underwriting": underwriting,
+        }),
+        seed_urls,
+    )
 
-    commercial = generate("commercial", {
-        "documents": [document],
-        "discovery": discovery,
-    })
-    assert set(commercial) == {"status", "reason", "source_urls"}
-    assert commercial["status"] in {"PASS", "REJECT", "INCOMPLETE"}
-    assert commercial["reason"]
-    assert set(commercial["source_urls"]) <= set(seed_urls)
+    if any(row["status"] == "REJECT" for row in (discovery, commercial, underwriting)):
+        terminal_status = "BLOCK"
+        terminal_reason = "generate stage rejected candidate"
+    elif challenged["status"] == "BLOCK":
+        terminal_status = "BLOCK"
+        terminal_reason = challenged["reason"]
+    elif any(
+        row["status"] == "INCOMPLETE"
+        for row in (discovery, commercial, underwriting, challenged)
+    ):
+        terminal_status = "INCOMPLETE"
+        terminal_reason = "original stage chain incomplete"
+    else:
+        terminal_status = "PASS"
+        terminal_reason = "original stage chain passed"
 
-    underwriting = generate("underwriting", {
-        "documents": [document],
-        "discovery": discovery,
-        "commercial": commercial,
-    })
-    assert underwriting["status"] in {"PASS", "REJECT", "INCOMPLETE"}
-    assert underwriting["reason"]
-    assert set(underwriting["source_urls"]) <= set(seed_urls)
-    if underwriting["status"] == "PASS":
-        assert set(underwriting) == {
-            "status", "reason", "source_urls", "financials", "business_maturity",
-            "valuation_scenarios", "buy_zone", "invalidation_conditions",
-            "review_by", "four_sentences",
-        }
-        assert len(underwriting["four_sentences"]) == 4
-
-    challenged = challenge({
-        "documents": [document],
-        "underwriting": underwriting,
-    })
-    assert set(challenged) == {"status", "reason", "source_urls"}
-    assert challenged["status"] in {"PASS", "REJECT", "INCOMPLETE"}
-    assert challenged["reason"]
-    assert set(challenged["source_urls"]) <= set(seed_urls)
-
-    return {
-        "status": "PASS" if underwriting["status"] == "PASS" and challenged["status"] == "PASS" else "INCOMPLETE",
-        "reason": "strict original host contract completed",
-        "source_urls": seed_urls,
-    }
+    return _validate_original_terminal_result(
+        {
+            "status": terminal_status,
+            "reason": terminal_reason,
+            "source_urls": list(seed_urls),
+        },
+        seed_urls,
+    )
 
 
 def test_default_public_reader_handles_html_text(monkeypatch):
@@ -767,10 +856,10 @@ def test_default_public_reader_handles_html_text(monkeypatch):
     assert text == "<html><body>issuer disclosure</body></html>"
 
 
-def test_original_run_case_strict_schema_executes_end_to_end():
+def test_original_run_case_faithful_contract_executes_all_five_stages():
     bridge = OriginalResearchCallbackBridge(routes=_host_routes(), coordinator=FakeCoordinator())
     result = bridge.run_installed_run_case(
-        _strict_original_run_case,
+        _faithful_original_run_case,
         case_id="case-host-contract",
         symbol="MSFT",
         seed_urls=[SEED_URL],
@@ -804,23 +893,39 @@ def test_original_run_case_missing_underwriting_facts_downgrades_incomplete():
 
     def host(case_id, ticker, seed_urls, directory, fetch, generate, challenge, max_attempts):
         document = fetch(seed_urls[0])
-        discovery = generate("discovery", {"documents": [document]})
-        commercial = generate("commercial", {"documents": [document], "discovery": discovery})
-        underwriting = generate("underwriting", {
-            "documents": [document],
-            "discovery": discovery,
-            "commercial": commercial,
-        })
+        discovery = _validate_original_stage_result(
+            "discovery", generate("discovery", {"documents": [document]}), seed_urls
+        )
+        commercial = _validate_original_stage_result(
+            "commercial",
+            generate("commercial", {"documents": [document], "discovery": discovery}),
+            seed_urls,
+        )
+        underwriting = _validate_original_stage_result(
+            "underwriting",
+            generate("underwriting", {
+                "documents": [document],
+                "discovery": discovery,
+                "commercial": commercial,
+            }),
+            seed_urls,
+        )
         seen["underwriting"] = underwriting
         assert underwriting["status"] == "INCOMPLETE"
-        assert "MISSING_UNDERWRITING_FACTS:financials" == underwriting["reason"]
-        challenge_result = challenge({"documents": [document], "underwriting": underwriting})
-        return {
-            "status": "INCOMPLETE",
-            "reason": "underwriting incomplete",
-            "source_urls": seed_urls,
-            "challenge_status": challenge_result["status"],
-        }
+        assert underwriting["reason"] == "MISSING_UNDERWRITING_FACTS:financials"
+        challenged = _validate_original_stage_result(
+            "challenge",
+            challenge({"documents": [document], "underwriting": underwriting}),
+            seed_urls,
+        )
+        return _validate_original_terminal_result(
+            {
+                "status": "INCOMPLETE",
+                "reason": "underwriting incomplete",
+                "source_urls": seed_urls,
+            },
+            seed_urls,
+        )
 
     result = bridge.run_installed_run_case(
         host,
@@ -859,6 +964,110 @@ def test_original_run_case_source_urls_must_be_seed_subset():
     )
     assert result["status"] == "BLOCKED"
     assert "HOST_DISCOVERY_SOURCE_URL_OUTSIDE_SEEDS" in result["reason"]
+
+
+def test_original_run_case_challenge_missing_objections_fails_closed():
+    bridge = OriginalResearchCallbackBridge(
+        routes=_host_routes(omit_challenge_objections=True),
+        coordinator=FakeCoordinator(),
+    )
+    result = bridge.run_installed_run_case(
+        _faithful_original_run_case,
+        case_id="case-host-contract",
+        symbol="MSFT",
+        seed_urls=[SEED_URL],
+        directory="/sanitized/candidate-dir",
+        max_attempts=2,
+        now=NOW,
+        reader=_public_document_reader,
+    )
+    assert result["status"] == "BLOCKED"
+    assert "HOST_CHALLENGE_CALLBACK_BLOCKED" in result["reason"]
+    assert "objections" in result["reason"] or "objections" in json.dumps(result["callback_evidence"])
+
+
+def test_original_run_case_challenge_malformed_objections_fails_closed():
+    bridge = OriginalResearchCallbackBridge(
+        routes=_host_routes(challenge_objections="not-a-list"),
+        coordinator=FakeCoordinator(),
+    )
+    result = bridge.run_installed_run_case(
+        _faithful_original_run_case,
+        case_id="case-host-contract",
+        symbol="MSFT",
+        seed_urls=[SEED_URL],
+        directory="/sanitized/candidate-dir",
+        max_attempts=2,
+        now=NOW,
+        reader=_public_document_reader,
+    )
+    assert result["status"] == "BLOCKED"
+    assert "HOST_CHALLENGE_CALLBACK_BLOCKED" in result["reason"]
+
+
+def test_original_run_case_challenge_block_maps_terminal_to_block_and_preserves_objections():
+    objections = [
+        "Valuation sensitivity remains too wide for a PASS.",
+        "Public evidence does not resolve the downside case.",
+    ]
+    bridge = OriginalResearchCallbackBridge(
+        routes=_host_routes(
+            challenge_status="BLOCK",
+            challenge_objections=objections,
+        ),
+        coordinator=FakeCoordinator(),
+    )
+    seen = {}
+
+    def host(case_id, ticker, seed_urls, directory, fetch, generate, challenge, max_attempts):
+        document = fetch(seed_urls[0])
+        discovery = _validate_original_stage_result(
+            "discovery", generate("discovery", {"documents": [document]}), seed_urls
+        )
+        commercial = _validate_original_stage_result(
+            "commercial",
+            generate("commercial", {"documents": [document], "discovery": discovery}),
+            seed_urls,
+        )
+        underwriting = _validate_original_stage_result(
+            "underwriting",
+            generate("underwriting", {
+                "documents": [document],
+                "discovery": discovery,
+                "commercial": commercial,
+            }),
+            seed_urls,
+        )
+        challenged = _validate_original_stage_result(
+            "challenge",
+            challenge({"documents": [document], "underwriting": underwriting}),
+            seed_urls,
+        )
+        seen["challenge"] = challenged
+        assert challenged["status"] == "BLOCK"
+        return _validate_original_terminal_result(
+            {
+                "status": "BLOCK",
+                "reason": challenged["reason"],
+                "source_urls": challenged["source_urls"],
+            },
+            seed_urls,
+        )
+
+    result = bridge.run_installed_run_case(
+        host,
+        case_id="blocked-challenge",
+        symbol="MSFT",
+        seed_urls=[SEED_URL],
+        directory="/sanitized/candidate-dir",
+        max_attempts=2,
+        now=NOW,
+        reader=_public_document_reader,
+    )
+    assert result["status"] == "BLOCK"
+    assert seen["challenge"]["objections"] == objections
+    assert result["callback_evidence"][-1]["model_identity"] == "local-provider:challenger-b"
+    assert result["callback_evidence"][-1]["challenge_model_distinct"] is True
 
 
 def test_original_run_case_unavailable_fetch_is_blocked_and_invocation_evidence_resets():
