@@ -14,10 +14,42 @@ from typing import Any, Callable, Literal
 from zoneinfo import ZoneInfo
 
 import requests
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from cio_market_lab.engine.cio_session import CIOSessionHistory
 from cio_market_lab.engine.stage_d_observation import PersistedResearchPacketLoader
 from cio_market_lab.research.official import OfficialResearchProducer
+
+
+class BuyZone(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    low: float = Field(description='Lower positive finite price bound for the PAPER review zone.')
+    high: float = Field(description='Upper positive finite price bound for the PAPER review zone.')
+
+    @model_validator(mode='after')
+    def validate_bounds(self):
+        if not all(math.isfinite(x) and x > 0 for x in (self.low, self.high)) or self.low > self.high:
+            raise ValueError('invalid positive ordered buy zone')
+        return self
+
+
+class PriceInvalidationCondition(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    field: Literal['last_price'] = Field(description='Only supported numeric execution field.')
+    operator: Literal['lt','lte','gt','gte'] = Field(description='Supported last-price comparison operator.')
+    threshold: float = Field(description='Positive finite last-price threshold.')
+
+    @field_validator('threshold', mode='before')
+    @classmethod
+    def reject_non_numeric_raw_threshold(cls, value):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError('invalid invalidation threshold type')
+        return value
+
+    @model_validator(mode='after')
+    def validate_threshold(self):
+        if not math.isfinite(self.threshold) or self.threshold <= 0:
+            raise ValueError('invalid invalidation threshold')
+        return self
 
 
 class DailyPlanJudgment(BaseModel):
@@ -25,9 +57,16 @@ class DailyPlanJudgment(BaseModel):
     thesis: str = Field(min_length=15, max_length=1600)
     valuation_scenarios: dict[str, Any]
     catalysts: list[str]
-    buy_zone: dict[str, float] | None
-    invalidation: str = Field(min_length=10)
-    invalidation_condition: dict[str, Any] | None
+    buy_zone: BuyZone | None = Field(
+        description='Use null for WAIT/REJECT when evidence cannot support numeric bounds; SCOUT_REVIEW requires {low, high}.'
+    )
+    invalidation: str = Field(
+        min_length=10,
+        description='Fundamental invalidation prose. Do not encode this prose as the numeric execution condition.'
+    )
+    invalidation_condition: PriceInvalidationCondition | None = Field(
+        description='Use null for WAIT/REJECT when no supported numeric last-price condition is justified.'
+    )
     exposure_ceiling: float = Field(ge=0, le=0.02)
     stance: Literal['SCOUT_REVIEW', 'WAIT', 'REJECT']
     missing_evidence: list[str]
@@ -38,18 +77,11 @@ class DailyPlanJudgment(BaseModel):
         if self.buy_zone is None or self.invalidation_condition is None:
             if self.stance == 'SCOUT_REVIEW':
                 raise ValueError('scout review requires numeric zone and failure condition')
+            if self.exposure_ceiling != 0:
+                raise ValueError('non-armed WAIT/REJECT requires zero exposure')
             if not self.missing_evidence:
                 raise ValueError('non-armed WAIT/REJECT must name missing evidence')
             return self
-        lo, hi = self.buy_zone.get('low'), self.buy_zone.get('high')
-        if lo is None or hi is None or not all(math.isfinite(x) and x > 0 for x in (lo, hi)) or lo > hi:
-            raise ValueError('invalid positive ordered buy zone')
-        c = self.invalidation_condition
-        if c.get('field') != 'last_price' or c.get('operator') not in {'lt','lte','gt','gte'}:
-            raise ValueError('explicit supported invalidation condition required')
-        v = c.get('threshold')
-        if isinstance(v, bool) or not isinstance(v, (int,float)) or not math.isfinite(v) or v <= 0:
-            raise ValueError('invalid invalidation threshold')
         if not {'bear','base','bull'} <= set(self.valuation_scenarios):
             raise ValueError('three named valuation scenarios required')
         return self
@@ -327,20 +359,81 @@ class DailyResearchPlanProducer:
                    '\nExact input:\n' + json.dumps(prompt, ensure_ascii=False, default=str))
         from cio_market_lab.integrations.hermes_chat import run_hermes_cli_chat
         from cio_market_lab.integrations.runtime_evidence import RuntimeEvidenceAdapter
-        result = run_hermes_cli_chat(message, session_id=self.session_id, workspace_root=self.workspace_root,
-                                    timeout_seconds=self.timeout_seconds, provider='openai-codex', model='gpt-6.1-sol', enforce_cio_pin=True)
-        metadata = result.get('runtime_metadata') or {}
-        response = result.get('response','')
-        runtime = RuntimeEvidenceAdapter(pinned_provider='openai-codex', pinned_model='gpt-6.1-sol').verify_runtime_evidence(metadata=metadata, response_text=response,
-                  exit_code=result.get('returncode',0), pinned_provider='openai-codex', pinned_model='gpt-6.1-sol', allow_fixture=False)
-        if result.get('is_fixture') or runtime.is_fixture or not runtime.auth_verified or not runtime.is_success_response or result.get('failed') or result.get('error'):
-            raise RuntimeError('unauthenticated/fixture/failed daily-plan receipt rejected')
-        atomic_json(self.root/'authenticated_model_receipts'/(key+'.json'),
-                    {'observed_at':self._now().isoformat(),'symbol':symbol,'runtime_metadata':metadata,
-                     'response':response,'session_id':result.get('session_id'),'is_fixture':False,'purpose':'DAILY_RESEARCH_PLAN_NOT_ORDER',
-                     'input_sha256':prompt_sha256,'public_model_input':public_model_input})
-        plan = DailyPlanJudgment.model_validate_json(response)
-        validate_plan_against_inputs(plan, evidence, maximum_ceiling=self.maximum_ceiling)
+        validator = RuntimeEvidenceAdapter(pinned_provider='openai-codex', pinned_model='gpt-6.1-sol')
+        result = metadata = response = runtime = plan = None
+        validation_error = None
+        for attempt in (1, 2):
+            attempt_message = message
+            if attempt == 2:
+                attempt_message = (
+                    message
+                    + '\nSchema correction only. The prior authenticated response failed validation. '
+                      'Do not change the supplied official evidence, quote, stance policy, or risk ceiling. '
+                      'Return a fresh complete JSON object matching the advertised schema exactly. '
+                      'Do not use aliases such as lower_ntd/upper_ntd. Fundamental invalidation belongs in '
+                      'the prose invalidation field; invalidation_condition may only be null or '
+                      '{"field":"last_price","operator":"lt|lte|gt|gte","threshold":positive_number}. '
+                      'Validation failure:\n'
+                    + str(validation_error)
+                )
+            result = run_hermes_cli_chat(
+                attempt_message,
+                session_id=self.session_id,
+                workspace_root=self.workspace_root,
+                timeout_seconds=self.timeout_seconds,
+                provider='openai-codex',
+                model='gpt-6.1-sol',
+                enforce_cio_pin=True,
+            )
+            metadata = result.get('runtime_metadata') or {}
+            response = result.get('response','')
+            runtime = validator.verify_runtime_evidence(
+                metadata=metadata,
+                response_text=response,
+                exit_code=result.get('returncode',0),
+                pinned_provider='openai-codex',
+                pinned_model='gpt-6.1-sol',
+                allow_fixture=False,
+            )
+            if (
+                result.get('is_fixture')
+                or runtime.is_fixture
+                or not runtime.auth_verified
+                or not runtime.is_success_response
+                or result.get('failed')
+                or result.get('error')
+            ):
+                raise RuntimeError('unauthenticated/fixture/failed daily-plan receipt rejected')
+            receipt_data = {
+                'observed_at':self._now().isoformat(),'symbol':symbol,'runtime_metadata':metadata,
+                'response':response,'session_id':result.get('session_id'),'is_fixture':False,
+                'purpose':'DAILY_RESEARCH_PLAN_NOT_ORDER','input_sha256':prompt_sha256,
+                'public_model_input':public_model_input,'attempt':attempt,
+            }
+            atomic_json(self.root/'authenticated_model_receipts'/(key+'.json'),receipt_data)
+            try:
+                plan = DailyPlanJudgment.model_validate_json(response)
+                validate_plan_against_inputs(plan, evidence, maximum_ceiling=self.maximum_ceiling)
+                if attempt == 2:
+                    atomic_json(
+                        self.root/'authenticated_model_receipts'/(key+'-retry-success.json'),
+                        {**receipt_data,'validation_status':'VALID_AFTER_SCHEMA_RETRY'},
+                    )
+                break
+            except (ValidationError, ValueError) as exc:
+                validation_error = exc
+                atomic_json(
+                    self.root/'authenticated_model_receipts'/(key+f'-attempt-{attempt}-validation-failed.json'),
+                    {**receipt_data,'validation_status':'INVALID_MODEL_OUTPUT','validation_error':str(exc)},
+                )
+                if attempt == 2:
+                    return {
+                        'status':'BLOCKED_MODEL_SCHEMA_RETRY_EXHAUSTED',
+                        'symbol':symbol,
+                        'model_called':True,
+                        'attempts':2,
+                        'input_sha256':prompt_sha256,
+                    }
         actual_now = self._now()
         # A research formation crossing market-day boundaries must be retried, not misdated.
         if plan_session_date(symbol, actual_now) != date:

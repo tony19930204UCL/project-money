@@ -111,40 +111,64 @@ class OfficialResearchProducer:
         return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
     def _attach_company_disclosures(self, item, gaps):
-        """Attach independent official rows without letting one blocked document erase others."""
-        symbol=item['symbol']; urls=[]
+        """Attach current disclosure plus bounded comparable history with independent failure semantics."""
+        symbol=item['symbol']; disclosure_targets=[]
         metadata=item.setdefault('raw_metadata',{})
         supplements=metadata.setdefault('supplemental_source_rows',[])
         blocked=metadata.setdefault('blocked_official_documents',[])
+        history_gaps=metadata.setdefault('historical_disclosure_gaps',[])
         if symbol == 'MSFT':
             fy=str(metadata.get('fy',''))
             fp=str(metadata.get('fp',''))
             quarter='4' if fp=='FY' else fp.removeprefix('Q')
             if not re.fullmatch(r'20\d{2}',fy) or quarter not in {'1','2','3','4'}:
                 return
-            urls=[f'https://www.microsoft.com/en-us/Investor/earnings/FY-{fy}-Q{quarter}/press-release-webcast']
+            disclosure_targets=[{
+                'url':f'https://www.microsoft.com/en-us/Investor/earnings/FY-{fy}-Q{quarter}/press-release-webcast',
+                'role':'current',
+            }]
         elif symbol == '2330.TW':
             row=metadata.get('raw_row',{})
             year=str(row.get('年度',''));quarter=str(row.get('季別',''))
             if not re.fullmatch(r'\d{3}',year) or quarter not in {'1','2','3','4'}:
                 return
-            urls=[f'https://investor.tsmc.com/english/quarterly-results/{int(year)+1911}/q{quarter}']
-        for landing_url in urls:
+            gregorian=int(year)+1911
+            disclosure_targets=[{
+                'url':f'https://investor.tsmc.com/english/quarterly-results/{gregorian}/q{quarter}',
+                'role':'current',
+                'period':f'{gregorian}-Q{quarter}',
+            }]
+            # Bounded original history: exactly one prior completed annual statement.
+            prior_year=gregorian-1
+            disclosure_targets.append({
+                'url':f'https://investor.tsmc.com/english/quarterly-results/{prior_year}/q4',
+                'role':'historical_annual',
+                'period':f'{prior_year}-FY',
+            })
+        for target in disclosure_targets:
+            landing_url=target['url']
+            role=target['role']
+            period=target.get('period')
             try:
                 landing_rows=self._get(landing_url)
                 if not isinstance(landing_rows,list): raise ValueError('INVALID_DISCLOSURE_ROWS')
             except Exception as exc:
-                gaps.append({'symbol':symbol,'reason':f'COMPANY_DISCLOSURE_SUPPLEMENT_UNAVAILABLE:{type(exc).__name__}'})
+                reason=f'COMPANY_DISCLOSURE_SUPPLEMENT_UNAVAILABLE:{type(exc).__name__}'
+                if role=='current':
+                    gaps.append({'symbol':symbol,'reason':reason})
+                else:
+                    history_gaps.append({'source_url':landing_url,'period':period,'reason':reason})
                 continue
 
             # Preserve every independently verified HTML fact before following a
-            # linked document. A blocked PDF must not erase already verified HTML.
+            # linked document. Historical failures must not erase current facts.
             for row in landing_rows:
                 if row.get('document_part')=='link' or not row.get('text'):
                     continue
-                supplements.append({'source_url':landing_url,'raw_row':row})
+                supplements.append({'source_url':landing_url,'raw_row':row,'disclosure_role':role,'period':period})
+                prefix='Official company disclosure' if role=='current' else 'Official historical company disclosure'
                 item['verified_facts'].append(
-                    f"Official company disclosure [{landing_url}, {row['document_part']}]: {row['text']}"
+                    f"{prefix} [{landing_url}, {row['document_part']}]: {row['text']}"
                 )
 
             statement_url=None
@@ -152,10 +176,14 @@ class OfficialResearchProducer:
             if symbol=='2330.TW':
                 link=next((r for r in landing_rows if r.get('document_part')=='link' and r.get('text')=='Financial Statements'),None)
                 if not link:
-                    blocked.append({'source_url':landing_url,'reason':'OFFICIAL_STATEMENT_LINK_MISSING'})
-                    gaps.append({'symbol':symbol,'reason':'COMPANY_DISCLOSURE_DOCUMENT_BLOCKED:OFFICIAL_STATEMENT_LINK_MISSING'})
+                    reason='OFFICIAL_STATEMENT_LINK_MISSING'
+                    if role=='current':
+                        blocked.append({'source_url':landing_url,'reason':reason})
+                        gaps.append({'symbol':symbol,'reason':f'COMPANY_DISCLOSURE_DOCUMENT_BLOCKED:{reason}'})
+                    else:
+                        history_gaps.append({'source_url':landing_url,'period':period,'reason':reason})
                     continue
-                supplements.append({'source_url':landing_url,'raw_row':link})
+                supplements.append({'source_url':landing_url,'raw_row':link,'disclosure_role':role,'period':period})
                 statement_url=link['href']
                 try:
                     statement_rows=self._get(statement_url)
@@ -163,25 +191,28 @@ class OfficialResearchProducer:
                         raise ValueError('INVALID_DISCLOSURE_ROWS')
                 except Exception as exc:
                     reason=str(exc) if str(exc) in {'PDF_PARSER_UNAVAILABLE','OFFICIAL_DOCUMENT_OVERSIZE'} else type(exc).__name__
-                    blocked.append({'source_url':statement_url,'discovered_from':landing_url,'reason':reason})
-                    gaps.append({'symbol':symbol,'reason':f'COMPANY_DISCLOSURE_DOCUMENT_BLOCKED:{reason}'})
+                    if role=='current':
+                        blocked.append({'source_url':statement_url,'discovered_from':landing_url,'reason':reason})
+                        gaps.append({'symbol':symbol,'reason':f'COMPANY_DISCLOSURE_DOCUMENT_BLOCKED:{reason}'})
+                    else:
+                        history_gaps.append({'source_url':statement_url,'discovered_from':landing_url,'period':period,'reason':reason})
                     continue
             else:
-                # Non-TSMC disclosures are already represented by the preserved
-                # landing-page HTML rows above; do not append them a second time.
                 statement_url=landing_url
                 statement_rows=[]
 
             for row in statement_rows:
                 if row.get('document_part')=='link' or not row.get('text'):
                     continue
-                supplements.append({'source_url':statement_url,'raw_row':row})
+                supplements.append({'source_url':statement_url,'raw_row':row,'disclosure_role':role,'period':period})
+                prefix='Official company disclosure' if role=='current' else 'Official historical company disclosure'
                 item['verified_facts'].append(
-                    f"Official company disclosure [{statement_url}, {row['document_part']}]: {row['text']}"
+                    f"{prefix} [{statement_url}, {row['document_part']}]: {row['text']}"
                 )
 
             item['limitations'].append(
                 'Company report excerpts retain original headers, reporting units, comparisons and annual/cumulative/quarterly flow labels. '
+                'Historical annual disclosure is bounded to one prior completed fiscal year; missing history does not erase successful current facts. '
                 'No annualization or valuation inferred. Extraction is limited to first ten PDF pages and supported HTML tables/paragraphs; '
                 'unextracted notes remain unknown.'
             )
@@ -368,7 +399,33 @@ class OfficialResearchProducer:
                     if item is not None and isinstance(data, dict) and 'facts' in data:
                         baseline = []
                         baseline_gaps = []
-                        concepts = ('RevenueFromContractWithCustomerExcludingAssessedTax', 'Revenues', 'NetIncomeLoss', 'OperatingIncomeLoss', 'GrossProfit', 'NetCashProvidedByUsedInOperatingActivities', 'NetCashProvidedByUsedInInvestingActivities', 'NetCashProvidedByUsedInFinancingActivities', 'PaymentsToAcquirePropertyPlantAndEquipment', 'ShareBasedCompensation', 'EarningsPerShareDiluted', 'WeightedAverageNumberOfDilutedSharesOutstanding', 'CashAndCashEquivalentsAtCarryingValue', 'ShortTermInvestments', 'LongTermDebtCurrent', 'LongTermDebtNoncurrent', 'OperatingLeaseLiabilityCurrent', 'OperatingLeaseLiabilityNoncurrent', 'FinanceLeaseLiabilityCurrent', 'FinanceLeaseLiabilityNoncurrent')
+                        concepts = (
+                            'RevenueFromContractWithCustomerExcludingAssessedTax', 'Revenues',
+                            'NetIncomeLoss', 'OperatingIncomeLoss', 'GrossProfit',
+                            'NetCashProvidedByUsedInOperatingActivities',
+                            'NetCashProvidedByUsedInInvestingActivities',
+                            'NetCashProvidedByUsedInFinancingActivities',
+                            'PaymentsToAcquirePropertyPlantAndEquipment',
+                            'ShareBasedCompensation', 'EarningsPerShareDiluted',
+                            'WeightedAverageNumberOfDilutedSharesOutstanding',
+                            'CashAndCashEquivalentsAtCarryingValue', 'ShortTermInvestments',
+                            'LongTermDebtCurrent', 'LongTermDebtNoncurrent',
+                            'OperatingLeaseLiabilityCurrent', 'OperatingLeaseLiabilityNoncurrent',
+                            'FinanceLeaseLiability', 'FinanceLeaseLiabilityCurrent', 'FinanceLeaseLiabilityNoncurrent',
+                            'FinanceLeasePrincipalPayments', 'RepaymentsOfFinanceLeaseLiabilities',
+                            'RightOfUseAssetObtainedInExchangeForFinanceLeaseLiability',
+                            'PaymentsOfDividendsCommonStock', 'DividendsCommonStockCash',
+                        )
+                        concept_classes = {
+                            'FinanceLeaseLiability':'finance_lease_liability_balance',
+                            'FinanceLeaseLiabilityCurrent':'finance_lease_liability_balance',
+                            'FinanceLeaseLiabilityNoncurrent':'finance_lease_liability_balance',
+                            'FinanceLeasePrincipalPayments':'finance_lease_principal_cash_payment',
+                            'RepaymentsOfFinanceLeaseLiabilities':'finance_lease_principal_cash_payment',
+                            'RightOfUseAssetObtainedInExchangeForFinanceLeaseLiability':'finance_lease_noncash_rou_addition',
+                            'PaymentsOfDividendsCommonStock':'capital_return_cash_dividend',
+                            'DividendsCommonStockCash':'capital_return_dividend_declared_or_paid',
+                        }
                         for name in concepts:
                             units = data.get('facts', {}).get('us-gaap', {}).get(name, {}).get('units', {})
                             for unit, rows in units.items():
@@ -413,7 +470,13 @@ class OfficialResearchProducer:
                                     if identity in rejected:
                                         continue
                                     period_counts[kind] = period_counts.get(kind, 0) + 1
-                                    baseline.append({'concept': name, 'unit': unit, 'period_kind': kind, **{k: f.get(k) for k in ('val', 'start', 'end', 'filed', 'form', 'accn')}})
+                                    baseline.append({
+                                        'concept': name,
+                                        'economic_class': concept_classes.get(name, 'operating_or_financial_fact'),
+                                        'unit': unit,
+                                        'period_kind': kind,
+                                        **{k: f.get(k) for k in ('val', 'start', 'end', 'filed', 'form', 'accn')},
+                                    })
                         item['verified_facts'] = [f"SEC {f['concept']} = {f['val']} {f['unit']}; period {f['start'] or 'instant'}/{f['end']}; form {f['form']}; filed {f['filed']}; accession {f['accn']}." for f in baseline] or item['verified_facts']
                         if not baseline:
                             raise ValueError('NO_UNAMBIGUOUS_SEC_FINANCIAL_BASELINE')
@@ -421,6 +484,7 @@ class OfficialResearchProducer:
                         item['raw_metadata']['financial_baseline_gaps'] = baseline_gaps
                         item['raw_metadata']['financial_derivations'] = aligned_cash_flow_derivations(baseline)
                         item['limitations'].append('Cash-flow derivations are explicitly derived, not company-reported FCF. Only identical period/unit/filing/accession inputs are joined; unavailable or ambiguous inputs produce no derived metric.')
+                        item['limitations'].append('Finance-lease principal cash payments, noncash ROU additions, lease-liability balances and dividend/capital-return facts remain separately classified and are not added to property/equipment capex or double-counted in FCF.')
                         item['limitations'].append('Each fact retains its own start/end/unit. Quarterly and annual facts are not mixed into inferred growth or margins.')
 
                     # Case B: SEC EDGAR Submissions index
