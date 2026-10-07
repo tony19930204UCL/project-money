@@ -11,6 +11,7 @@ import json
 import re
 import time
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 from urllib.request import Request, urlopen
 
 
@@ -100,7 +101,14 @@ class OfficialResearchProducer:
             if not re.fullmatch(r"\d{7}", text):
                 raise ValueError("INVALID_TWSE_REPORT_DATE")
             text = f"{int(text[:3]) + 1911}-{text[3:5]}-{text[5:]}"
-        return datetime.fromisoformat(text).replace(tzinfo=timezone.utc)
+            # TWSE ROC report dates are day-precision local calendar dates.
+            # Midnight is only the lower bound of that Asia/Taipei day; it is
+            # not a claimed publication time.
+            return datetime.fromisoformat(text).replace(tzinfo=ZoneInfo("Asia/Taipei"))
+        parsed = datetime.fromisoformat(text)
+        # Preserve explicit offsets on timestamped sources. Existing date-only
+        # SEC/US semantics remain UTC day precision.
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
     def _attach_company_disclosures(self, item, gaps):
         """Attach independent official rows without letting one blocked document erase others."""
@@ -232,7 +240,8 @@ class OfficialResearchProducer:
                                 item = {"symbol": symbol, "source_url": TW_FINANCIAL_URL, "source_tier": "official_exchange",
                                     "published_at": pub.isoformat(), "verified_facts": [f"TWSE {field} = {value} (ROC period {month}; source-reported value; unit not converted)." for field, value in vals],
                                     "limitations": ["Official TWSE open data; reported fields/units preserved without conversion or inferred ratios."],
-                                    "raw_metadata": {"source": "official TWSE financial statements", "data_month": month, "raw_row": dict(chosen), "reported_fields": [k for k,v in vals]},
+                                    "raw_metadata": {"source": "official TWSE financial statements", "data_month": month, "raw_row": dict(chosen), "reported_fields": [k for k,v in vals],
+                                                     "published_at_original": str(chosen.get("出表日期", "")), "published_at_precision": "day", "published_at_timezone": "Asia/Taipei"},
                                     "research_scope": "historical_company_facts_not_catalyst", "research_id": f"twse-financial-{code}-{month}"}
                     if item is not None and item['source_url'] == TW_FINANCIAL_URL:
                         supplements = []
@@ -269,7 +278,7 @@ class OfficialResearchProducer:
                                     continue
                                 report_year = int(report_month[:3]) + 1911
                                 report_month_num = int(report_month[3:])
-                                if not 1 <= report_month_num <= 12 or datetime(report_year, report_month_num, 1, tzinfo=timezone.utc) > publish_date:
+                                if not 1 <= report_month_num <= 12 or datetime(report_year, report_month_num, 1, tzinfo=publish_date.tzinfo) > publish_date:
                                     continue
                                 valid_rows.append((publish_date, candidate))
                             except (TypeError, ValueError):
@@ -285,7 +294,8 @@ class OfficialResearchProducer:
                                 "source_tier": "official_exchange", "published_at": published.isoformat(),
                                 "verified_facts": [f"TWSE code {code} monthly revenue for ROC {month}: {revenue} (source-reported unit; not converted)."],
                                 "limitations": ["TWSE publication date has day precision; source units are not converted; no forecast or direction inferred."],
-                                "raw_metadata": {"source": "official TWSE open data", "report_date": row["出表日期"], "data_month": month, "raw_row": dict(row), "revenue_unit": row.get("單位", "SOURCE_REPORTED_UNIT_NOT_CONVERTED")},
+                                "raw_metadata": {"source": "official TWSE open data", "report_date": row["出表日期"], "data_month": month, "raw_row": dict(row), "revenue_unit": row.get("單位", "SOURCE_REPORTED_UNIT_NOT_CONVERTED"),
+                                                 "published_at_original": str(row["出表日期"]), "published_at_precision": "day", "published_at_timezone": "Asia/Taipei"},
                                 "research_scope": "historical_company_facts_not_catalyst",
                                 "research_id": f"twse-revenue-{code}-{month}",
                             }
