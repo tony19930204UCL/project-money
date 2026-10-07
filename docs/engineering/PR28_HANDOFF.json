@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "repository": "tony19930204UCL/project-money",
+  "pr_number": 28,
+  "branch": "fix/issue16-original-callback-position-bridge",
+  "status": "READY_FOR_REVIEW",
+  "source_head_sha": "eeb9a995ccd84ac53cac3710e19fe9a01b1b258e",
+  "summary": "Implemented Main revision for genuine official Microsoft intake through the existing official_documents parser, preserved the four-stage strict schema/authenticated receipt boundaries, added explicit model-family routing and heterogeneous challenge enforcement, persisted fail-closed fetch diagnostics/provenance, and added a genuine Microsoft public intake probe outside pytest network isolation. No merge, deploy, trading, paid fallback, fabricated model output, or global provider change.",
+  "tests": [
+    {
+      "command": "python -m pytest -q tests/test_issue16_research_acceptance.py tests/test_issue16_live_bridge.py",
+      "result": "PASS on source_head_sha in Source regression run 37690901173 (Issue 16 focused step completed successfully)."
+    },
+    {
+      "command": "python custom_scripts/issue16_public_intake_probe.py",
+      "result": "PASS on source_head_sha in Source regression run 37690901173 against genuine Microsoft FY2026 Q4 investor disclosure; fetch COMPLETED, 38 parsed parts, 37 accepted, 1 rejected by existing outbound boundary, extraction_succeeded=true."
+    },
+    {
+      "command": "python -m pytest",
+      "result": "PASS on source_head_sha in Source regression run 37690901173: 838 passed, 11 warnings."
+    },
+    {
+      "command": "frontend test command from .github/workflows/source-regression.yml",
+      "result": "PASS on source_head_sha in Source regression run 37690901173: 603 passed, 2 skipped; 71 test files passed, 1 skipped."
+    },
+    {
+      "command": "browser smoke and paper order flows from Browser regression workflow",
+      "result": "PASS on source_head_sha in Browser regression run 37690901174; sanitized browser evidence artifact uploaded."
+    }
+  ],
+  "remaining_work": [
+    "Main independent acceptance: inspect PR diff/checks at the handoff exact HEAD.",
+    "Main independent acceptance: execute genuine affected tests and authenticated four-stage original host run_case using real model outputs/receipts.",
+    "Main independent acceptance: verify private local position-contract join against canonical registry and authentic platform delivery receipt if required by scoped acceptance.",
+    "Do not merge, deploy, trade, add paid fallback, or change global provider configuration as part of this handoff."
+  ]
+}
