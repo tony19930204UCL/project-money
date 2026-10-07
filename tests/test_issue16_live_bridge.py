@@ -136,6 +136,20 @@ def test_original_entrypoint_receives_real_callbacks_and_runtime_receipts():
     result = bridge.run_original_entrypoint(original_entrypoint, symbol="MSFT", now=NOW)
     assert result["status"] == "COMPLETED_PUBLIC_RESEARCH_CANDIDATE"
     assert result["live_acceptance_claimed"] is False
+    assert [row["stage"] for row in result["callback_evidence"]] == [
+        "fetch", "discovery", "commercial", "underwriting", "challenge"
+    ]
+    discovery_evidence = result["callback_evidence"][1]
+    assert discovery_evidence["model_identity"] == "local-provider:discover-a"
+    assert discovery_evidence["runtime_receipt"] == {
+        "resolved_provider": "local-provider",
+        "resolved_model": "discover-a",
+        "auth_verified": True,
+        "is_success_response": True,
+        "is_fixture": False,
+        "returncode": 0,
+    }
+    assert result["callback_evidence"][-1]["challenge_model_distinct"] is True
 
 
 def test_original_entrypoint_missing_route_and_contract_mismatch_fail_closed():
