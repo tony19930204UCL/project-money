@@ -623,3 +623,209 @@ def test_installed_run_case_missing_entrypoint_stays_blocked_with_exact_next_act
     assert result["status"] == "BLOCKED"
     assert result["reason"] == "ORIGINAL_RESEARCH_ENGINE_ENTRYPOINT_MISSING"
     assert result["exact_next_action"] == "SUPPLY_INSTALLED_RUN_CASE_IMPORT_PATH"
+
+
+def _public_document_reader(url):
+    assert url == "https://www.microsoft.com/en-us/Investor/test"
+    return [
+        {
+            "document_part": "HTML paragraph 1",
+            "text": "Public issuer revenue and operating income disclosure for source-only contract testing.",
+        }
+    ]
+
+
+def test_original_run_case_signature_executes_fetch_generate_challenge_end_to_end():
+    bridge = OriginalResearchCallbackBridge(routes=_routes(), coordinator=FakeCoordinator())
+    seen = {}
+
+    def original_run_case(case_id, ticker, seed_urls, directory, fetch, generate, challenge, max_attempts):
+        assert case_id == "case-host-contract"
+        assert ticker == "MSFT"
+        assert directory == "/sanitized/candidate-dir"
+        assert max_attempts == 2
+
+        document = fetch(seed_urls[0])
+        assert document["source_url"] == seed_urls[0]
+        assert document["observed_at"] == NOW.isoformat()
+        assert len(document["content_sha256"]) == 64
+        assert document["content"][0]["document_part"] == "HTML paragraph 1"
+
+        discovery = generate("discovery", {
+            "documents": [document],
+            "seed_urls": seed_urls,
+        })
+        assert set(discovery) == {
+            "candidate_sources", "discovery_summary", "missing_evidence"
+        }
+
+        commercial = generate("commercial", {
+            "documents": [document],
+            "discovery": discovery,
+        })
+        assert set(commercial) == {
+            "commercial_summary", "evidence_used", "missing_evidence"
+        }
+
+        underwriting = generate("underwriting", {
+            "documents": [document],
+            "discovery": discovery,
+            "commercial": commercial,
+        })
+        assert underwriting["underwriting_status"] == "PUBLIC_EVIDENCE_READY"
+
+        challenged = challenge({
+            "documents": [document],
+            "underwriting": underwriting,
+        })
+        assert challenged["verdict"] == "PASS_PUBLIC_RESEARCH_ONLY"
+        seen["complete"] = True
+        return {
+            "status": "COMPLETED_PUBLIC_RESEARCH_CANDIDATE",
+            "underwriting_status": underwriting["underwriting_status"],
+            "challenge_verdict": challenged["verdict"],
+        }
+
+    result = bridge.run_installed_run_case(
+        original_run_case,
+        case_id="case-host-contract",
+        symbol="MSFT",
+        seed_urls=["https://www.microsoft.com/en-us/Investor/test"],
+        directory="/sanitized/candidate-dir",
+        max_attempts=2,
+        now=NOW,
+        reader=_public_document_reader,
+    )
+
+    assert seen["complete"] is True
+    assert result["status"] == "COMPLETED_PUBLIC_RESEARCH_CANDIDATE"
+    assert result["live_acceptance_claimed"] is False
+    assert [row["stage"] for row in result["callback_evidence"]] == [
+        "fetch", "discovery", "commercial", "underwriting", "challenge"
+    ]
+    assert result["callback_evidence"][3]["model_identity"] == "local-provider:underwriter-a"
+    assert result["callback_evidence"][4]["model_identity"] == "local-provider:challenger-b"
+    assert result["callback_evidence"][4]["challenge_model_distinct"] is True
+
+
+def test_original_run_case_unavailable_fetch_is_blocked_and_invocation_evidence_resets():
+    bridge = OriginalResearchCallbackBridge(routes=_routes(), coordinator=FakeCoordinator())
+
+    def successful_host(case_id, ticker, seed_urls, directory, fetch, generate, challenge, max_attempts):
+        fetch(seed_urls[0])
+        return {"status": "BLOCKED", "reason": "STOP_AFTER_FETCH"}
+
+    first = bridge.run_installed_run_case(
+        successful_host,
+        case_id="first",
+        symbol="MSFT",
+        seed_urls=["https://www.microsoft.com/en-us/Investor/test"],
+        directory="/sanitized/candidate-dir",
+        max_attempts=1,
+        now=NOW,
+        reader=_public_document_reader,
+    )
+    assert [row["stage"] for row in first["callback_evidence"]] == ["fetch"]
+
+    def unavailable_reader(url):
+        raise RuntimeError("PUBLIC_SOURCE_OFFLINE")
+
+    second = bridge.run_installed_run_case(
+        successful_host,
+        case_id="second",
+        symbol="MSFT",
+        seed_urls=["https://www.microsoft.com/en-us/Investor/test"],
+        directory="/sanitized/candidate-dir",
+        max_attempts=1,
+        now=NOW,
+        reader=unavailable_reader,
+    )
+    assert second["status"] == "BLOCKED"
+    assert "HOST_FETCH_PUBLIC_DOCUMENT_UNAVAILABLE" in second["reason"]
+    assert second["callback_evidence"] == []
+
+
+def test_original_run_case_private_public_document_is_rejected_before_model_transport():
+    bridge = OriginalResearchCallbackBridge(routes=_routes(), coordinator=FakeCoordinator())
+
+    def host(case_id, ticker, seed_urls, directory, fetch, generate, challenge, max_attempts):
+        fetch(seed_urls[0])
+        raise AssertionError("private document should not pass fetch")
+
+    result = bridge.run_installed_run_case(
+        host,
+        case_id="private-negative",
+        symbol="MSFT",
+        seed_urls=["https://www.microsoft.com/en-us/Investor/test"],
+        directory="/sanitized/candidate-dir",
+        max_attempts=1,
+        now=NOW,
+        reader=lambda url: {"private_path": "/home/user/secret.json"},
+    )
+    assert result["status"] == "BLOCKED"
+    assert "PUBLIC_OUTBOUND_FIELD_REJECTED" in result["reason"]
+    assert result["callback_evidence"] == []
+
+
+def test_original_run_case_same_model_challenge_is_blocked_using_actual_underwriting_identity():
+    routes = _routes()
+    routes["challenge"] = StageRoute(primary=_engine("challenge", {
+        "verdict": "PASS_PUBLIC_RESEARCH_ONLY",
+        "challenge_summary": "same-model challenge must be rejected",
+        "blockers": [],
+        "next_action": "CONFIGURE_DIFFERENT_MODEL",
+    }, model="underwriter-a"))
+    bridge = OriginalResearchCallbackBridge(routes=routes, coordinator=FakeCoordinator())
+
+    def host(case_id, ticker, seed_urls, directory, fetch, generate, challenge, max_attempts):
+        document = fetch(seed_urls[0])
+        discovery = generate("discovery", {"documents": [document]})
+        commercial = generate("commercial", {
+            "documents": [document], "discovery": discovery
+        })
+        underwriting = generate("underwriting", {
+            "documents": [document],
+            "discovery": discovery,
+            "commercial": commercial,
+        })
+        challenge({"documents": [document], "underwriting": underwriting})
+        raise AssertionError("same-model challenge should not return successfully")
+
+    result = bridge.run_installed_run_case(
+        host,
+        case_id="same-model-negative",
+        symbol="MSFT",
+        seed_urls=["https://www.microsoft.com/en-us/Investor/test"],
+        directory="/sanitized/candidate-dir",
+        max_attempts=2,
+        now=NOW,
+        reader=_public_document_reader,
+    )
+    assert result["status"] == "BLOCKED"
+    assert "CHALLENGE_MODEL_NOT_HETEROGENEOUS" in result["reason"]
+    challenge_evidence = result["callback_evidence"][-1]
+    assert challenge_evidence["stage"] == "challenge"
+    assert challenge_evidence["model_identity"] == "local-provider:underwriter-a"
+    assert challenge_evidence["status"] == "BLOCKED"
+
+
+def test_original_run_case_challenge_before_underwriting_is_blocked():
+    bridge = OriginalResearchCallbackBridge(routes=_routes(), coordinator=FakeCoordinator())
+
+    def host(case_id, ticker, seed_urls, directory, fetch, generate, challenge, max_attempts):
+        document = fetch(seed_urls[0])
+        challenge({"documents": [document]})
+        raise AssertionError("challenge without underwriting identity must not return")
+
+    result = bridge.run_installed_run_case(
+        host,
+        case_id="missing-underwriting-negative",
+        symbol="MSFT",
+        seed_urls=["https://www.microsoft.com/en-us/Investor/test"],
+        directory="/sanitized/candidate-dir",
+        max_attempts=1,
+        now=NOW,
+        reader=_public_document_reader,
+    )
+    assert result["status"] == "BLOCKED"
+    assert "HOST_UNDERWRITING_MODEL_IDENTITY_REQUIRED" in result["reason"]
