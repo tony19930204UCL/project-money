@@ -894,7 +894,7 @@ def test_genuine_microsoft_fetch_through_installed_candidate_pathway():
         max_attempts=1,
         now=NOW,
     )
-    assert result["status"] == "INCOMPLETE"
+    assert result["status"] == "INCOMPLETE", json.dumps(result, sort_keys=True, default=str)
     assert result["live_acceptance_claimed"] is False
     assert [row["stage"] for row in result["callback_evidence"]] == ["fetch"]
     provenance = result["callback_evidence"][0]["provenance"][0]
