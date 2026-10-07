@@ -8,6 +8,7 @@ receipt consumers without creating a second ACK store.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 from typing import Any, Callable, Mapping, Optional
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -27,6 +28,7 @@ from cio_market_lab.research.issue16_acceptance import (
 )
 from cio_market_lab.research.free_adapters import FreeSourceCoordinator
 from cio_market_lab.research.official import USER_AGENT
+from cio_market_lab.research.official_documents import MAX_BYTES as OFFICIAL_DOCUMENT_MAX_BYTES, parse_official_document
 
 
 class StageRoute(BaseModel):
@@ -34,7 +36,16 @@ class StageRoute(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
     primary: HermesLocalInference
+    primary_model_family: Optional[str] = Field(default=None, min_length=1)
     fallback: Optional[HermesLocalInference] = None
+    fallback_model_family: Optional[str] = Field(default=None, min_length=1)
+
+    def family_for(self, route_name: str) -> Optional[str]:
+        if route_name == "primary":
+            return self.primary_model_family
+        if route_name == "fallback":
+            return self.fallback_model_family
+        return None
 
 
 class OriginalHostStageOutput(BaseModel):
@@ -302,6 +313,7 @@ class OriginalResearchCallbackBridge:
                         "reason",
                         "provider",
                         "model",
+                        "model_family",
                         "returncode",
                         "auth_verified",
                         "is_success_response",
@@ -316,6 +328,7 @@ class OriginalResearchCallbackBridge:
             "reason": result.get("reason"),
             "route": result.get("route"),
             "model_identity": result.get("model_identity"),
+            "model_family": result.get("model_family"),
             "runtime_receipt": receipt_evidence,
             "attempts": attempts,
             "schema_valid": result.get("schema_valid"),
@@ -416,8 +429,8 @@ class OriginalResearchCallbackBridge:
 
 
     @staticmethod
-    def _default_public_text_reader(url: str) -> str:
-        """Bounded public HTTP(S) reader that supports HTML/text/JSON as text."""
+    def _default_public_text_reader(url: str) -> dict[str, Any]:
+        """Acquire one bounded official document for parser-backed extraction."""
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower()
         if parsed.scheme not in {"http", "https"} or not host:
@@ -428,16 +441,19 @@ class OriginalResearchCallbackBridge:
             url,
             headers={
                 "User-Agent": USER_AGENT,
-                "Accept": "text/html,application/xhtml+xml,application/json,text/plain,*/*;q=0.5",
+                "Accept": "text/html,application/xhtml+xml,application/pdf,text/plain,*/*;q=0.5",
             },
         )
         with urlopen(request, timeout=25) as response:
-            raw = response.read(250_001)
+            raw = response.read(OFFICIAL_DOCUMENT_MAX_BYTES + 1)
             if response.status != 200:
                 raise RuntimeError(f"HOST_FETCH_HTTP_{response.status}")
-            if len(raw) > 250_000:
+            if len(raw) > OFFICIAL_DOCUMENT_MAX_BYTES:
                 raise RuntimeError("HOST_FETCH_PUBLIC_DOCUMENT_OVERSIZE")
-            return raw.decode("utf-8", errors="replace")
+            return {
+                "body": raw,
+                "content_type": str(response.headers.get("Content-Type") or "application/octet-stream"),
+            }
 
     def _fetch_host_public_document(
         self,
@@ -458,40 +474,85 @@ class OriginalResearchCallbackBridge:
         if host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".local"):
             raise RuntimeError("HOST_FETCH_NONPUBLIC_HOST_REJECTED")
         _reject_private_content(url, "host_fetch.url")
-        try:
-            raw = reader(url) if callable(reader) else self._default_public_text_reader(url)
-        except Exception as exc:
-            raise RuntimeError(f"HOST_FETCH_PUBLIC_DOCUMENT_UNAVAILABLE:{type(exc).__name__}:{exc}") from exc
 
-        if isinstance(raw, bytes):
-            text_value = raw.decode("utf-8", errors="replace")
-        elif isinstance(raw, str):
-            text_value = raw
-        else:
-            import json
-            text_value = json.dumps(raw, default=str, ensure_ascii=False, sort_keys=True)
-
-        document = {
-            "url": url,
-            "text": text_value,
-            "observed_at": observed.isoformat(),
-        }
-        _reject_private_content(document, "host_fetch.document")
-        if len(text_value.encode("utf-8")) > self.max_serialized_bytes:
-            raise RuntimeError("HOST_FETCH_PUBLIC_DOCUMENT_OVERSIZE")
-
-        content_hash = _stable_hash({"url": url, "text": text_value})
-        self._record_callback_evidence({
-            "status": "COMPLETED",
+        diagnostic = {
+            "status": "BLOCKED",
             "stage": "fetch",
+            "reason": None,
             "observed_at": observed.isoformat(),
             "provenance": [{
                 "source_url": url,
                 "observed_at": observed.isoformat(),
-                "content_sha256": content_hash,
+                "content_sha256": None,
+                "extracted_content_sha256": None,
+                "extraction_succeeded": False,
             }],
-        })
-        return document
+        }
+        try:
+            acquired = reader(url) if callable(reader) else self._default_public_text_reader(url)
+            content_type = "text/html"
+            if isinstance(acquired, Mapping):
+                raw = acquired.get("body")
+                content_type = str(acquired.get("content_type") or content_type)
+            else:
+                raw = acquired
+            if isinstance(raw, str):
+                raw_bytes = raw.encode("utf-8")
+                if not raw.lstrip().startswith("<"):
+                    content_type = "text/plain"
+            elif isinstance(raw, bytes):
+                raw_bytes = raw
+            else:
+                raise RuntimeError("HOST_FETCH_PUBLIC_DOCUMENT_BODY_INVALID")
+            if len(raw_bytes) > OFFICIAL_DOCUMENT_MAX_BYTES:
+                raise RuntimeError("HOST_FETCH_PUBLIC_DOCUMENT_OVERSIZE")
+
+            raw_hash = hashlib.sha256(raw_bytes).hexdigest()
+            diagnostic["provenance"][0]["content_sha256"] = raw_hash
+            rows = parse_official_document(url, raw_bytes, content_type)
+            extracted_parts = []
+            for row in rows:
+                if not isinstance(row, Mapping):
+                    continue
+                part = str(row.get("document_part") or "").strip()
+                text = str(row.get("text") or "").strip()
+                if not text:
+                    continue
+                extracted_parts.append(f"[{part}] {text}" if part else text)
+            if not extracted_parts:
+                raise RuntimeError("HOST_FETCH_OFFICIAL_EXTRACTION_EMPTY")
+            text_value = "\n\n".join(extracted_parts)
+            _reject_private_content(text_value, "host_fetch.document.text")
+            if len(text_value.encode("utf-8")) > self.max_serialized_bytes:
+                raise RuntimeError("HOST_FETCH_EXTRACTED_DOCUMENT_OVERSIZE")
+
+            extracted_hash = hashlib.sha256(text_value.encode("utf-8")).hexdigest()
+            diagnostic = {
+                **diagnostic,
+                "status": "COMPLETED",
+                "reason": None,
+                "provenance": [{
+                    "source_url": url,
+                    "observed_at": observed.isoformat(),
+                    "content_sha256": raw_hash,
+                    "extracted_content_sha256": extracted_hash,
+                    "extraction_succeeded": True,
+                }],
+            }
+            self._record_callback_evidence(diagnostic)
+            return {
+                "url": url,
+                "text": text_value,
+                "observed_at": observed.isoformat(),
+            }
+        except Exception as exc:
+            diagnostic["reason"] = f"{type(exc).__name__}:{exc}"
+            self._record_callback_evidence(diagnostic)
+            if isinstance(exc, RuntimeError) and str(exc).startswith("HOST_FETCH_"):
+                raise
+            raise RuntimeError(
+                f"HOST_FETCH_PUBLIC_DOCUMENT_UNAVAILABLE:{type(exc).__name__}:{exc}"
+            ) from exc
 
     @staticmethod
     def _host_stage_payload(
@@ -573,8 +634,31 @@ class OriginalResearchCallbackBridge:
             }
         schema = HOST_STAGE_SCHEMAS[stage]
         attempts: list[dict[str, Any]] = []
+        if (
+            route.fallback is not None
+            and route.primary_model_family
+            and route.fallback_model_family
+            and route.primary_model_family.strip().lower() == route.fallback_model_family.strip().lower()
+        ):
+            return {
+                "status": "BLOCKED",
+                "stage": stage,
+                "reason": "INFERENCE_ROUTE_FALLBACK_MODEL_FAMILY_CONFLICT",
+                "attempts": [],
+                "observed_at": _utc(now).isoformat(),
+            }
         for route_name, engine in (("primary", route.primary), ("fallback", route.fallback)):
             if engine is None:
+                continue
+            model_family = route.family_for(route_name)
+            if not model_family:
+                attempts.append({
+                    "route": route_name,
+                    "status": "BLOCKED",
+                    "reason": "INFERENCE_MODEL_FAMILY_REQUIRED",
+                    "provider": engine.contract.provider,
+                    "model": engine.contract.model,
+                })
                 continue
             if engine.contract.is_free_or_local_authorized is not True:
                 attempts.append({
@@ -606,6 +690,7 @@ class OriginalResearchCallbackBridge:
                     "status": "COMPLETED",
                     "provider": receipt.get("resolved_provider"),
                     "model": receipt.get("resolved_model"),
+                    "model_family": model_family,
                     "returncode": receipt.get("returncode"),
                     "auth_verified": receipt.get("auth_verified"),
                     "is_success_response": receipt.get("is_success_response"),
@@ -616,6 +701,7 @@ class OriginalResearchCallbackBridge:
                     "stage": stage,
                     "route": route_name,
                     "model_identity": model_identity,
+                    "model_family": model_family,
                     "runtime_receipt": dict(receipt),
                     "schema_valid": True,
                     "input_sha256": _stable_hash(payload),
@@ -653,7 +739,7 @@ class OriginalResearchCallbackBridge:
         reader: Any = None,
     ) -> dict[str, Callable[..., dict[str, Any]]]:
         """Bind host callback arities while keeping inference identity in bridge state."""
-        underwriting_identity: dict[str, Optional[str]] = {"value": None}
+        underwriting_identity: dict[str, Optional[str]] = {"value": None, "family": None}
 
         def fetch_callback(url: str) -> dict[str, Any]:
             return self._fetch_host_public_document(url, now=now, reader=reader)
@@ -682,6 +768,7 @@ class OriginalResearchCallbackBridge:
                 if not identity:
                     raise RuntimeError("HOST_UNDERWRITING_MODEL_IDENTITY_REQUIRED")
                 underwriting_identity["value"] = identity
+                underwriting_identity["family"] = str(result.get("model_family") or "").strip() or None
             # Original run_case consumes the stage schema object, not bridge audit metadata.
             return dict(output)
 
@@ -698,17 +785,31 @@ class OriginalResearchCallbackBridge:
                     seed_urls=seed_urls,
                 )
             )
-            if result.get("status") == "COMPLETED" and result.get("model_identity") == identity:
+            underwriting_family = underwriting_identity.get("family")
+            challenge_family = str(result.get("model_family") or "").strip() or None
+            family_conflict = (
+                result.get("status") == "COMPLETED"
+                and underwriting_family is not None
+                and challenge_family is not None
+                and underwriting_family.lower() == challenge_family.lower()
+            )
+            identity_conflict = result.get("status") == "COMPLETED" and result.get("model_identity") == identity
+            if family_conflict or identity_conflict:
+                reason = (
+                    "CHALLENGE_MODEL_FAMILY_NOT_HETEROGENEOUS"
+                    if family_conflict
+                    else "CHALLENGE_MODEL_NOT_HETEROGENEOUS"
+                )
                 result = {
                     **result,
                     "status": "BLOCKED",
-                    "reason": "CHALLENGE_MODEL_NOT_HETEROGENEOUS",
+                    "reason": reason,
                     "schema_valid": False,
                 }
                 self.callback_evidence[-1] = {
                     **self.callback_evidence[-1],
                     "status": "BLOCKED",
-                    "reason": "CHALLENGE_MODEL_NOT_HETEROGENEOUS",
+                    "reason": reason,
                     "challenge_model_distinct": False,
                 }
             elif result.get("status") == "COMPLETED":
