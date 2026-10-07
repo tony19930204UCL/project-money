@@ -158,6 +158,7 @@ class HermesLocalInference:
         self.contract=contract
         self.transport=transport
         self.timeout_seconds=timeout_seconds
+        self.last_runtime_receipt: Optional[dict[str,Any]] = None
 
     def infer(self, stage: str, payload: Mapping[str,Any], schema: type[BaseModel]) -> tuple[str,dict[str,Any]]:
         if not self.contract.is_free_or_local_authorized:
@@ -205,6 +206,15 @@ class HermesLocalInference:
         if runtime.is_fixture:
             raise RuntimeError("INFERENCE_RUNTIME_UNAVAILABLE")
         parsed=schema.model_validate_json(response)
+        self.last_runtime_receipt={
+            "resolved_provider":runtime.resolved_provider,
+            "resolved_model":runtime.resolved_model,
+            "auth_verified":metadata.get("auth_verified"),
+            "is_success_response":metadata.get("is_success_response"),
+            "is_fixture":runtime.is_fixture,
+            "returncode":result["returncode"],
+            "fallback_active":metadata.get("fallback_active"),
+        }
         return f"{runtime.resolved_provider}:{runtime.resolved_model}",parsed.model_dump(mode="json")
 
 
