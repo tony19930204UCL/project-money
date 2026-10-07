@@ -84,5 +84,8 @@ jobs:
       - name: Run Issue 24 focused official baseline continuation
         run: python -m pytest -q tests/test_issue24_official_baseline_continuation.py
 
+      - name: Run Issue 18 focused obligation governance
+        run: python -m pytest -q tests/test_issue18_obligation_governance.py
+
       - name: Run portable source regression
         run: python -m pytest
