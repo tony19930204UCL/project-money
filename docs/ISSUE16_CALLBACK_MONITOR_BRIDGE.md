@@ -8,7 +8,7 @@ This PR is a **source/tests-only engineering candidate**. It does not deploy, ch
 
 - `fetch_callback`: calls the existing `FreeSourceCoordinator`, seals only public evidence, requires an official public source, and records public URL/hash/observed time.
 - `generate_callback(stage, payload)`: supports only discovery, commercial, and underwriting; each stage uses its existing strict schema and an explicit primary/fallback `StageRoute`.
-- `challenge_callback(payload, underwriting_model_identity)`: uses the challenge schema and blocks unless the authenticated resolved challenge model is genuinely different from the underwriting model.
+- `challenge_callback(payload, underwriting_model_identity)`: uses the challenge schema and blocks unless the authenticated resolved challenge model is genuinely different from the underwriting model **and model family**.
 
 Each inference path keeps the actual subprocess evidence surfaced by `HermesLocalInference`: resolved provider/model, explicit `auth_verified=true`, `is_success_response=true`, non-fixture state, and real integer return code 0. Missing routes, unauthorized routes, invalid metadata/schema, private outbound material, or a same-model challenge remain BLOCKED.
 
@@ -41,14 +41,14 @@ local directory, credentials and host authorization. If the module/adapter is
 missing or callback shapes differ, the candidate remains BLOCKED with an exact
 next action.
 
-The route JSON contains only free/local route contracts, never credentials:
+The route JSON contains only free/local route contracts, never credentials. Each stage must also declare the model family used for independence checks; a fallback must declare its own family, and a primary/fallback pair from the same family is rejected before inference:
 
 ```json
 {
-  "discovery": {"primary": {"provider":"...","model":"...","session_id":"...","workspace_root":"...","is_free_or_local_authorized":true,"purpose":"..."}, "fallback": null},
-  "commercial": {"primary": {"provider":"...","model":"...","session_id":"...","workspace_root":"...","is_free_or_local_authorized":true,"purpose":"..."}, "fallback": null},
-  "underwriting": {"primary": {"provider":"...","model":"...","session_id":"...","workspace_root":"...","is_free_or_local_authorized":true,"purpose":"..."}, "fallback": null},
-  "challenge": {"primary": {"provider":"...","model":"...","session_id":"...","workspace_root":"...","is_free_or_local_authorized":true,"purpose":"..."}, "fallback": null}
+  "discovery": {"primary": {"provider":"...","model":"...","session_id":"...","workspace_root":"...","is_free_or_local_authorized":true,"purpose":"..."}, "primary_model_family":"family-a", "fallback": null},
+  "commercial": {"primary": {"provider":"...","model":"...","session_id":"...","workspace_root":"...","is_free_or_local_authorized":true,"purpose":"..."}, "primary_model_family":"family-b", "fallback": null},
+  "underwriting": {"primary": {"provider":"...","model":"...","session_id":"...","workspace_root":"...","is_free_or_local_authorized":true,"purpose":"..."}, "primary_model_family":"family-c", "fallback": null},
+  "challenge": {"primary": {"provider":"...","model":"...","session_id":"...","workspace_root":"...","is_free_or_local_authorized":true,"purpose":"..."}, "primary_model_family":"family-d", "fallback": null}
 }
 ```
 
@@ -108,6 +108,18 @@ python3 custom_scripts/issue16_bridge_candidate.py monitor \
 Main supplies the private local registry/holdings join and genuine receipt on
 the host. Source tests use synthetic VTI contracts only and contain no client
 holdings or real delivery evidence.
+
+## Genuine Microsoft official-input intake
+
+The installed-run_case fetch adapter uses the repository's existing `official_documents` parser. Raw acquisition is bounded by that parser's official-document byte budget, not by the 250 KB outbound text budget. Only parser-produced official text/tables that pass the existing public-output validator are joined into the exact host envelope `{url,text,observed_at}`. The isolated case evidence records source URL, observation time, raw content SHA-256, extracted content SHA-256, extraction success/failure, and parser-part diagnostics. Oversize, fetch, parse, nonofficial-host, private-content, or empty-extraction failures remain fail-closed.
+
+A standalone source-CI probe exercises the genuine Microsoft FY2026 Q4 investor disclosure through the same `run_installed_run_case -> fetch` callback pathway without invoking any model:
+
+```bash
+python custom_scripts/issue16_public_intake_probe.py
+```
+
+The probe intentionally returns host terminal `INCOMPLETE` after successful fetch because inference is not invoked. It is public-input evidence only, never live inference acceptance.
 
 ## Source-only acceptance commands
 
