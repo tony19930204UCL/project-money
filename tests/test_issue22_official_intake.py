@@ -15,7 +15,12 @@ from cio_market_lab.engine.daily_research_plan import (
     semantic_research_digest,
 )
 from cio_market_lab.research.financial_periods import aligned_cash_flow_derivations
-from cio_market_lab.research.official import OfficialResearchProducer
+from cio_market_lab.research.official import (
+    OfficialResearchProducer,
+    TW_BALANCE_URL,
+    TW_FINANCIAL_URL,
+    TW_REVENUE_URL,
+)
 from cio_market_lab.research.official_documents import parse_official_document
 
 
@@ -309,3 +314,122 @@ def test_legacy_wire_hash_capture_is_not_silently_reused(tmp_path, monkeypatch):
     assert p.captures_by_url[TSMC_PDF]!=legacy
     assert rows[0].get("legacy") is None
     assert json.loads(p.captures_by_url[TSMC_PDF].read_text())["capture_schema"]=="official-document-enriched-v1"
+
+
+
+def test_taipei_current_quarter_statement_and_latest_quote_reach_authenticated_input(tmp_path, monkeypatch):
+    observed=datetime(2026,10,6,22,39,33,tzinfo=timezone.utc)  # 2026-10-07 in Taipei
+    quote={"symbol":"2330.TW","price":2585,"source":"TWSE_OPENAPI_DAILY","source_date":"2026-10-06"}
+    financial=[{
+        "公司代號":"2330","公司名稱":"台積電","出表日期":"1151007",
+        "年度":"115","季別":"2","營業收入":"1000","基本每股盈餘（元）":"4","單位":"仟元",
+    }]
+    balance=[{
+        "公司代號":"2330","出表日期":"1151007","年度":"115","季別":"2",
+        "資產總額":"9000","單位":"仟元",
+    }]
+    revenue=[{
+        "公司代號":"2330","出表日期":"1151007","資料年月":"11509",
+        "營業收入-當月營收":"200","單位":"仟元",
+    }]
+    landing=[
+        {"document_part":"HTML table 1","text":"2Q 2026 revenue, NT$ millions, quarter label preserved"},
+        {"document_part":"link","text":"Financial Statements","href":TSMC_PDF},
+    ]
+    statement_text=(
+        "NT$ millions; Three Months Ended June 30, 2026 operating cash flow 783365; "
+        "Six Months Ended June 30, 2026 operating cash flow 1482341; "
+        "capital expenditures 496002 and 846765"
+    )
+    statement=[{
+        "document_part":"PDF page 1","text":statement_text,
+        "source_url":TSMC_PDF,"document_sha256":"TEST_ONLY_SHA",
+        "observed_at":observed.isoformat(),
+        "body_provenance":"EXTRACTED_FROM_CAPTURED_WIRE_BYTES",
+    }]
+    by_url={
+        TW_FINANCIAL_URL:financial,
+        TW_BALANCE_URL:balance,
+        TW_REVENUE_URL:revenue,
+        TSMC_PAGE:landing,
+        TSMC_PDF:statement,
+    }
+
+    class Reader:
+        def add_evidence(self,row,now=None): return True,"accepted"
+
+    learning=SimpleNamespace(
+        retrieve_context_lessons=lambda **kwargs: [],
+        retrieve_past_outcomes=lambda **kwargs: [],
+    )
+    p=DailyResearchPlanProducer(
+        root=tmp_path/"research",packet_root=tmp_path/"packets",
+        session_id="TEST_ONLY",workspace_root=str(tmp_path),
+        learning_store=learning,reader=Reader(),now_fn=lambda:observed,
+    )
+    p.official.fetch_json=lambda url: by_url[url]
+
+    # Test-only raw captures mirror each official source row so the production
+    # evidence-bundle matcher is exercised without network access.
+    for url, rows in by_url.items():
+        path=p.root/"raw_official"/(hashlib.sha256(url.encode()).hexdigest()+".json")
+        path.write_text(json.dumps({
+            "source_url":url,"observed_at":observed.isoformat(),"tls_verified":True,
+            "sha256_of_wire_bytes":"TEST_ONLY","capture_schema":"TEST_ONLY",
+            "is_fixture":False,"content":rows,
+        },ensure_ascii=False))
+        p.captures_by_url[url]=path
+
+    captured={}
+    plan={
+        "thesis":"Official quarter evidence is present but this test remains research only.",
+        "valuation_scenarios":{},
+        "catalysts":[],
+        "buy_zone":None,
+        "invalidation":"Wait for additional valuation evidence before any paper action.",
+        "invalidation_condition":None,
+        "exposure_ceiling":0,
+        "stance":"WAIT",
+        "missing_evidence":["valuation evidence"],
+        "review_trigger":"Review on the next official valuation update.",
+    }
+    def fake_chat(message,*args,**kwargs):
+        captured["message"]=message
+        return {
+            "response":json.dumps(plan),"runtime_metadata":{"TEST_ONLY":True},
+            "session_id":"TEST_ONLY_AUTH","returncode":0,"is_fixture":False,
+            "failed":False,"error":None,
+        }
+    monkeypatch.setattr("cio_market_lab.integrations.hermes_chat.run_hermes_cli_chat",fake_chat)
+    monkeypatch.setattr(
+        "cio_market_lab.integrations.runtime_evidence.RuntimeEvidenceAdapter.verify_runtime_evidence",
+        lambda self,**kwargs: SimpleNamespace(
+            is_fixture=False,auth_verified=True,is_success_response=True
+        ),
+    )
+
+    result=p.refresh("2330.TW",now=observed,reference_quote=quote)
+    assert result["status"]=="AUTHENTICATED_RESEARCH_ONLY_PLAN"
+    assert statement_text in captured["message"]
+    assert '"price": 2585' in captured["message"]
+    assert '"source_date": "2026-10-06"' in captured["message"]
+
+    auth_receipts=list((p.root/"authenticated_model_receipts").glob("*.json"))
+    assert len(auth_receipts)==1
+    auth=json.loads(auth_receipts[0].read_text())
+    public_input=auth["public_model_input"]
+    assert public_input["reference_quote_for_valuation_only"]["price"]==2585
+    assert public_input["reference_quote_for_valuation_only"]["source_date"]=="2026-10-06"
+    assert any(statement_text in fact for fact in public_input["official_evidence"]["verified_facts"])
+    supplements=public_input["official_evidence"]["raw_metadata"]["supplemental_source_rows"]
+    pdf_rows=[row["raw_row"] for row in supplements if row["source_url"]==TSMC_PDF]
+    assert pdf_rows and pdf_rows[0]["body_provenance"]=="EXTRACTED_FROM_CAPTURED_WIRE_BYTES"
+    assert "Three Months Ended June 30, 2026" in pdf_rows[0]["text"]
+    assert "Six Months Ended June 30, 2026" in pdf_rows[0]["text"]
+
+    plan_receipt=json.loads(next((p.root/"authenticated_plans").glob("*.json")).read_text())
+    assert plan_receipt["public_model_input"]==public_input
+    packet=json.loads((p.packet_root/"2330.TW.json").read_text())
+    assert packet["source_url"]==TW_FINANCIAL_URL
+    assert packet["raw_metadata"]["published_at_original"]=="1151007"
+    assert packet["raw_metadata"]["published_at_timezone"]=="Asia/Taipei"
