@@ -8,7 +8,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from cio_market_lab.engine.daily_research_plan import DailyPlanJudgment, DailyResearchPlanProducer
+from cio_market_lab.engine.daily_research_plan import (
+    DailyPlanJudgment,
+    DailyResearchPlanProducer,
+    PriceInvalidationCondition,
+)
 from cio_market_lab.research.official import (
     OfficialResearchProducer,
     SEC_TICKERS_URL,
@@ -463,3 +467,63 @@ def test_schema_retry_exhaustion_fails_closed_without_plan_or_packet(tmp_path,mo
     assert not (p.root/"authenticated_plans").exists()
     failures=list((p.root/"authenticated_model_receipts").glob("*validation-failed.json"))
     assert len(failures)==2
+
+
+
+@pytest.mark.parametrize("bad_threshold",[
+    True, False, "1", "88.0", None, float("nan"), float("inf"), float("-inf"), 0, -1, -0.5,
+])
+def test_price_invalidation_condition_rejects_raw_invalid_threshold_types_and_values(bad_threshold):
+    with pytest.raises(Exception):
+        PriceInvalidationCondition.model_validate({
+            "field":"last_price","operator":"lt","threshold":bad_threshold,
+        })
+
+
+@pytest.mark.parametrize("bad_threshold",[
+    True, False, "1", "88.0", None, float("nan"), float("inf"), float("-inf"), 0, -1, -0.5,
+])
+def test_complete_daily_plan_rejects_invalid_raw_thresholds(bad_threshold):
+    with pytest.raises(Exception):
+        DailyPlanJudgment.model_validate(_base_plan(
+            stance="SCOUT_REVIEW",
+            buy_zone={"low":95.0,"high":100.0},
+            invalidation_condition={
+                "field":"last_price","operator":"lt","threshold":bad_threshold,
+            },
+            exposure_ceiling=0.01,
+            missing_evidence=[],
+        ))
+
+
+@pytest.mark.parametrize("good_threshold",[1, 88, 88.5])
+def test_price_invalidation_condition_accepts_legitimate_json_numbers(good_threshold):
+    parsed=PriceInvalidationCondition.model_validate({
+        "field":"last_price","operator":"lt","threshold":good_threshold,
+    })
+    assert parsed.threshold==float(good_threshold)
+
+
+def test_boolean_invalidation_threshold_exhausts_retry_without_armed_plan(tmp_path,monkeypatch):
+    bad=_base_plan(
+        stance="SCOUT_REVIEW",
+        buy_zone={"low":2500,"high":2600},
+        invalidation_condition={"field":"last_price","operator":"lt","threshold":True},
+        exposure_ceiling=0.01,
+        missing_evidence=[],
+    )
+    p,calls=_retry_producer(tmp_path,monkeypatch,[bad,bad])
+
+    result=p.refresh(
+        "2330.TW",now=NOW,
+        reference_quote={"symbol":"2330.TW","price":2585,"source":"TWSE_OPENAPI_DAILY","source_date":"2026-10-06"},
+    )
+    assert result["status"]=="BLOCKED_MODEL_SCHEMA_RETRY_EXHAUSTED"
+    assert result["attempts"]==2
+    assert calls["acquire"]==1
+    assert len(calls["chat"])==2
+    assert not (p.packet_root/"2330.TW.json").exists()
+    assert not (p.root/"authenticated_plans").exists()
+    failures=list((p.root/"authenticated_model_receipts").glob("*validation-failed.json"))
+    assert len(failures)==2
+    assert all("invalid invalidation threshold type" in json.loads(x.read_text())["validation_error"] for x in failures)
