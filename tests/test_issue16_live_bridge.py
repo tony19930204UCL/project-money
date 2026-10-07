@@ -86,7 +86,7 @@ def _routes():
             "candidate_sources": ["https://www.sec.gov/test"],
             "discovery_summary": "public discovery",
             "missing_evidence": [],
-        }, model="discover-a")),
+        }, model="discover-a"), primary_model_family="discovery-family"),
         "commercial": StageRoute(primary=_engine("commercial", {
             "commercial_summary": "commercial evidence",
             "evidence_used": ["official-msft-live-bridge"],
@@ -640,6 +640,7 @@ def _host_routes(
     *,
     missing_underwriting=False,
     same_challenge=False,
+    same_challenge_family=False,
     outside_seed=False,
     challenge_status="PASS",
     challenge_objections=None,
@@ -669,7 +670,9 @@ def _host_routes(
     }
     if missing_underwriting:
         underwriting.pop("financials")
-    challenge_model = "underwriter-a" if same_challenge else "challenger-b"
+    challenge_model = "underwriter-a" if same_challenge else ("nemotron-variant-b" if same_challenge_family else "challenger-b")
+    underwriting_family = "nemotron" if same_challenge_family else "underwriting-family"
+    challenge_family = "nemotron" if same_challenge_family else ("underwriting-family" if same_challenge else "challenge-family")
     challenge_output = {
         "status": challenge_status,
         "reason": (
@@ -695,17 +698,17 @@ def _host_routes(
             "status": "PASS",
             "reason": "commercial review completed from public seed source",
             "source_urls": source_urls,
-        }, model="commercial-a")),
+        }, model="commercial-a"), primary_model_family="commercial-family"),
         "underwriting": StageRoute(primary=_engine(
             "underwriting",
             underwriting,
             model="underwriter-a",
-        )),
+        ), primary_model_family=underwriting_family),
         "challenge": StageRoute(primary=_engine(
             "challenge",
             challenge_output,
             model=challenge_model,
-        )),
+        ), primary_model_family=challenge_family),
     }
 
 
@@ -838,9 +841,15 @@ def _faithful_original_run_case(
     )
 
 
-def test_default_public_reader_handles_html_text(monkeypatch):
+def test_default_public_reader_uses_official_document_byte_budget(monkeypatch):
+    class FakeHeaders:
+        def get(self, key):
+            assert key == "Content-Type"
+            return "text/html; charset=utf-8"
+
     class FakeResponse:
         status = 200
+        headers = FakeHeaders()
 
         def __enter__(self):
             return self
@@ -849,12 +858,114 @@ def test_default_public_reader_handles_html_text(monkeypatch):
             return False
 
         def read(self, limit):
-            assert limit == 250001
-            return b"<html><body>issuer disclosure</body></html>"
+            assert limit == live_bridge.OFFICIAL_DOCUMENT_MAX_BYTES + 1
+            return b"<html><body><p>Issuer revenue and operating income disclosure.</p></body></html>"
 
     monkeypatch.setattr(live_bridge, "urlopen", lambda request, timeout: FakeResponse())
-    text = OriginalResearchCallbackBridge._default_public_text_reader(SEED_URL)
-    assert text == "<html><body>issuer disclosure</body></html>"
+    acquired = OriginalResearchCallbackBridge._default_public_text_reader(SEED_URL)
+    assert acquired["content_type"].startswith("text/html")
+    assert acquired["body"].startswith(b"<html>")
+
+
+def test_host_fetch_parses_genuine_microsoft_style_html_and_records_dual_hash_provenance():
+    bridge = OriginalResearchCallbackBridge(routes=_host_routes(), coordinator=FakeCoordinator())
+    raw = (
+        b"<html><body>"
+        b"<p>Microsoft revenue increased while operating income also increased according to the official quarterly disclosure.</p>"
+        b"<table><tr><th>Revenue</th><th>Operating income</th></tr><tr><td>100</td><td>50</td></tr></table>"
+        b"</body></html>"
+    )
+    result = bridge._fetch_host_public_document(
+        SEED_URL,
+        now=NOW,
+        reader=lambda url: {"body": raw, "content_type": "text/html"},
+    )
+    assert set(result) == {"url", "text", "observed_at"}
+    assert "Microsoft revenue increased" in result["text"]
+    assert "Revenue" in result["text"]
+    evidence = bridge.callback_evidence[-1]
+    assert evidence["status"] == "COMPLETED"
+    provenance = evidence["provenance"][0]
+    assert provenance["source_url"] == SEED_URL
+    assert provenance["extraction_succeeded"] is True
+    assert len(provenance["content_sha256"]) == 64
+    assert len(provenance["extracted_content_sha256"]) == 64
+    assert provenance["content_sha256"] != provenance["extracted_content_sha256"]
+
+
+def test_host_fetch_actual_oversized_html_fixture_fails_closed_and_keeps_failure_diagnostic():
+    bridge = OriginalResearchCallbackBridge(routes=_host_routes(), coordinator=FakeCoordinator())
+    raw = b"<html><body>" + (b"x" * live_bridge.OFFICIAL_DOCUMENT_MAX_BYTES) + b"</body></html>"
+    try:
+        bridge._fetch_host_public_document(
+            SEED_URL,
+            now=NOW,
+            reader=lambda url: {"body": raw, "content_type": "text/html"},
+        )
+    except RuntimeError as exc:
+        assert "HOST_FETCH_PUBLIC_DOCUMENT_OVERSIZE" in str(exc)
+    else:
+        raise AssertionError("oversized official HTML must fail closed")
+    evidence = bridge.callback_evidence[-1]
+    assert evidence["status"] == "BLOCKED"
+    assert "HOST_FETCH_PUBLIC_DOCUMENT_OVERSIZE" in evidence["reason"]
+    assert evidence["provenance"][0]["extraction_succeeded"] is False
+
+
+def test_host_fetch_nonofficial_host_rejected_by_existing_official_parser_with_diagnostic():
+    bridge = OriginalResearchCallbackBridge(routes=_host_routes(), coordinator=FakeCoordinator())
+    nonofficial = "https://example.com/investor/earnings"
+    try:
+        bridge._fetch_host_public_document(
+            nonofficial,
+            now=NOW,
+            reader=lambda url: {
+                "body": b"<html><body><p>Revenue disclosure text from a nonofficial host must not pass.</p></body></html>",
+                "content_type": "text/html",
+            },
+        )
+    except RuntimeError as exc:
+        assert "UNAPPROVED_DISCLOSURE_HOST" in str(exc)
+    else:
+        raise AssertionError("nonofficial disclosure host must fail closed")
+    evidence = bridge.callback_evidence[-1]
+    assert evidence["status"] == "BLOCKED"
+    assert "UNAPPROVED_DISCLOSURE_HOST" in evidence["reason"]
+
+
+def test_host_route_fallback_same_family_is_rejected_before_inference():
+    primary = _engine("challenge", {
+        "status": "PASS",
+        "reason": "primary challenge",
+        "source_urls": [SEED_URL],
+        "objections": ["primary"],
+    }, model="nemotron-a")
+    fallback = _engine("challenge", {
+        "status": "PASS",
+        "reason": "fallback challenge",
+        "source_urls": [SEED_URL],
+        "objections": ["fallback"],
+    }, model="nemotron-b")
+    bridge = OriginalResearchCallbackBridge(
+        routes={
+            "challenge": StageRoute(
+                primary=primary,
+                primary_model_family="nemotron",
+                fallback=fallback,
+                fallback_model_family="nemotron",
+            )
+        },
+        coordinator=FakeCoordinator(),
+    )
+    result = bridge._infer_host_route(
+        "challenge",
+        {"documents": []},
+        now=NOW,
+        seed_urls=[SEED_URL],
+    )
+    assert result["status"] == "BLOCKED"
+    assert result["reason"] == "INFERENCE_ROUTE_FALLBACK_MODEL_FAMILY_CONFLICT"
+    assert result["attempts"] == []
 
 
 def test_original_run_case_faithful_contract_executes_all_five_stages():
@@ -1222,11 +1333,45 @@ def test_original_run_case_private_public_document_is_rejected_before_model_tran
         directory="/sanitized/candidate-dir",
         max_attempts=1,
         now=NOW,
-        reader=lambda url: "private runtime path /home/user/secret.json",
+        reader=lambda url: "<html><body><p>Official revenue disclosure references private runtime path /home/user/secret.json and must be rejected.</p></body></html>",
     )
     assert result["status"] == "BLOCKED"
     assert "PUBLIC_OUTBOUND_VALUE_REJECTED" in result["reason"]
     assert result["callback_evidence"] == []
+
+
+def test_original_run_case_same_model_family_challenge_is_blocked_even_when_model_names_differ():
+    bridge = OriginalResearchCallbackBridge(
+        routes=_host_routes(same_challenge_family=True),
+        coordinator=FakeCoordinator(),
+    )
+
+    def host(case_id, ticker, seed_urls, directory, fetch, generate, challenge, max_attempts):
+        document = fetch(seed_urls[0])
+        discovery = generate("discovery", {"documents": [document]})
+        commercial = generate("commercial", {"documents": [document], "discovery": discovery})
+        underwriting = generate("underwriting", {
+            "documents": [document],
+            "discovery": discovery,
+            "commercial": commercial,
+        })
+        challenge({"documents": [document], "underwriting": underwriting})
+        raise AssertionError("same-family challenge should not return successfully")
+
+    result = bridge.run_installed_run_case(
+        host,
+        case_id="same-family-negative",
+        symbol="MSFT",
+        seed_urls=[SEED_URL],
+        directory="/sanitized/candidate-dir",
+        max_attempts=1,
+        now=NOW,
+        reader=_public_document_reader,
+    )
+    assert result["status"] == "BLOCKED"
+    assert "CHALLENGE_MODEL_FAMILY_NOT_HETEROGENEOUS" in result["reason"]
+    assert result["callback_evidence"][-1]["challenge_model_distinct"] is False
+    assert result["callback_evidence"][-1]["model_family"] == "nemotron"
 
 
 def test_original_run_case_same_model_challenge_is_blocked_using_actual_underwriting_identity():
