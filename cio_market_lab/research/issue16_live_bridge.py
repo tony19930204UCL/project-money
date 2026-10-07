@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Optional
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -24,6 +25,7 @@ from cio_market_lab.research.issue16_acceptance import (
     _utc,
 )
 from cio_market_lab.research.free_adapters import FreeSourceCoordinator
+from cio_market_lab.research.official import _public_json
 
 
 class StageRoute(BaseModel):
@@ -329,7 +331,11 @@ class OriginalResearchCallbackBridge:
             }
         self.callback_evidence = []
         self.callback_evidence = []
-        callbacks = self.callbacks()
+        callbacks = self._installed_run_case_callbacks(
+            symbol=symbol,
+            now=now,
+            reader=reader,
+        )
         try:
             result = entrypoint(
                 symbol=symbol,
@@ -371,6 +377,124 @@ class OriginalResearchCallbackBridge:
         output["callback_evidence"] = list(self.callback_evidence)
         return output
 
+
+    def _fetch_host_public_document(
+        self,
+        url: str,
+        *,
+        now: datetime,
+        reader: Any = None,
+    ) -> dict[str, Any]:
+        """Adapt original host fetch(url) into a bounded public-document envelope."""
+        observed = _utc(now)
+        if not isinstance(url, str) or not url.strip():
+            raise RuntimeError("HOST_FETCH_URL_REQUIRED")
+        parsed = urlparse(url.strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise RuntimeError("HOST_FETCH_PUBLIC_HTTP_URL_REQUIRED")
+        _reject_private_content(url, "host_fetch.url")
+        try:
+            raw = reader(url) if callable(reader) else _public_json(url)
+        except Exception as exc:
+            raise RuntimeError(f"HOST_FETCH_PUBLIC_DOCUMENT_UNAVAILABLE:{type(exc).__name__}:{exc}") from exc
+        document = {
+            "source_url": url,
+            "observed_at": observed.isoformat(),
+            "content_sha256": _stable_hash(raw),
+            "content": raw,
+        }
+        _reject_private_content(document, "host_fetch.document")
+        encoded = __import__("json").dumps(
+            document, default=str, ensure_ascii=False
+        ).encode()
+        if len(encoded) > self.max_serialized_bytes:
+            raise RuntimeError("HOST_FETCH_PUBLIC_DOCUMENT_OVERSIZE")
+        evidence = {
+            "status": "COMPLETED",
+            "stage": "fetch",
+            "observed_at": observed.isoformat(),
+            "provenance": [{
+                "source_url": url,
+                "observed_at": observed.isoformat(),
+                "content_sha256": document["content_sha256"],
+            }],
+        }
+        self._record_callback_evidence(evidence)
+        return document
+
+    @staticmethod
+    def _host_stage_payload(
+        stage: str,
+        payload: Mapping[str, Any],
+        *,
+        symbol: str,
+    ) -> dict[str, Any]:
+        if not isinstance(payload, Mapping):
+            raise RuntimeError(f"HOST_{stage.upper()}_PAYLOAD_MAPPING_REQUIRED")
+        normalized = dict(payload)
+        normalized.setdefault("symbol", symbol)
+        _reject_private_content(normalized, f"host_{stage}.payload")
+        return normalized
+
+    def _installed_run_case_callbacks(
+        self,
+        *,
+        symbol: str,
+        now: datetime,
+        reader: Any = None,
+    ) -> dict[str, Callable[..., dict[str, Any]]]:
+        """Bind host callback arities while keeping inference identity in bridge state."""
+        underwriting_identity: dict[str, Optional[str]] = {"value": None}
+
+        def fetch_callback(url: str) -> dict[str, Any]:
+            return self._fetch_host_public_document(url, now=now, reader=reader)
+
+        def generate_callback(stage: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+            normalized = self._host_stage_payload(stage, payload, symbol=symbol)
+            result = self._record_callback_evidence(
+                self.generate(stage, normalized, now=now)
+            )
+            if result.get("status") != "COMPLETED":
+                raise RuntimeError(
+                    f"HOST_{str(stage).upper()}_CALLBACK_BLOCKED:{result.get('reason','UNKNOWN')}"
+                )
+            output = result.get("output")
+            if not isinstance(output, Mapping):
+                raise RuntimeError(f"HOST_{str(stage).upper()}_OUTPUT_ENVELOPE_INVALID")
+            if stage == "underwriting":
+                identity = str(result.get("model_identity") or "").strip()
+                if not identity:
+                    raise RuntimeError("HOST_UNDERWRITING_MODEL_IDENTITY_REQUIRED")
+                underwriting_identity["value"] = identity
+            # Original run_case consumes the stage schema object, not bridge audit metadata.
+            return dict(output)
+
+        def challenge_callback(payload: Mapping[str, Any]) -> dict[str, Any]:
+            identity = underwriting_identity["value"]
+            if not identity:
+                raise RuntimeError("HOST_UNDERWRITING_MODEL_IDENTITY_REQUIRED")
+            normalized = self._host_stage_payload("challenge", payload, symbol=symbol)
+            result = self._record_callback_evidence(
+                self.challenge(
+                    normalized,
+                    now=now,
+                    underwriting_model_identity=identity,
+                )
+            )
+            if result.get("status") != "COMPLETED":
+                raise RuntimeError(
+                    f"HOST_CHALLENGE_CALLBACK_BLOCKED:{result.get('reason','UNKNOWN')}"
+                )
+            output = result.get("output")
+            if not isinstance(output, Mapping):
+                raise RuntimeError("HOST_CHALLENGE_OUTPUT_ENVELOPE_INVALID")
+            return dict(output)
+
+        return {
+            "fetch": fetch_callback,
+            "generate": generate_callback,
+            "challenge": challenge_callback,
+        }
 
     def run_installed_run_case(
         self,
@@ -420,6 +544,16 @@ class OriginalResearchCallbackBridge:
                 "owner": "MAIN_CIO",
                 "exact_next_action": "MAIN_MAP_INSTALLED_RUN_CASE_CALLBACK_SHAPES",
                 "live_acceptance_claimed": False,
+                "callback_evidence": list(self.callback_evidence),
+            }
+        except (RuntimeError, ValueError) as exc:
+            return {
+                "status": "BLOCKED",
+                "reason": f"ORIGINAL_RUN_CASE_CALLBACK_BLOCKED:{exc}",
+                "owner": "MAIN_CIO",
+                "exact_next_action": "RESTORE_AUTHORIZED_PUBLIC_CALLBACK_PREREQUISITE",
+                "live_acceptance_claimed": False,
+                "callback_evidence": list(self.callback_evidence),
             }
         if not isinstance(result, Mapping):
             return {
