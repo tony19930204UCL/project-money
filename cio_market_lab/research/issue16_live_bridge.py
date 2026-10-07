@@ -295,6 +295,80 @@ class OriginalResearchCallbackBridge:
         return output
 
 
+    def run_installed_run_case(
+        self,
+        entrypoint: Optional[Callable[..., Any]],
+        *,
+        case_id: str,
+        symbol: str,
+        seed_urls: list[str],
+        directory: str,
+        max_attempts: int,
+        now: datetime,
+        reader: Any = None,
+    ) -> dict[str, Any]:
+        """Map the observed installed run_case contract without inventing a host module."""
+        if not callable(entrypoint):
+            return {
+                "status": "BLOCKED",
+                "reason": "ORIGINAL_RESEARCH_ENGINE_ENTRYPOINT_MISSING",
+                "owner": "MAIN_CIO",
+                "exact_next_action": "SUPPLY_INSTALLED_RUN_CASE_IMPORT_PATH",
+                "live_acceptance_claimed": False,
+            }
+        if not case_id.strip() or not symbol.strip() or not seed_urls or max_attempts < 1:
+            return {
+                "status": "BLOCKED",
+                "reason": "ORIGINAL_RUN_CASE_HOST_MAPPING_ARGUMENTS_INVALID",
+                "owner": "MAIN_CIO",
+                "exact_next_action": "SUPPLY_CASE_ID_TICKER_SEED_URLS_DIRECTORY_AND_MAX_ATTEMPTS",
+                "live_acceptance_claimed": False,
+            }
+        callbacks = self.callbacks()
+        try:
+            result = entrypoint(
+                case_id=case_id,
+                ticker=symbol,
+                seed_urls=list(seed_urls),
+                directory=directory,
+                fetch=callbacks["fetch"],
+                generate=callbacks["generate"],
+                challenge=callbacks["challenge"],
+                max_attempts=max_attempts,
+            )
+        except TypeError as exc:
+            return {
+                "status": "BLOCKED",
+                "reason": f"ORIGINAL_RUN_CASE_CALLBACK_CONTRACT_MISMATCH:{exc}",
+                "owner": "MAIN_CIO",
+                "exact_next_action": "MAIN_MAP_INSTALLED_RUN_CASE_CALLBACK_SHAPES",
+                "live_acceptance_claimed": False,
+            }
+        if not isinstance(result, Mapping):
+            return {
+                "status": "BLOCKED",
+                "reason": "ORIGINAL_ENTRYPOINT_RESULT_INVALID",
+                "owner": "MAIN_CIO",
+                "live_acceptance_claimed": False,
+            }
+        try:
+            _reject_private_content(result)
+        except ValueError as exc:
+            return {
+                "status": "BLOCKED",
+                "reason": f"ORIGINAL_ENTRYPOINT_RESULT_PRIVATE:{exc}",
+                "owner": "MAIN_CIO",
+                "live_acceptance_claimed": False,
+            }
+        output = dict(result)
+        output.setdefault("live_acceptance_claimed", False)
+        output.setdefault("owner", "MAIN_CIO")
+        output.setdefault("host_mapping_contract", "run_case_v1")
+        output.setdefault("host_mapping_signature", "run_case(case_id,ticker,seed_urls,directory,fetch,generate,challenge,max_attempts)")
+        output.setdefault("host_mapping_observed_at", _utc(now).isoformat())
+        return output
+
+
 class PositionMonitorContract(BaseModel):
     """Sanitized local monitor contract; holdings/account fields are intentionally absent."""
 
@@ -309,7 +383,12 @@ class PositionMonitorContract(BaseModel):
 
 
 class LocalPositionReceiptBridge:
-    """Bridge a caller-supplied local contract registry to existing consumers."""
+    """Bridge a caller-supplied local contract registry to existing consumers.
+
+    Pending delivery reconciliation is independent from the current quote and
+    current registry. Pending rows store only sanitized immutable receipt
+    linkage plus the original versioned monitor identity.
+    """
 
     def __init__(
         self,
@@ -345,7 +424,22 @@ class LocalPositionReceiptBridge:
             seen.add(key)
         return contracts
 
-    def _pending_identity(self, contract: PositionMonitorContract, monitor_row: Mapping[str, Any]) -> str:
+    def _expected_snapshot(self, expected: Mapping[str, Any]) -> dict[str, str]:
+        snapshot: dict[str, str] = {}
+        for key in DeliveryReceiptConsumer.REQUIRED_LINKS:
+            value = expected.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"EXPECTED_RECEIPT_LINKAGE_INVALID:{key}")
+            snapshot[key] = value.strip()
+        _reject_private_content(snapshot)
+        return snapshot
+
+    def _pending_identity(
+        self,
+        contract: PositionMonitorContract,
+        monitor_row: Mapping[str, Any],
+        expected: Mapping[str, Any],
+    ) -> str:
         return _stable_hash(
             {
                 "contract_id": contract.contract_id,
@@ -353,14 +447,23 @@ class LocalPositionReceiptBridge:
                 "condition_version": contract.condition_version,
                 "observation_identity": contract.observation_identity,
                 "stable_identity": monitor_row.get("stable_identity"),
-                "expected_receipt": contract.expected_receipt,
+                "expected_receipt": self._expected_snapshot(expected),
             }
         )
 
-    def _persist_pending_once(self, identity: str, contract: PositionMonitorContract) -> None:
-        for row in self.history.history():
-            if row.get("kind") == "MONITOR_PENDING_RECEIPT" and row.get("pending_identity") == identity:
-                return
+    def _persist_pending_once(
+        self,
+        identity: str,
+        contract: PositionMonitorContract,
+        expected: Mapping[str, Any],
+        monitor_row: Mapping[str, Any],
+    ) -> None:
+        if any(
+            row.get("kind") == "MONITOR_PENDING_RECEIPT"
+            and row.get("pending_identity") == identity
+            for row in self.history.history()
+        ):
+            return
         self.history.append(
             {
                 "kind": "MONITOR_PENDING_RECEIPT",
@@ -369,11 +472,108 @@ class LocalPositionReceiptBridge:
                 "condition_id": contract.condition_id,
                 "condition_version": contract.condition_version,
                 "observation_identity": contract.observation_identity,
+                "monitor_stable_identity": monitor_row.get("stable_identity"),
+                "expected_receipt": self._expected_snapshot(expected),
             }
         )
 
+    def _mark_resolved_once(self, pending_identity: str, delivery: Mapping[str, Any]) -> None:
+        if any(
+            row.get("kind") == "MONITOR_PENDING_RESOLVED"
+            and row.get("pending_identity") == pending_identity
+            for row in self.history.history()
+        ):
+            return
+        self.history.append(
+            {
+                "kind": "MONITOR_PENDING_RESOLVED",
+                "pending_identity": pending_identity,
+                "receipt_identity": delivery.get("receipt_identity"),
+            }
+        )
+
+    def _unresolved_pending(self) -> list[dict[str, Any]]:
+        rows = self.history.history()
+        resolved = {
+            row.get("pending_identity")
+            for row in rows
+            if row.get("kind") == "MONITOR_PENDING_RESOLVED"
+        }
+        return [
+            dict(row)
+            for row in rows
+            if row.get("kind") == "MONITOR_PENDING_RECEIPT"
+            and row.get("pending_identity") not in resolved
+        ]
+
+    def _replay_pending(self) -> dict[str, Any]:
+        attempts: list[dict[str, Any]] = []
+        for row in self._unresolved_pending():
+            pending_identity = str(row.get("pending_identity") or "")
+            expected = row.get("expected_receipt")
+            if not isinstance(expected, Mapping):
+                attempts.append(
+                    {
+                        "pending_identity": pending_identity,
+                        "status": "BLOCKED",
+                        "reason": "PENDING_EXPECTED_RECEIPT_LINKAGE_MISSING",
+                    }
+                )
+                continue
+            try:
+                snapshot = self._expected_snapshot(expected)
+            except ValueError as exc:
+                attempts.append(
+                    {
+                        "pending_identity": pending_identity,
+                        "status": "BLOCKED",
+                        "reason": f"{type(exc).__name__}:{exc}",
+                    }
+                )
+                continue
+            receipt = self.receipt_provider(snapshot)
+            delivery = self.receipt_consumer.consume(snapshot, receipt)
+            attempts.append(
+                {
+                    "pending_identity": pending_identity,
+                    "status": delivery.get("status"),
+                    "acknowledged": delivery.get("acknowledged") is True,
+                    "reason": delivery.get("reason"),
+                    "receipt_identity": delivery.get("receipt_identity"),
+                }
+            )
+            if delivery.get("acknowledged") is True:
+                self._mark_resolved_once(pending_identity, delivery)
+        return {
+            "attempted": len(attempts),
+            "resolved": sum(1 for row in attempts if row.get("acknowledged") is True),
+            "attempts": attempts,
+        }
+
+    def _pending_public_rows(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "pending_identity": row.get("pending_identity"),
+                "contract_id": row.get("contract_id"),
+                "condition_id": row.get("condition_id"),
+                "condition_version": row.get("condition_version"),
+                "observation_identity": row.get("observation_identity"),
+            }
+            for row in self._unresolved_pending()
+        ]
+
     def evaluate(self, *, now: datetime) -> dict[str, Any]:
         observed = _utc(now)
+
+        # Replay historical pending receipts before current registry/quote
+        # evaluation. This never re-evaluates or resends an old capital action.
+        replay = self._replay_pending()
+        replay_by_identity = {
+            row["pending_identity"]: row
+            for row in replay["attempts"]
+            if row.get("acknowledged") is True
+        }
+
         try:
             contracts = self._contracts()
         except (ValidationError, ValueError) as exc:
@@ -381,7 +581,10 @@ class LocalPositionReceiptBridge:
                 "status": "BLOCKED",
                 "reason": f"{type(exc).__name__}:{exc}",
                 "results": [],
+                "pending_replay": replay,
+                "pending_receipts": self._pending_public_rows(),
                 "private_positions_exported": False,
+                "ack_store": "CIOSessionHistory/DeliveryReceiptConsumer",
             }
 
         results: list[dict[str, Any]] = []
@@ -433,40 +636,54 @@ class LocalPositionReceiptBridge:
                     "monitor_stable_identity": monitor_row.get("stable_identity"),
                 }
             )
-            delivery = {
+            delivery: dict[str, Any] = {
                 "status": "NOT_TRIGGERED",
                 "acknowledged": False,
                 "replay_permitted": False,
             }
+
             if monitor_row.get("triggered") is True and contract.expected_receipt is not None:
-                expected = dict(contract.expected_receipt)
-                receipt = self.receipt_provider(expected)
-                delivery = self.receipt_consumer.consume(expected, receipt)
-                pending_identity = self._pending_identity(contract, monitor_row)
-                if delivery.get("acknowledged") is not True:
-                    self._persist_pending_once(pending_identity, contract)
+                try:
+                    expected = self._expected_snapshot(contract.expected_receipt)
+                    pending_identity = self._pending_identity(contract, monitor_row, expected)
+                except ValueError as exc:
                     delivery = {
-                        **delivery,
-                        "pending_receipt": True,
-                        "pending_identity": pending_identity,
+                        "status": "UNKNOWN",
+                        "acknowledged": False,
+                        "replay_permitted": False,
+                        "reason": f"{type(exc).__name__}:{exc}",
                     }
                 else:
-                    pending_rows = [
-                        row for row in self.history.history()
-                        if row.get("kind") == "MONITOR_PENDING_RECEIPT"
-                        and row.get("pending_identity") == pending_identity
-                    ]
-                    resolved_rows = [
-                        row for row in self.history.history()
-                        if row.get("kind") == "MONITOR_PENDING_RESOLVED"
-                        and row.get("pending_identity") == pending_identity
-                    ]
-                    if pending_rows and not resolved_rows:
-                        self.history.append({
-                            "kind": "MONITOR_PENDING_RESOLVED",
+                    if pending_identity in replay_by_identity:
+                        prior = replay_by_identity[pending_identity]
+                        delivery = {
+                            "status": "ACKNOWLEDGED_REPLAY",
+                            "acknowledged": True,
+                            "replay_permitted": False,
+                            "receipt_identity": prior.get("receipt_identity"),
                             "pending_identity": pending_identity,
-                            "receipt_identity": delivery.get("receipt_identity"),
-                        })
+                        }
+                    else:
+                        receipt = self.receipt_provider(expected)
+                        delivery = self.receipt_consumer.consume(expected, receipt)
+                        if delivery.get("acknowledged") is not True:
+                            self._persist_pending_once(
+                                pending_identity,
+                                contract,
+                                expected,
+                                monitor_row,
+                            )
+                            delivery = {
+                                **delivery,
+                                "pending_receipt": True,
+                                "pending_identity": pending_identity,
+                            }
+                        elif any(
+                            row.get("kind") == "MONITOR_PENDING_RECEIPT"
+                            and row.get("pending_identity") == pending_identity
+                            for row in self.history.history()
+                        ):
+                            self._mark_resolved_once(pending_identity, delivery)
 
             results.append(
                 {
@@ -480,32 +697,12 @@ class LocalPositionReceiptBridge:
                 }
             )
 
-        rows = self.history.history()
-        resolved = {
-            row.get("pending_identity")
-            for row in rows
-            if row.get("kind") == "MONITOR_PENDING_RESOLVED"
-        }
-        pending = [
-            row
-            for row in rows
-            if row.get("kind") == "MONITOR_PENDING_RECEIPT"
-            and row.get("pending_identity") not in resolved
-        ]
         return {
             "status": "EVALUATED",
             "vti_contract_covered": any(c.symbol.upper() == "VTI" for c in contracts),
             "results": results,
-            "pending_receipts": [
-                {
-                    "pending_identity": row.get("pending_identity"),
-                    "contract_id": row.get("contract_id"),
-                    "condition_id": row.get("condition_id"),
-                    "condition_version": row.get("condition_version"),
-                    "observation_identity": row.get("observation_identity"),
-                }
-                for row in pending
-            ],
+            "pending_replay": replay,
+            "pending_receipts": self._pending_public_rows(),
             "private_positions_exported": False,
             "ack_store": "CIOSessionHistory/DeliveryReceiptConsumer",
         }
