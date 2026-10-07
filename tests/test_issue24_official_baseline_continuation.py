@@ -14,6 +14,7 @@ from cio_market_lab.research.official import (
     SEC_TICKERS_URL,
     TW_FINANCIAL_URL,
 )
+from cio_market_lab.research.browser import validate_and_sanitize_evidence
 
 NOW=datetime(2026,10,7,1,0,tzinfo=timezone.utc)
 CURRENT_PAGE="https://investor.tsmc.com/english/quarterly-results/2026/q2"
@@ -195,6 +196,7 @@ def test_authenticated_consumer_path_carries_current_annual_quote_and_keeps_old_
         "limitations":[],"research_scope":"historical_company_facts_not_catalyst",
         "research_id":"twse-financial-2330-115-Q2",
         "raw_metadata":{
+            "source":"official TWSE financial statements",
             "raw_row":{"公司代號":"2330","出表日期":"1151007","年度":"115","季別":"2","營業收入":"1000"},
             "supplemental_source_rows":[
                 {"source_url":CURRENT_PDF,"raw_row":current_pdf,"disclosure_role":"current","period":"2026-Q2"},
@@ -257,6 +259,7 @@ def test_authenticated_consumer_path_carries_current_annual_quote_and_keeps_old_
     old_bytes=old_plan.read_bytes()
     receipt=json.loads(old_plan.read_text())
     public_input=receipt["public_model_input"]
+    assert public_input["official_evidence"]["raw_metadata"]["source"]=="official TWSE financial statements"
     facts="\n".join(public_input["official_evidence"]["verified_facts"])
     assert current_pdf["text"] in facts and annual_pdf["text"] in facts
     assert public_input["reference_quote_for_valuation_only"]["price"]==2585
@@ -264,3 +267,28 @@ def test_authenticated_consumer_path_carries_current_annual_quote_and_keeps_old_
     second=p.refresh("2330.TW",now=NOW,reference_quote=quote)
     assert second["status"]=="CACHED_IMMUTABLE_PLAN"
     assert old_plan.read_bytes()==old_bytes
+    reloaded=json.loads(old_plan.read_text())
+    assert reloaded["public_model_input"]["official_evidence"]["raw_metadata"]["source"]=="official TWSE financial statements"
+
+
+def test_historical_scope_missing_official_source_provenance_remains_rejected():
+    evidence={
+        "symbol":"2330.TW",
+        "source_url":TW_FINANCIAL_URL,
+        "source_tier":"official_exchange",
+        "published_at":"2026-10-07T00:00:00+08:00",
+        "observed_at":NOW.isoformat(),
+        "verification_status":"verified",
+        "verified_facts":["TWSE historical fact"],
+        "limitations":[],
+        "research_scope":"historical_company_facts_not_catalyst",
+        "research_id":"TEST_ONLY_MISSING_PROVENANCE",
+        "raw_metadata":{
+            "raw_row":{"公司代號":"2330","出表日期":"1151007","年度":"115","季別":"2"},
+        },
+        "is_fixture":False,
+    }
+    ok,sanitized,reason=validate_and_sanitize_evidence(evidence,now=NOW)
+    assert ok is False
+    assert sanitized is None
+    assert reason=="REJECTED_HISTORICAL_SCOPE_PROVENANCE"
