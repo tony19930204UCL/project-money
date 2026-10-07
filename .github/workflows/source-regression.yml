@@ -87,5 +87,8 @@ jobs:
       - name: Run Issue 18 focused obligation governance
         run: python -m pytest -q tests/test_issue18_obligation_governance.py
 
+      - name: Run Issue 16 focused research callback and receipt monitor bridge
+        run: python -m pytest -q tests/test_issue16_research_acceptance.py
+
       - name: Run portable source regression
         run: python -m pytest
