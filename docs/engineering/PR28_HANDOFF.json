@@ -3,7 +3,7 @@
   "repository": "tony19930204UCL/project-money",
   "pr_number": 28,
   "branch": "fix/issue16-original-callback-position-bridge",
-  "status": "WAITING_CI",
+  "status": "READY_FOR_REVIEW",
   "source_head_sha": "eeb9a995ccd84ac53cac3710e19fe9a01b1b258e",
   "summary": "Implemented Main revision for genuine official Microsoft intake through the existing official_documents parser, preserved the four-stage strict schema/authenticated receipt boundaries, added explicit model-family routing and heterogeneous challenge enforcement, persisted fail-closed fetch diagnostics/provenance, and added a genuine Microsoft public intake probe outside pytest network isolation. No merge, deploy, trading, paid fallback, fabricated model output, or global provider change.",
   "tests": [
@@ -29,8 +29,8 @@
     }
   ],
   "remaining_work": [
-    "Exact-head CI for handoff commit 0c982fdcc9f97e12d053992615da8755f6fe0bd0 has not appeared yet; Main should continue only after a later explicit message triggers re-check.",
-    "Main independent acceptance after exact-head CI: inspect PR diff/checks and execute genuine affected tests plus authenticated four-stage original host run_case using real model outputs/receipts.",
+    "Main independent acceptance: inspect PR diff/checks at exact HEAD 4cb355ba0b029a8a4ca3457bfdeadcd201230581; Source regression run 37702412483 and Browser regression run 37702412500 both completed successfully.",
+    "Main independent acceptance: execute genuine affected tests and authenticated four-stage original host run_case using real model outputs/receipts.",
     "Main independent acceptance: verify private local position-contract join against canonical registry and authentic platform delivery receipt if required by scoped acceptance.",
     "Do not merge, deploy, trade, add paid fallback, or change global provider configuration as part of this handoff."
   ]
