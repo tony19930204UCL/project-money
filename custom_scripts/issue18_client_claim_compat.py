@@ -255,6 +255,72 @@ def _canonical_scope(registry: Mapping[str,Any], scope_id: str) -> Mapping[str,A
     return scope
 
 
+def _binding_identity(binding: Mapping[str,Any]) -> dict[str,Any]:
+    normalized=_normalize_binding(binding)
+    identity={}
+    for key in ("job_id","run_id","model","provider","route_kind","state"):
+        identity[key]=_require_scope_field(normalized,key,"scope_identity.executor_binding")
+    if _present(normalized,"scheduled_at"):
+        identity["scheduled_at"]=_semantic_time(normalized["scheduled_at"])
+    return identity
+
+
+def _scope_identity(scope: Mapping[str,Any]) -> dict[str,Any]:
+    binding=scope.get("executor_binding")
+    if not isinstance(binding,Mapping):
+        raise ClaimGateError("EXECUTION_SCOPE_EXECUTOR_BINDING_REQUIRED")
+    mode=_require_scope_field(scope,"mode","execution_scope")
+    owner=_require_scope_field(scope,"owner","execution_scope")
+    auth=_require_scope_field(scope,"authorization_source","execution_scope")
+    assigned=scope.get("assigned_ids")
+    if not isinstance(assigned,list) or not all(_nonempty_string(x) for x in assigned):
+        raise ClaimGateError("EXECUTION_SCOPE_ASSIGNED_IDS_REQUIRED")
+    identity={
+        "mode":mode,
+        "owner":owner,
+        "authorization_source":auth,
+        "assigned_ids":sorted(str(x) for x in assigned),
+        "executor_binding":_binding_identity(binding),
+    }
+    transfer=scope.get("merged_criteria_transfer")
+    if mode=="SCOPED_RECOVERY":
+        if not isinstance(transfer,Mapping):
+            raise ClaimGateError("MERGED_CRITERIA_TRANSFER_REQUIRED")
+        identity["merged_criteria_transfer"]=copy.deepcopy(dict(transfer))
+    elif transfer is not None:
+        identity["merged_criteria_transfer"]=copy.deepcopy(transfer)
+    return identity
+
+
+def _validate_scope_authentication(registry: Mapping[str,Any], canonical: Mapping[str,Any], provided: Mapping[str,Any]) -> None:
+    canonical_receipt_id=_require_scope_field(canonical,"authentication_receipt_id","canonical_scope")
+    provided_receipt_id=_require_scope_field(provided,"authentication_receipt_id","execution_scope")
+    if provided_receipt_id!=canonical_receipt_id:
+        raise ClaimGateError("EXECUTION_SCOPE_AUTHENTICATION_RECEIPT_MISMATCH")
+    receipts=registry.get("execution_scope_receipts")
+    if not isinstance(receipts,Mapping):
+        raise ClaimGateError("EXECUTION_SCOPE_AUTHENTICATION_REGISTRY_REQUIRED")
+    receipt=receipts.get(str(canonical_receipt_id))
+    if not isinstance(receipt,Mapping):
+        raise ClaimGateError("EXECUTION_SCOPE_AUTHENTICATION_RECEIPT_UNKNOWN")
+    if receipt.get("status")!="AUTHENTICATED":
+        raise ClaimGateError("EXECUTION_SCOPE_NOT_AUTHENTICATED")
+    if receipt.get("scope_id")!=provided.get("scope_id"):
+        raise ClaimGateError("EXECUTION_SCOPE_AUTHENTICATION_SCOPE_MISMATCH")
+    source_ref=receipt.get("source_ref")
+    if not _nonempty_string(source_ref):
+        raise ClaimGateError("EXECUTION_SCOPE_AUTHENTICATION_SOURCE_REQUIRED")
+    receipt_identity=receipt.get("scope_identity")
+    if not isinstance(receipt_identity,Mapping):
+        raise ClaimGateError("EXECUTION_SCOPE_AUTHENTICATION_IDENTITY_REQUIRED")
+    canonical_identity=_scope_identity(canonical)
+    provided_identity=_scope_identity(provided)
+    if canonical_identity!=provided_identity:
+        raise ClaimGateError("EXECUTION_SCOPE_IDENTITY_MISMATCH")
+    if dict(receipt_identity)!=canonical_identity:
+        raise ClaimGateError("EXECUTION_SCOPE_AUTHENTICATION_IDENTITY_MISMATCH")
+
+
 def _validate_scope_binding(registry: Mapping[str,Any], canonical: Mapping[str,Any], provided: Mapping[str,Any], prefix: str) -> None:
     expected=canonical.get("executor_binding"); presented=provided.get("executor_binding")
     if not isinstance(expected,Mapping) or not isinstance(presented,Mapping):
@@ -292,6 +358,7 @@ def _validate_scope(registry: Mapping[str,Any], manifest: Mapping[str,Any]) -> l
     if canonical.get("authorization_source")!=auth:
         raise ClaimGateError("EXECUTION_SCOPE_AUTHORIZATION_MISMATCH")
     _validate_scope_binding(registry,canonical,scope,str(mode))
+    _validate_scope_authentication(registry,canonical,scope)
 
     expected=sorted(str(x) for x in (canonical.get("assigned_ids") or []))
     provided=sorted(str(x) for x in (scope.get("assigned_ids") or []))

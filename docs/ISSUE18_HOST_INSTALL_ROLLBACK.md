@@ -110,6 +110,9 @@ Unknown/missing fields remain fail-closed. Legacy aliases are compatibility inpu
 
 A completion claim requires an authenticated canonical scope, exact assigned IDs, executable live binding, and actual per-case evidence.
 
+The authenticated scope is not a caller-controlled waiver. The canonical scope names an `authentication_receipt_id`; the read-only registry export must also carry a matching sanitized `execution_scope_receipts` record with `status=AUTHENTICATED`, a source reference, the same canonical scope ID, and an identity snapshot covering mode, owner, authorization source, assigned IDs, live executor binding, and (for scoped recovery) merged-criteria transfer. Unknown, unauthenticated, mismatched, or identity-divergent receipts block the claim. The manifest cannot add or omit assignments by presenting a different receipt or by changing executor/criterion-transfer identity.
+
+
 - `FULL_MAIN_CIO` includes all obligations represented by its canonical full-owner scope, including terminal outcomes.
 - zero assigned obligations cannot pass;
 - empty results cannot pass;
