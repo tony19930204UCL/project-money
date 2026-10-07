@@ -38,7 +38,7 @@ class StageRoute(BaseModel):
 
 
 class OriginalHostStageOutput(BaseModel):
-    """Strict installed run_case stage contract."""
+    """Strict original generate(stage,payload) contract."""
 
     model_config = ConfigDict(extra="forbid")
     status: str = Field(pattern="^(PASS|REJECT|INCOMPLETE)$")
@@ -56,11 +56,25 @@ class OriginalHostUnderwritingOutput(OriginalHostStageOutput):
     four_sentences: Optional[list[str]] = Field(default=None, min_length=4, max_length=4)
 
 
+class OriginalHostChallengeOutput(BaseModel):
+    """Strict original challenge(payload) contract.
+
+    Objections are model-produced output. The bridge never inserts an empty
+    list to turn malformed challenge output into acceptance.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    status: str = Field(pattern="^(PASS|BLOCK|INCOMPLETE)$")
+    reason: str = Field(min_length=1)
+    source_urls: list[str]
+    objections: list[Any]
+
+
 HOST_STAGE_SCHEMAS: dict[str, type[BaseModel]] = {
     "discovery": OriginalHostStageOutput,
     "commercial": OriginalHostStageOutput,
     "underwriting": OriginalHostUnderwritingOutput,
-    "challenge": OriginalHostStageOutput,
+    "challenge": OriginalHostChallengeOutput,
 }
 
 
