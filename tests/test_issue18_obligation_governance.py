@@ -1440,7 +1440,7 @@ def test_scoped_recovery_authentication_binds_executor_and_criterion_transfer_id
     forged_executor["execution_scope"]["executor_binding"]["run_id"]="forged-run"
     result=evaluate_manifest(reg,forged_executor,now=NOW)
     assert result["status"]=="CLIENT_EXECUTION_CLAIM_BLOCKED"
-    assert result["reason"]=="EXECUTION_SCOPE_IDENTITY_MISMATCH"
+    assert result["reason"]=="SCOPED_RECOVERY_EXECUTOR_BINDING_MISMATCH"
 
     forged_transfer=deepcopy(manifest)
     forged_transfer["execution_scope"]["merged_criteria_transfer"]["source_ids"]=["omitted-container"]
