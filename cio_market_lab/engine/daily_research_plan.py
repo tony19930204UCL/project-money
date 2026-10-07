@@ -14,7 +14,7 @@ from typing import Any, Callable, Literal
 from zoneinfo import ZoneInfo
 
 import requests
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from cio_market_lab.engine.cio_session import CIOSessionHistory
 from cio_market_lab.engine.stage_d_observation import PersistedResearchPacketLoader
 from cio_market_lab.research.official import OfficialResearchProducer
@@ -37,6 +37,13 @@ class PriceInvalidationCondition(BaseModel):
     field: Literal['last_price'] = Field(description='Only supported numeric execution field.')
     operator: Literal['lt','lte','gt','gte'] = Field(description='Supported last-price comparison operator.')
     threshold: float = Field(description='Positive finite last-price threshold.')
+
+    @field_validator('threshold', mode='before')
+    @classmethod
+    def reject_non_numeric_raw_threshold(cls, value):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError('invalid invalidation threshold type')
+        return value
 
     @model_validator(mode='after')
     def validate_threshold(self):
