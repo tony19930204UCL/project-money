@@ -330,12 +330,7 @@ class OriginalResearchCallbackBridge:
                 "live_acceptance_claimed": False,
             }
         self.callback_evidence = []
-        self.callback_evidence = []
-        callbacks = self._installed_run_case_callbacks(
-            symbol=symbol,
-            now=now,
-            reader=reader,
-        )
+        callbacks = self.callbacks()
         try:
             result = entrypoint(
                 symbol=symbol,
@@ -525,7 +520,12 @@ class OriginalResearchCallbackBridge:
                 "exact_next_action": "SUPPLY_CASE_ID_TICKER_SEED_URLS_DIRECTORY_AND_MAX_ATTEMPTS",
                 "live_acceptance_claimed": False,
             }
-        callbacks = self.callbacks()
+        self.callback_evidence = []
+        callbacks = self._installed_run_case_callbacks(
+            symbol=symbol,
+            now=now,
+            reader=reader,
+        )
         try:
             result = entrypoint(
                 case_id=case_id,
