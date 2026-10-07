@@ -306,6 +306,13 @@ class DailyResearchPlanProducer:
                   'position_ceiling_fraction':self.maximum_ceiling,
                   'prior_lessons':self.learning_store.retrieve_context_lessons(symbol=symbol, as_of=now, limit=5),
                   'matured_past_outcomes':self.learning_store.retrieve_past_outcomes(symbol=symbol, as_of=now, limit=5)}
+        public_model_input = {
+            'official_evidence': evidence,
+            'reference_quote_for_valuation_only': quote_context,
+        }
+        prompt_sha256 = hashlib.sha256(
+            json.dumps(prompt, sort_keys=True, ensure_ascii=False, default=str).encode()
+        ).hexdigest()
         message = ('You are the authenticated Main CIO, forming the isolated PAPER daily frozen research plan. '
                    'Not a real broker order. Use ONLY supplied official facts. Valuation, thesis and numeric buy/invalidations '
                    'are explicitly uncertain model judgments, not source quotes. Identify missing evidence and do not invent '
@@ -330,7 +337,8 @@ class DailyResearchPlanProducer:
             raise RuntimeError('unauthenticated/fixture/failed daily-plan receipt rejected')
         atomic_json(self.root/'authenticated_model_receipts'/(key+'.json'),
                     {'observed_at':self._now().isoformat(),'symbol':symbol,'runtime_metadata':metadata,
-                     'response':response,'session_id':result.get('session_id'),'is_fixture':False,'purpose':'DAILY_RESEARCH_PLAN_NOT_ORDER'})
+                     'response':response,'session_id':result.get('session_id'),'is_fixture':False,'purpose':'DAILY_RESEARCH_PLAN_NOT_ORDER',
+                     'input_sha256':prompt_sha256,'public_model_input':public_model_input})
         plan = DailyPlanJudgment.model_validate_json(response)
         validate_plan_against_inputs(plan, evidence, maximum_ceiling=self.maximum_ceiling)
         actual_now = self._now()
@@ -366,7 +374,7 @@ class DailyResearchPlanProducer:
         receipt = {'observed_at':actual_now.isoformat(),'symbol':symbol,'plan_session_date':date,'formation_phase':formation_phase,
                    'runtime_metadata':metadata,'resolved_session_id':result.get('session_id'), 'packet_sha256':packet_hash,
                    'model_called':True,'is_fixture':False,'plan':plan.model_dump(mode='json'),
-                   'input_sha256':hashlib.sha256(json.dumps(prompt,sort_keys=True,default=str).encode()).hexdigest()}
+                   'input_sha256':prompt_sha256,'public_model_input':public_model_input}
         atomic_json(prior,receipt)
         manifest = json.loads(self.manifest.read_text()) if self.manifest.exists() else {'approved_packets':{}}
         manifest.setdefault('approved_packets',{})[packet_hash] = {
