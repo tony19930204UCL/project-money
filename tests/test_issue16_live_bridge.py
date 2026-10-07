@@ -361,3 +361,251 @@ def test_position_contract_rejects_private_or_unversioned_registry_rows(tmp_path
 
     valid = PositionMonitorContract.model_validate(_contract())
     assert valid.condition_version == "v1"
+
+
+def _real_receipt(message_id="msg-real-1", **overrides):
+    receipt = {
+        **_expected(),
+        "transport_status": "ACKNOWLEDGED",
+        "delivered": True,
+        "platform_message_id": message_id,
+        "is_fixture": False,
+    }
+    receipt.update(overrides)
+    return receipt
+
+
+def _bridge(root, registry_state, quote_state, receipt_state, calls):
+    def loader():
+        return registry_state["value"]
+
+    def quote_provider(symbol):
+        return quote_state["value"]
+
+    def receipt_provider(expected):
+        calls.append(dict(expected))
+        return receipt_state["value"]
+
+    return LocalPositionReceiptBridge(
+        registry_loader=loader,
+        quote_provider=quote_provider,
+        receipt_provider=receipt_provider,
+        history=CIOSessionHistory(root, "issue16-monitor"),
+    )
+
+
+def test_pending_replay_resolves_after_restart_outside_original_buy_zone(tmp_path):
+    root = tmp_path / "outside-zone"
+    registry_state = {"value": {"contracts": [_contract()]}}
+    quote_state = {"value": _quote()}
+    receipt_state = {"value": None}
+    calls = []
+
+    first = _bridge(root, registry_state, quote_state, receipt_state, calls).evaluate(now=NOW)
+    assert len(first["pending_receipts"]) == 1
+
+    calls.clear()
+    quote_state["value"] = {**_quote(), "last_price": 120.0}
+    receipt_state["value"] = _real_receipt()
+    restarted = _bridge(root, registry_state, quote_state, receipt_state, calls).evaluate(
+        now=NOW + timedelta(seconds=10)
+    )
+
+    assert calls == [_expected()]
+    assert restarted["pending_replay"]["resolved"] == 1
+    assert restarted["pending_receipts"] == []
+    assert restarted["results"][0]["triggered"] is False
+    assert restarted["results"][0]["delivery"]["status"] == "NOT_TRIGGERED"
+    history = CIOSessionHistory(root, "issue16-monitor").history()
+    assert sum(row.get("kind") == "PLATFORM_ACK" for row in history) == 1
+    assert sum(row.get("kind") == "MONITOR_PENDING_RESOLVED" for row in history) == 1
+
+
+def test_pending_replay_resolves_with_stale_or_missing_quote_without_new_trigger(tmp_path):
+    for name, quote in (
+        ("stale", _quote(at=NOW - timedelta(hours=1))),
+        ("missing", None),
+    ):
+        root = tmp_path / name
+        registry_state = {"value": {"contracts": [_contract()]}}
+        quote_state = {"value": _quote()}
+        receipt_state = {"value": None}
+        calls = []
+        first = _bridge(root, registry_state, quote_state, receipt_state, calls).evaluate(now=NOW)
+        assert len(first["pending_receipts"]) == 1
+
+        calls.clear()
+        quote_state["value"] = quote
+        receipt_state["value"] = _real_receipt(message_id=f"msg-{name}")
+        restarted = _bridge(root, registry_state, quote_state, receipt_state, calls).evaluate(
+            now=NOW + timedelta(seconds=10)
+        )
+        assert calls == [_expected()]
+        assert restarted["pending_replay"]["resolved"] == 1
+        assert restarted["pending_receipts"] == []
+        assert restarted["results"][0]["triggered"] is None
+        assert restarted["results"][0]["classification"] in {"STALE", "UNKNOWN"}
+
+
+def test_pending_replay_survives_condition_removal_and_does_not_require_registry_row(tmp_path):
+    root = tmp_path / "removed"
+    registry_state = {"value": {"contracts": [_contract()]}}
+    quote_state = {"value": _quote()}
+    receipt_state = {"value": None}
+    calls = []
+    first = _bridge(root, registry_state, quote_state, receipt_state, calls).evaluate(now=NOW)
+    assert len(first["pending_receipts"]) == 1
+
+    registry_state["value"] = {"contracts": []}
+    quote_state["value"] = None
+    receipt_state["value"] = _real_receipt()
+    calls.clear()
+    restarted = _bridge(root, registry_state, quote_state, receipt_state, calls).evaluate(
+        now=NOW + timedelta(seconds=10)
+    )
+    assert calls == [_expected()]
+    assert restarted["results"] == []
+    assert restarted["pending_replay"]["resolved"] == 1
+    assert restarted["pending_receipts"] == []
+
+
+def test_pending_replay_uses_old_identity_only_and_mismatch_never_acks(tmp_path):
+    root = tmp_path / "identity"
+    registry_state = {"value": {"contracts": [_contract(version="v1", observation_identity="obs-old")]}}
+    quote_state = {"value": _quote()}
+    receipt_state = {"value": None}
+    calls = []
+    first = _bridge(root, registry_state, quote_state, receipt_state, calls).evaluate(now=NOW)
+    old_pending = first["pending_receipts"][0]["pending_identity"]
+
+    registry_state["value"] = {"contracts": [_contract(version="v2", observation_identity="obs-new")]}
+    quote_state["value"] = {**_quote(), "last_price": 120.0}
+    receipt_state["value"] = _real_receipt(execution_hash="wrong-exec")
+    calls.clear()
+    mismatch = _bridge(root, registry_state, quote_state, receipt_state, calls).evaluate(
+        now=NOW + timedelta(seconds=10)
+    )
+    assert calls == [_expected()]
+    assert mismatch["pending_replay"]["resolved"] == 0
+    assert mismatch["pending_receipts"][0]["pending_identity"] == old_pending
+    assert mismatch["results"][0]["condition_version"] == "v2"
+    assert mismatch["results"][0]["observation_identity"] == "obs-new"
+    history = CIOSessionHistory(root, "issue16-monitor").history()
+    assert not any(row.get("kind") == "PLATFORM_ACK" for row in history)
+
+
+def test_fixture_generation_failed_and_same_ack_replay_are_fail_closed_or_idempotent(tmp_path):
+    root = tmp_path / "receipt-states"
+    registry_state = {"value": {"contracts": [_contract()]}}
+    quote_state = {"value": _quote()}
+    receipt_state = {"value": None}
+    calls = []
+    first = _bridge(root, registry_state, quote_state, receipt_state, calls).evaluate(now=NOW)
+    assert len(first["pending_receipts"]) == 1
+
+    for bad in (
+        _real_receipt(is_fixture=True),
+        {
+            **_expected(),
+            "transport_status": "GENERATED",
+            "delivered": False,
+            "platform_message_id": "generated-only",
+            "is_fixture": False,
+        },
+        _real_receipt(transport_status="FAILED", delivered=False),
+    ):
+        receipt_state["value"] = bad
+        replayed = _bridge(root, registry_state, quote_state, receipt_state, calls).evaluate(
+            now=NOW + timedelta(seconds=20)
+        )
+        assert replayed["pending_replay"]["resolved"] == 0
+        assert len(replayed["pending_receipts"]) == 1
+
+    quote_state["value"] = {**_quote(), "last_price": 120.0}
+    receipt_state["value"] = _real_receipt()
+    resolved = _bridge(root, registry_state, quote_state, receipt_state, calls).evaluate(
+        now=NOW + timedelta(seconds=30)
+    )
+    assert resolved["pending_replay"]["resolved"] == 1
+    assert resolved["pending_receipts"] == []
+
+    before = CIOSessionHistory(root, "issue16-monitor").history()
+    replay_again = _bridge(root, registry_state, quote_state, receipt_state, calls).evaluate(
+        now=NOW + timedelta(seconds=40)
+    )
+    after = CIOSessionHistory(root, "issue16-monitor").history()
+    assert replay_again["pending_replay"]["attempted"] == 0
+    assert sum(row.get("kind") == "PLATFORM_ACK" for row in after) == 1
+    assert sum(row.get("kind") == "MONITOR_PENDING_RESOLVED" for row in after) == 1
+    assert len(after) == len(before)
+
+
+def test_pending_history_persists_only_sanitized_immutable_linkage_snapshot(tmp_path):
+    root = tmp_path / "snapshot"
+    registry_state = {"value": {"contracts": [_contract()]}}
+    quote_state = {"value": _quote()}
+    receipt_state = {"value": None}
+    calls = []
+    _bridge(root, registry_state, quote_state, receipt_state, calls).evaluate(now=NOW)
+    pending = [
+        row
+        for row in CIOSessionHistory(root, "issue16-monitor").history()
+        if row.get("kind") == "MONITOR_PENDING_RECEIPT"
+    ]
+    assert len(pending) == 1
+    row = pending[0]
+    assert row["expected_receipt"] == _expected()
+    assert set(row["expected_receipt"]) == {
+        "execution_hash", "body_hash", "job_id", "platform", "target", "thread_id"
+    }
+    assert row["condition_id"] == "entry"
+    assert row["condition_version"] == "v1"
+    assert row["observation_identity"] == "obs-1"
+
+
+def test_installed_run_case_mapping_uses_observed_host_signature_without_private_host_guess():
+    bridge = OriginalResearchCallbackBridge(routes=_routes(), coordinator=FakeCoordinator())
+    seen = {}
+
+    def installed_run_case(case_id, ticker, seed_urls, directory, fetch, generate, challenge, max_attempts):
+        seen.update(
+            case_id=case_id,
+            ticker=ticker,
+            seed_urls=seed_urls,
+            directory=directory,
+            max_attempts=max_attempts,
+            fetch=fetch,
+            generate=generate,
+            challenge=challenge,
+        )
+        return {"status": "BLOCKED", "reason": "HOST_CALLBACK_SHAPE_REQUIRES_MAIN_ACCEPTANCE"}
+
+    result = bridge.run_installed_run_case(
+        installed_run_case,
+        case_id="case-16",
+        symbol="MSFT",
+        seed_urls=["https://www.sec.gov/test"],
+        directory="/sanitized/candidate-dir",
+        max_attempts=2,
+        now=NOW,
+    )
+    assert seen["ticker"] == "MSFT"
+    assert callable(seen["fetch"]) and callable(seen["generate"]) and callable(seen["challenge"])
+    assert result["host_mapping_contract"] == "run_case_v1"
+    assert result["live_acceptance_claimed"] is False
+
+
+def test_installed_run_case_missing_entrypoint_stays_blocked_with_exact_next_action():
+    bridge = OriginalResearchCallbackBridge(routes=_routes(), coordinator=FakeCoordinator())
+    result = bridge.run_installed_run_case(
+        None,
+        case_id="case-16",
+        symbol="MSFT",
+        seed_urls=["https://www.sec.gov/test"],
+        directory="/sanitized/candidate-dir",
+        max_attempts=2,
+        now=NOW,
+    )
+    assert result["status"] == "BLOCKED"
+    assert result["reason"] == "ORIGINAL_RESEARCH_ENGINE_ENTRYPOINT_MISSING"
+    assert result["exact_next_action"] == "SUPPLY_INSTALLED_RUN_CASE_IMPORT_PATH"
