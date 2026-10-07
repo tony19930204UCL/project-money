@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Optional
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -25,7 +26,7 @@ from cio_market_lab.research.issue16_acceptance import (
     _utc,
 )
 from cio_market_lab.research.free_adapters import FreeSourceCoordinator
-from cio_market_lab.research.official import _public_json
+from cio_market_lab.research.official import USER_AGENT
 
 
 class StageRoute(BaseModel):
@@ -34,6 +35,33 @@ class StageRoute(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
     primary: HermesLocalInference
     fallback: Optional[HermesLocalInference] = None
+
+
+class OriginalHostStageOutput(BaseModel):
+    """Strict installed run_case stage contract."""
+
+    model_config = ConfigDict(extra="forbid")
+    status: str = Field(pattern="^(PASS|REJECT|INCOMPLETE)$")
+    reason: str = Field(min_length=1)
+    source_urls: list[str]
+
+
+class OriginalHostUnderwritingOutput(OriginalHostStageOutput):
+    financials: Optional[dict[str, Any]] = None
+    business_maturity: Optional[str] = None
+    valuation_scenarios: Optional[dict[str, Any]] = None
+    buy_zone: Optional[dict[str, Any]] = None
+    invalidation_conditions: Optional[list[str]] = None
+    review_by: Optional[str] = None
+    four_sentences: Optional[list[str]] = Field(default=None, min_length=4, max_length=4)
+
+
+HOST_STAGE_SCHEMAS: dict[str, type[BaseModel]] = {
+    "discovery": OriginalHostStageOutput,
+    "commercial": OriginalHostStageOutput,
+    "underwriting": OriginalHostUnderwritingOutput,
+    "challenge": OriginalHostStageOutput,
+}
 
 
 class OriginalResearchCallbackBridge:
@@ -373,6 +401,30 @@ class OriginalResearchCallbackBridge:
         return output
 
 
+    @staticmethod
+    def _default_public_text_reader(url: str) -> str:
+        """Bounded public HTTP(S) reader that supports HTML/text/JSON as text."""
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme not in {"http", "https"} or not host:
+            raise RuntimeError("HOST_FETCH_PUBLIC_HTTP_URL_REQUIRED")
+        if host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".local"):
+            raise RuntimeError("HOST_FETCH_NONPUBLIC_HOST_REJECTED")
+        request = Request(
+            url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,application/json,text/plain,*/*;q=0.5",
+            },
+        )
+        with urlopen(request, timeout=25) as response:
+            raw = response.read(250_001)
+            if response.status != 200:
+                raise RuntimeError(f"HOST_FETCH_HTTP_{response.status}")
+            if len(raw) > 250_000:
+                raise RuntimeError("HOST_FETCH_PUBLIC_DOCUMENT_OVERSIZE")
+            return raw.decode("utf-8", errors="replace")
+
     def _fetch_host_public_document(
         self,
         url: str,
@@ -380,41 +432,51 @@ class OriginalResearchCallbackBridge:
         now: datetime,
         reader: Any = None,
     ) -> dict[str, Any]:
-        """Adapt original host fetch(url) into a bounded public-document envelope."""
+        """Adapt original host fetch(url) to exactly {url,text,observed_at}."""
         observed = _utc(now)
         if not isinstance(url, str) or not url.strip():
             raise RuntimeError("HOST_FETCH_URL_REQUIRED")
-        parsed = urlparse(url.strip())
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        url = url.strip()
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme not in {"http", "https"} or not host:
             raise RuntimeError("HOST_FETCH_PUBLIC_HTTP_URL_REQUIRED")
+        if host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".local"):
+            raise RuntimeError("HOST_FETCH_NONPUBLIC_HOST_REJECTED")
         _reject_private_content(url, "host_fetch.url")
         try:
-            raw = reader(url) if callable(reader) else _public_json(url)
+            raw = reader(url) if callable(reader) else self._default_public_text_reader(url)
         except Exception as exc:
             raise RuntimeError(f"HOST_FETCH_PUBLIC_DOCUMENT_UNAVAILABLE:{type(exc).__name__}:{exc}") from exc
+
+        if isinstance(raw, bytes):
+            text_value = raw.decode("utf-8", errors="replace")
+        elif isinstance(raw, str):
+            text_value = raw
+        else:
+            import json
+            text_value = json.dumps(raw, default=str, ensure_ascii=False, sort_keys=True)
+
         document = {
-            "source_url": url,
+            "url": url,
+            "text": text_value,
             "observed_at": observed.isoformat(),
-            "content_sha256": _stable_hash(raw),
-            "content": raw,
         }
         _reject_private_content(document, "host_fetch.document")
-        encoded = __import__("json").dumps(
-            document, default=str, ensure_ascii=False
-        ).encode()
-        if len(encoded) > self.max_serialized_bytes:
+        if len(text_value.encode("utf-8")) > self.max_serialized_bytes:
             raise RuntimeError("HOST_FETCH_PUBLIC_DOCUMENT_OVERSIZE")
-        evidence = {
+
+        content_hash = _stable_hash({"url": url, "text": text_value})
+        self._record_callback_evidence({
             "status": "COMPLETED",
             "stage": "fetch",
             "observed_at": observed.isoformat(),
             "provenance": [{
                 "source_url": url,
                 "observed_at": observed.isoformat(),
-                "content_sha256": document["content_sha256"],
+                "content_sha256": content_hash,
             }],
-        }
-        self._record_callback_evidence(evidence)
+        })
         return document
 
     @staticmethod
@@ -431,10 +493,144 @@ class OriginalResearchCallbackBridge:
         _reject_private_content(normalized, f"host_{stage}.payload")
         return normalized
 
+    @staticmethod
+    def _validate_host_source_urls(
+        source_urls: list[str],
+        *,
+        seed_urls: list[str],
+        stage: str,
+    ) -> None:
+        if not source_urls:
+            raise RuntimeError(f"HOST_{stage.upper()}_SOURCE_URLS_REQUIRED")
+        seeds = set(seed_urls)
+        if any(url not in seeds for url in source_urls):
+            raise RuntimeError(f"HOST_{stage.upper()}_SOURCE_URL_OUTSIDE_SEEDS")
+
+    @staticmethod
+    def _downgrade_incomplete_underwriting(
+        output: OriginalHostUnderwritingOutput,
+    ) -> OriginalHostUnderwritingOutput:
+        if output.status != "PASS":
+            return output
+        required = {
+            "financials": output.financials,
+            "business_maturity": output.business_maturity,
+            "valuation_scenarios": output.valuation_scenarios,
+            "buy_zone": output.buy_zone,
+            "invalidation_conditions": output.invalidation_conditions,
+            "review_by": output.review_by,
+            "four_sentences": output.four_sentences,
+        }
+        missing = [
+            key for key, value in required.items()
+            if value is None or value == "" or value == {} or value == []
+        ]
+        if missing:
+            return OriginalHostUnderwritingOutput(
+                status="INCOMPLETE",
+                reason="MISSING_UNDERWRITING_FACTS:" + ",".join(sorted(missing)),
+                source_urls=list(output.source_urls),
+                financials=output.financials,
+                business_maturity=output.business_maturity,
+                valuation_scenarios=output.valuation_scenarios,
+                buy_zone=output.buy_zone,
+                invalidation_conditions=output.invalidation_conditions,
+                review_by=output.review_by,
+                four_sentences=output.four_sentences,
+            )
+        return output
+
+    def _infer_host_route(
+        self,
+        stage: str,
+        payload: Mapping[str, Any],
+        *,
+        now: datetime,
+        seed_urls: list[str],
+    ) -> dict[str, Any]:
+        route = self.routes.get(stage)
+        if route is None:
+            return {
+                "status": "BLOCKED",
+                "stage": stage,
+                "reason": "INFERENCE_ROUTE_MISSING",
+                "attempts": [],
+                "observed_at": _utc(now).isoformat(),
+            }
+        schema = HOST_STAGE_SCHEMAS[stage]
+        attempts: list[dict[str, Any]] = []
+        for route_name, engine in (("primary", route.primary), ("fallback", route.fallback)):
+            if engine is None:
+                continue
+            if engine.contract.is_free_or_local_authorized is not True:
+                attempts.append({
+                    "route": route_name,
+                    "status": "BLOCKED",
+                    "reason": "INFERENCE_CONTRACT_NOT_FREE_OR_LOCAL_AUTHORIZED",
+                    "provider": engine.contract.provider,
+                    "model": engine.contract.model,
+                })
+                continue
+            try:
+                _reject_private_content(payload)
+                model_identity, raw_output = engine.infer(stage, payload, schema)
+                validated_model = schema.model_validate(raw_output)
+                if stage == "underwriting":
+                    validated_model = self._downgrade_incomplete_underwriting(validated_model)
+                validated = validated_model.model_dump(mode="json", exclude_none=True)
+                self._validate_host_source_urls(
+                    list(validated.get("source_urls") or []),
+                    seed_urls=seed_urls,
+                    stage=stage,
+                )
+                _reject_private_content(validated)
+                receipt = getattr(engine, "last_runtime_receipt", None)
+                if not isinstance(receipt, Mapping):
+                    raise RuntimeError("INFERENCE_RUNTIME_RECEIPT_MISSING")
+                attempts.append({
+                    "route": route_name,
+                    "status": "COMPLETED",
+                    "provider": receipt.get("resolved_provider"),
+                    "model": receipt.get("resolved_model"),
+                    "returncode": receipt.get("returncode"),
+                    "auth_verified": receipt.get("auth_verified"),
+                    "is_success_response": receipt.get("is_success_response"),
+                    "is_fixture": receipt.get("is_fixture"),
+                })
+                return {
+                    "status": "COMPLETED",
+                    "stage": stage,
+                    "route": route_name,
+                    "model_identity": model_identity,
+                    "runtime_receipt": dict(receipt),
+                    "schema_valid": True,
+                    "input_sha256": _stable_hash(payload),
+                    "output_sha256": _stable_hash(validated),
+                    "output": validated,
+                    "attempts": attempts,
+                    "observed_at": _utc(now).isoformat(),
+                }
+            except (ValidationError, ValueError, RuntimeError) as exc:
+                attempts.append({
+                    "route": route_name,
+                    "status": "BLOCKED",
+                    "reason": f"{type(exc).__name__}:{exc}",
+                    "provider": engine.contract.provider,
+                    "model": engine.contract.model,
+                })
+        return {
+            "status": "BLOCKED",
+            "stage": stage,
+            "reason": "ALL_AUTHORIZED_INFERENCE_ROUTES_BLOCKED",
+            "attempts": attempts,
+            "observed_at": _utc(now).isoformat(),
+        }
+
     def _installed_run_case_callbacks(
         self,
         *,
         symbol: str,
+        seed_urls: list[str],
         now: datetime,
         reader: Any = None,
     ) -> dict[str, Callable[..., dict[str, Any]]]:
@@ -446,8 +642,15 @@ class OriginalResearchCallbackBridge:
 
         def generate_callback(stage: str, payload: Mapping[str, Any]) -> dict[str, Any]:
             normalized = self._host_stage_payload(stage, payload, symbol=symbol)
+            if stage not in self.GENERATE_STAGES:
+                raise RuntimeError("HOST_GENERATE_STAGE_MISMATCH")
             result = self._record_callback_evidence(
-                self.generate(stage, normalized, now=now)
+                self._infer_host_route(
+                    stage,
+                    normalized,
+                    now=now,
+                    seed_urls=seed_urls,
+                )
             )
             if result.get("status") != "COMPLETED":
                 raise RuntimeError(
@@ -470,12 +673,29 @@ class OriginalResearchCallbackBridge:
                 raise RuntimeError("HOST_UNDERWRITING_MODEL_IDENTITY_REQUIRED")
             normalized = self._host_stage_payload("challenge", payload, symbol=symbol)
             result = self._record_callback_evidence(
-                self.challenge(
+                self._infer_host_route(
+                    "challenge",
                     normalized,
                     now=now,
-                    underwriting_model_identity=identity,
+                    seed_urls=seed_urls,
                 )
             )
+            if result.get("status") == "COMPLETED" and result.get("model_identity") == identity:
+                result = {
+                    **result,
+                    "status": "BLOCKED",
+                    "reason": "CHALLENGE_MODEL_NOT_HETEROGENEOUS",
+                    "schema_valid": False,
+                }
+                self.callback_evidence[-1] = {
+                    **self.callback_evidence[-1],
+                    "status": "BLOCKED",
+                    "reason": "CHALLENGE_MODEL_NOT_HETEROGENEOUS",
+                    "challenge_model_distinct": False,
+                }
+            elif result.get("status") == "COMPLETED":
+                result["challenge_model_distinct"] = True
+                self.callback_evidence[-1]["challenge_model_distinct"] = True
             if result.get("status") != "COMPLETED":
                 raise RuntimeError(
                     f"HOST_CHALLENGE_CALLBACK_BLOCKED:{result.get('reason','UNKNOWN')}"
@@ -523,6 +743,7 @@ class OriginalResearchCallbackBridge:
         self.callback_evidence = []
         callbacks = self._installed_run_case_callbacks(
             symbol=symbol,
+            seed_urls=list(seed_urls),
             now=now,
             reader=reader,
         )
