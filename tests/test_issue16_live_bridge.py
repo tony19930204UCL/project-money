@@ -867,6 +867,43 @@ def test_default_public_reader_uses_official_document_byte_budget(monkeypatch):
     assert acquired["body"].startswith(b"<html>")
 
 
+def test_genuine_microsoft_fetch_through_installed_candidate_pathway():
+    url = "https://www.microsoft.com/en-us/Investor/earnings/FY-2026-Q4/press-release-webcast"
+    bridge = OriginalResearchCallbackBridge(routes={}, coordinator=FakeCoordinator())
+
+    def fetch_only(case_id, ticker, seed_urls, directory, fetch, generate, challenge, max_attempts):
+        assert ticker == "MSFT"
+        document = fetch(seed_urls[0])
+        assert set(document) == {"url", "text", "observed_at"}
+        assert document["url"] == url
+        lowered = document["text"].lower()
+        assert "revenue" in lowered
+        assert "operating income" in lowered
+        return {
+            "status": "INCOMPLETE",
+            "reason": "genuine official fetch accepted; inference intentionally not invoked",
+            "source_urls": seed_urls,
+        }
+
+    result = bridge.run_installed_run_case(
+        fetch_only,
+        case_id="microsoft-fy26-q4-public-intake",
+        symbol="MSFT",
+        seed_urls=[url],
+        directory="/sanitized/public-intake-only",
+        max_attempts=1,
+        now=NOW,
+    )
+    assert result["status"] == "INCOMPLETE"
+    assert result["live_acceptance_claimed"] is False
+    assert [row["stage"] for row in result["callback_evidence"]] == ["fetch"]
+    provenance = result["callback_evidence"][0]["provenance"][0]
+    assert provenance["source_url"] == url
+    assert provenance["extraction_succeeded"] is True
+    assert len(provenance["content_sha256"]) == 64
+    assert len(provenance["extracted_content_sha256"]) == 64
+
+
 def test_host_fetch_parses_genuine_microsoft_style_html_and_records_dual_hash_provenance():
     bridge = OriginalResearchCallbackBridge(routes=_host_routes(), coordinator=FakeCoordinator())
     raw = (
