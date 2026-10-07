@@ -68,10 +68,50 @@ def plan_session_date(symbol: str, now: datetime) -> str:
     return now.astimezone(ZoneInfo('Asia/Taipei' if symbol.upper().endswith(('.TW','.TWO')) else 'America/New_York')).date().isoformat()
 
 
+def _semantic_evidence_value(value: Any) -> Any:
+    """Drop acquisition clocks recursively without erasing material source facts."""
+    if isinstance(value, dict):
+        return {
+            key: _semantic_evidence_value(item)
+            for key, item in value.items()
+            if key != 'observed_at'
+        }
+    if isinstance(value, list):
+        return [_semantic_evidence_value(item) for item in value]
+    return value
+
+
 def semantic_research_digest(evidence: dict[str, Any]) -> str:
-    # Acquisition/refresh time and network metadata are not material evidence.
-    semantic = {k: evidence.get(k) for k in ('symbol','market','source_url','published_at','verified_facts','title','raw_metadata')}
+    # Acquisition/refresh clocks are not material evidence, including nested
+    # supplemental rows. Source URLs, wire hashes, periods and values remain.
+    semantic = {
+        k: _semantic_evidence_value(evidence.get(k))
+        for k in ('symbol','market','source_url','published_at','verified_facts','title','raw_metadata')
+    }
     return hashlib.sha256(json.dumps(semantic, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def normalize_reference_quote(reference_quote: dict[str, Any] | None, *, now: datetime) -> dict[str, Any] | None:
+    if reference_quote is None:
+        return None
+    if not isinstance(reference_quote, dict):
+        raise ValueError('reference quote must be a mapping')
+    quote=dict(reference_quote)
+    quote.setdefault('observed_at', now.astimezone(timezone.utc).isoformat())
+    quote['timestamp_semantics']={
+        'source_timestamp_or_date':'market/source time identifies the trading observation; date-only official EOD data does not imply an intraday timestamp',
+        'observed_at':'collector observation time; it does not replace or advance the source trading date',
+    }
+    return quote
+
+
+def semantic_reference_quote_digest(reference_quote: dict[str, Any] | None) -> str:
+    if reference_quote is None:
+        return 'none'
+    semantic={k: reference_quote.get(k) for k in (
+        'symbol','price','close','last_price','source','timestamp','source_timestamp','source_date','date'
+    )}
+    return hashlib.sha256(json.dumps(semantic,sort_keys=True,default=str).encode()).hexdigest()
 
 
 def validate_plan_against_inputs(plan: DailyPlanJudgment, evidence: dict[str, Any], *, maximum_ceiling: float):
@@ -147,16 +187,54 @@ class DailyResearchPlanProducer:
                     raise
         if len(response.content) > MAX_BYTES:
             raise ValueError('OFFICIAL_DOCUMENT_OVERSIZE')
-        raw = parse_official_document(url, response.content, response.headers.get('Content-Type','')) if disclosure else response.json()
         digest = hashlib.sha256(response.content).hexdigest()
+        schema = 'official-document-enriched-v1' if disclosure else 'official-json-v1'
+        capture_identity = hashlib.sha256(
+            json.dumps({'source_url':url,'wire_sha256':digest,'schema':schema},sort_keys=True).encode()
+        ).hexdigest()
+        path = self.root / 'raw_official' / (capture_identity + '.json')
+        if path.exists():
+            persisted=json.loads(path.read_text())
+            if (
+                persisted.get('source_url') != url
+                or persisted.get('sha256_of_wire_bytes') != digest
+                or persisted.get('capture_schema') != schema
+                or persisted.get('is_fixture')
+                or persisted.get('tls_verified') is not True
+            ):
+                raise RuntimeError('OFFICIAL_CAPTURE_IDENTITY_CONFLICT')
+            self.captures_by_url[url]=path
+            return persisted.get('content')
+
+        raw = parse_official_document(url, response.content, response.headers.get('Content-Type','')) if disclosure else response.json()
+        if disclosure and isinstance(raw,list):
+            enriched=[]
+            for row in raw:
+                current=dict(row)
+                current.update({
+                    'source_url':url,
+                    'document_sha256':digest,
+                    'observed_at':now.isoformat(),
+                    'body_provenance':'EXTRACTED_FROM_CAPTURED_WIRE_BYTES',
+                })
+                enriched.append(current)
+            raw=enriched
         if disclosure:
+            # Preserve the established content-addressed wire path for exact-byte
+            # lineage/readers. JSON capture identity is stricter (URL+wire+schema).
             wire = self.root / 'raw_official' / (digest + '.wire')
             if not wire.exists():
                 wire.write_bytes(response.content)
-        path = self.root / 'raw_official' / (digest + '.json')
-        if not path.exists():
-            atomic_json(path, {'source_url': url, 'observed_at': now.isoformat(), 'tls_verified': True,
-                               'sha256_of_wire_bytes': digest, 'is_fixture': False, 'content': raw})
+        capture={'source_url': url, 'observed_at': now.isoformat(), 'tls_verified': True,
+                 'sha256_of_wire_bytes': digest, 'capture_schema':schema,
+                 'is_fixture': False, 'content': raw}
+        atomic_json(path, capture)
+        # Backward-compatible content-addressed snapshot for existing audit
+        # readers. It is immutable and never used as the canonical identity;
+        # captures_by_url always points at URL+wire+schema identity above.
+        legacy_path=self.root/'raw_official'/(digest+'.json')
+        if not legacy_path.exists():
+            atomic_json(legacy_path, {**capture,'canonical_capture_identity':capture_identity})
         self.captures_by_url[url] = path
         return raw
 
@@ -205,9 +283,17 @@ class DailyResearchPlanProducer:
         if market == 'TW' and not meta.get('raw_row'):
             raise ValueError('TW current official monthly revenue row missing')
         atomic_json(self.root / 'official_baselines' / (symbol + '.json'), evidence)
+        blocked_documents=list(meta.get('blocked_official_documents') or [])
+        if blocked_documents:
+            # Keep the independently verified intake on disk, but never promote
+            # a research plan while a required linked official statement is blocked.
+            blocked_urls=','.join(str(row.get('source_url') or '') for row in blocked_documents)
+            raise RuntimeError('OFFICIAL_DISCLOSURE_DOCUMENT_BLOCKED:'+blocked_urls)
         digest = semantic_research_digest(evidence)
+        quote_context=normalize_reference_quote(reference_quote,now=now)
+        quote_digest=semantic_reference_quote_digest(quote_context)
         date = plan_session_date(symbol, now)
-        key = f'{symbol}-{date}-{digest[:16]}-quote{int(reference_quote is not None)}'
+        key = f'{symbol}-{date}-{digest[:16]}-quote-{quote_digest[:16]}'
         prior = self.root / 'authenticated_plans' / (key + '.json')
         if prior.exists() and (self.packet_root/(symbol+'.json')).exists():
             # Loader independently verifies source lineage and trusted receipt hash.
@@ -216,10 +302,17 @@ class DailyResearchPlanProducer:
                 return {'status':'CACHED_IMMUTABLE_PLAN', 'symbol':symbol, 'plan_path':str(prior), 'packet_path':str(self.packet_root/(symbol+'.json')), 'model_called':False}
         prompt = {'purpose':'DAILY_FROZEN_PAPER_RESEARCH_PLAN_NOT_ORDER', 'symbol':symbol, 'market':market,
                   'observed_at':now.isoformat(), 'market_session_date':date,
-                  'official_evidence':evidence, 'reference_quote_for_valuation_only':reference_quote,
+                  'official_evidence':evidence, 'reference_quote_for_valuation_only':quote_context,
                   'position_ceiling_fraction':self.maximum_ceiling,
                   'prior_lessons':self.learning_store.retrieve_context_lessons(symbol=symbol, as_of=now, limit=5),
                   'matured_past_outcomes':self.learning_store.retrieve_past_outcomes(symbol=symbol, as_of=now, limit=5)}
+        public_model_input = {
+            'official_evidence': evidence,
+            'reference_quote_for_valuation_only': quote_context,
+        }
+        prompt_sha256 = hashlib.sha256(
+            json.dumps(prompt, sort_keys=True, ensure_ascii=False, default=str).encode()
+        ).hexdigest()
         message = ('You are the authenticated Main CIO, forming the isolated PAPER daily frozen research plan. '
                    'Not a real broker order. Use ONLY supplied official facts. Valuation, thesis and numeric buy/invalidations '
                    'are explicitly uncertain model judgments, not source quotes. Identify missing evidence and do not invent '
@@ -244,7 +337,8 @@ class DailyResearchPlanProducer:
             raise RuntimeError('unauthenticated/fixture/failed daily-plan receipt rejected')
         atomic_json(self.root/'authenticated_model_receipts'/(key+'.json'),
                     {'observed_at':self._now().isoformat(),'symbol':symbol,'runtime_metadata':metadata,
-                     'response':response,'session_id':result.get('session_id'),'is_fixture':False,'purpose':'DAILY_RESEARCH_PLAN_NOT_ORDER'})
+                     'response':response,'session_id':result.get('session_id'),'is_fixture':False,'purpose':'DAILY_RESEARCH_PLAN_NOT_ORDER',
+                     'input_sha256':prompt_sha256,'public_model_input':public_model_input})
         plan = DailyPlanJudgment.model_validate_json(response)
         validate_plan_against_inputs(plan, evidence, maximum_ceiling=self.maximum_ceiling)
         actual_now = self._now()
@@ -280,7 +374,7 @@ class DailyResearchPlanProducer:
         receipt = {'observed_at':actual_now.isoformat(),'symbol':symbol,'plan_session_date':date,'formation_phase':formation_phase,
                    'runtime_metadata':metadata,'resolved_session_id':result.get('session_id'), 'packet_sha256':packet_hash,
                    'model_called':True,'is_fixture':False,'plan':plan.model_dump(mode='json'),
-                   'input_sha256':hashlib.sha256(json.dumps(prompt,sort_keys=True,default=str).encode()).hexdigest()}
+                   'input_sha256':prompt_sha256,'public_model_input':public_model_input}
         atomic_json(prior,receipt)
         manifest = json.loads(self.manifest.read_text()) if self.manifest.exists() else {'approved_packets':{}}
         manifest.setdefault('approved_packets',{})[packet_hash] = {

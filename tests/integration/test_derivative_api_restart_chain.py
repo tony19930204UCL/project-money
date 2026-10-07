@@ -192,7 +192,11 @@ def test_api_intake_caller_accounting_and_nonfixture_refusal(tmp_path):
     assert derivative_events[0].payload["contract_spec"]["multiplier"]==50
     event_id=derivative_events[0].event_id
 
+    assert state.runner._thread is None
     with TestClient(app) as client:
+        # Fixture-mode API acceptance is a direct-accounting test. Startup must
+        # not spawn an autonomous cycle that can concurrently mutate this ledger.
+        assert state.runner._thread is None
         caps=client.get("/api/paper/capabilities").json()
         quotes=client.get("/api/paper/derivative-quotes").json()
         readback=client.get("/api/paper/readback").json()

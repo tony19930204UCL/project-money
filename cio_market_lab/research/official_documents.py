@@ -2,10 +2,8 @@
 from __future__ import annotations
 from html.parser import HTMLParser
 from io import BytesIO
-from pathlib import Path
 from urllib.parse import urljoin, urlparse
 import re
-import sys
 
 ALLOWED_HOSTS = {'www.microsoft.com', 'investor.tsmc.com'}
 MAX_BYTES = 8_000_000
@@ -51,12 +49,10 @@ def parse_official_document(url, body, content_type):
     if body.startswith(b'%PDF') or 'application/pdf' in content_type:
         try:
             from pypdf import PdfReader
-        except ImportError:
-            # Candidate-local optional dependency; never mutate the main venv.
-            vendor=Path(__file__).resolve().parents[2]/'.paper_vendor'
-            if not vendor.is_dir(): raise RuntimeError('PDF_PARSER_UNAVAILABLE')
-            sys.path.insert(0,str(vendor))
-            from pypdf import PdfReader
+        except ImportError as exc:
+            # The supported install path is the declared `official` extra.
+            # Never fall back to an ad-hoc candidate-local vendor directory.
+            raise RuntimeError('PDF_PARSER_UNAVAILABLE') from exc
         pdf=PdfReader(BytesIO(body))
         rows=[]
         for i,page in enumerate(pdf.pages[:10]):
