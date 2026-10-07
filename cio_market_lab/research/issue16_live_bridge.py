@@ -58,6 +58,7 @@ class OriginalResearchCallbackBridge:
             max_serialized_bytes=max_serialized_bytes,
         )
         self.max_serialized_bytes = max_serialized_bytes
+        self.callback_evidence: list[dict[str, Any]] = []
 
     def fetch(self, symbol: str, *, now: datetime, reader: Any = None) -> dict[str, Any]:
         observed = _utc(now)
@@ -229,11 +230,83 @@ class OriginalResearchCallbackBridge:
         result["challenge_model_distinct"] = True
         return result
 
+    def _record_callback_evidence(self, result: Mapping[str, Any]) -> dict[str, Any]:
+        receipt = result.get("runtime_receipt")
+        receipt_evidence = None
+        if isinstance(receipt, Mapping):
+            receipt_evidence = {
+                key: receipt.get(key)
+                for key in (
+                    "resolved_provider",
+                    "resolved_model",
+                    "auth_verified",
+                    "is_success_response",
+                    "is_fixture",
+                    "returncode",
+                )
+            }
+        attempts = []
+        for row in result.get("attempts") or []:
+            if not isinstance(row, Mapping):
+                continue
+            attempts.append(
+                {
+                    key: row.get(key)
+                    for key in (
+                        "route",
+                        "status",
+                        "reason",
+                        "provider",
+                        "model",
+                        "returncode",
+                        "auth_verified",
+                        "is_success_response",
+                        "is_fixture",
+                    )
+                    if row.get(key) is not None
+                }
+            )
+        evidence = {
+            "stage": result.get("stage"),
+            "status": result.get("status"),
+            "reason": result.get("reason"),
+            "route": result.get("route"),
+            "model_identity": result.get("model_identity"),
+            "runtime_receipt": receipt_evidence,
+            "attempts": attempts,
+            "schema_valid": result.get("schema_valid"),
+            "challenge_model_distinct": result.get("challenge_model_distinct"),
+            "observed_at": result.get("observed_at"),
+            "provenance": result.get("provenance") if result.get("stage") == "fetch" else None,
+        }
+        _reject_private_content(evidence)
+        self.callback_evidence.append(evidence)
+        return dict(result)
+
     def callbacks(self) -> dict[str, Callable[..., dict[str, Any]]]:
+        def fetch_callback(symbol: str, **kwargs: Any) -> dict[str, Any]:
+            return self._record_callback_evidence(self.fetch(symbol, **kwargs))
+
+        def generate_callback(stage: str, payload: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
+            return self._record_callback_evidence(self.generate(stage, payload, **kwargs))
+
+        def challenge_callback(
+            payload: Mapping[str, Any],
+            underwriting_model_identity: str,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            return self._record_callback_evidence(
+                self.challenge(
+                    payload,
+                    underwriting_model_identity=underwriting_model_identity,
+                    **kwargs,
+                )
+            )
+
         return {
-            "fetch": self.fetch,
-            "generate": self.generate,
-            "challenge": self.challenge,
+            "fetch": fetch_callback,
+            "generate": generate_callback,
+            "challenge": challenge_callback,
         }
 
     def run_original_entrypoint(
@@ -254,21 +327,24 @@ class OriginalResearchCallbackBridge:
                 "exact_next_action": "INSTALL_OR_MAP_ORIGINAL_RESEARCH_ENGINE_ENTRYPOINT",
                 "live_acceptance_claimed": False,
             }
+        self.callback_evidence = []
+        self.callback_evidence = []
+        callbacks = self.callbacks()
         try:
             result = entrypoint(
                 symbol=symbol,
                 now=_utc(now),
-                fetch_callback=lambda requested_symbol=symbol, **kwargs: self.fetch(
+                fetch_callback=lambda requested_symbol=symbol, **kwargs: callbacks["fetch"](
                     requested_symbol,
                     now=kwargs.pop("now", now),
                     reader=kwargs.pop("reader", reader),
                 ),
-                generate_callback=lambda stage, payload, **kwargs: self.generate(
+                generate_callback=lambda stage, payload, **kwargs: callbacks["generate"](
                     stage,
                     payload,
                     now=kwargs.pop("now", now),
                 ),
-                challenge_callback=lambda payload, underwriting_model_identity, **kwargs: self.challenge(
+                challenge_callback=lambda payload, underwriting_model_identity, **kwargs: callbacks["challenge"](
                     payload,
                     now=kwargs.pop("now", now),
                     underwriting_model_identity=underwriting_model_identity,
@@ -292,6 +368,7 @@ class OriginalResearchCallbackBridge:
         output = dict(result)
         output.setdefault("live_acceptance_claimed", False)
         output.setdefault("owner", "MAIN_CIO")
+        output["callback_evidence"] = list(self.callback_evidence)
         return output
 
 
@@ -366,6 +443,7 @@ class OriginalResearchCallbackBridge:
         output.setdefault("host_mapping_contract", "run_case_v1")
         output.setdefault("host_mapping_signature", "run_case(case_id,ticker,seed_urls,directory,fetch,generate,challenge,max_attempts)")
         output.setdefault("host_mapping_observed_at", _utc(now).isoformat())
+        output["callback_evidence"] = list(self.callback_evidence)
         return output
 
 
