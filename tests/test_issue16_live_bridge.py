@@ -1221,6 +1221,84 @@ def test_underwriting_schema_advertises_complete_pass_contract_to_inference_mode
     assert incomplete.scenario_return_estimates is None
 
 
+def test_underwriting_allowed_source_urls_are_intersection_of_seed_list_and_task_documents():
+    bridge = OriginalResearchCallbackBridge(routes={}, coordinator=FakeCoordinator())
+    second_seed = "https://www.microsoft.com/en-us/Investor/second"
+    payload = bridge._host_stage_payload(
+        "underwriting",
+        {
+            "documents": [{
+                "url": SEED_URL,
+                "text": "Microsoft official earnings public disclosure.",
+                "observed_at": NOW.isoformat(),
+            }],
+            "discovery": {"status": "PASS", "reason": "done", "source_urls": [SEED_URL]},
+            "commercial": {"status": "PASS", "reason": "done", "source_urls": [SEED_URL]},
+        },
+        symbol="MSFT",
+        seed_urls=[SEED_URL, second_seed],
+    )
+    assert payload["underwriting_contract"]["allowed_source_urls"] == [SEED_URL]
+
+
+def test_underwriting_pass_rejects_seed_url_not_present_in_task_documents():
+    second_seed = "https://www.microsoft.com/en-us/Investor/second"
+    output = {
+        "status": "PASS",
+        "reason": "incorrectly cites an unfetched seed",
+        "source_urls": [second_seed],
+        "financials": {"revenue": "supported"},
+        "market_metrics": {"growth": "supported"},
+        "capital_structure": {"cash": "supported"},
+        "independent_source_mix": [second_seed],
+        "reflexivity_score": 0.5,
+        "scenario_return_estimates": {"base": "supported"},
+        "factor_labels": ["earnings"],
+        "business_maturity": "mature",
+        "valuation_scenarios": {"base": "supported"},
+        "buy_zone": {"research_only": True},
+        "invalidation_conditions": ["facts deteriorate"],
+        "review_by": "2026-10-08",
+        "four_sentences": [
+            "One.",
+            "Two.",
+            "Three.",
+            "Four.",
+        ],
+    }
+    bridge = OriginalResearchCallbackBridge(
+        routes={
+            "underwriting": StageRoute(
+                primary=_engine("underwriting", output, model="underwriter-task-evidence"),
+                primary_model_family="underwriting-family",
+            )
+        },
+        coordinator=FakeCoordinator(),
+    )
+    payload = bridge._host_stage_payload(
+        "underwriting",
+        {
+            "documents": [{
+                "url": SEED_URL,
+                "text": "Microsoft official earnings public disclosure.",
+                "observed_at": NOW.isoformat(),
+            }],
+            "discovery": {"status": "PASS", "reason": "done", "source_urls": [SEED_URL]},
+            "commercial": {"status": "PASS", "reason": "done", "source_urls": [SEED_URL]},
+        },
+        symbol="MSFT",
+        seed_urls=[SEED_URL, second_seed],
+    )
+    result = bridge._infer_host_route(
+        "underwriting",
+        payload,
+        now=NOW,
+        seed_urls=[SEED_URL, second_seed],
+    )
+    assert result["status"] == "BLOCKED"
+    assert result["reason"].endswith("HOST_UNDERWRITING_INDEPENDENT_SOURCE_NOT_IN_TASK_EVIDENCE")
+
+
 def test_underwriting_task_contract_requires_explicit_allowed_seed_urls():
     bridge = OriginalResearchCallbackBridge(routes={}, coordinator=FakeCoordinator())
     try:
