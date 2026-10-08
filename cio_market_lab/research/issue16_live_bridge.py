@@ -640,6 +640,21 @@ class OriginalResearchCallbackBridge:
             raise RuntimeError(f"HOST_{stage.upper()}_SOURCE_URL_OUTSIDE_SEEDS")
 
     @staticmethod
+    def _validate_host_underwriting_evidence(
+        output: OriginalHostUnderwritingOutput,
+        *,
+        seed_urls: list[str],
+    ) -> None:
+        if output.status != "PASS":
+            return
+        mix = list(output.independent_source_mix or [])
+        if not mix:
+            raise RuntimeError("HOST_UNDERWRITING_INDEPENDENT_SOURCE_MIX_REQUIRED")
+        seeds = set(seed_urls)
+        if any(url not in seeds for url in mix):
+            raise RuntimeError("HOST_UNDERWRITING_INDEPENDENT_SOURCE_OUTSIDE_SEEDS")
+
+    @staticmethod
     def _downgrade_incomplete_underwriting(
         output: OriginalHostUnderwritingOutput,
     ) -> OriginalHostUnderwritingOutput:
@@ -722,6 +737,10 @@ class OriginalResearchCallbackBridge:
                 validated_model = schema.model_validate(raw_output)
                 if stage == "underwriting":
                     validated_model = self._downgrade_incomplete_underwriting(validated_model)
+                    self._validate_host_underwriting_evidence(
+                        validated_model,
+                        seed_urls=seed_urls,
+                    )
                 validated = validated_model.model_dump(mode="json", exclude_none=True)
                 self._validate_host_source_urls(
                     list(validated.get("source_urls") or []),
