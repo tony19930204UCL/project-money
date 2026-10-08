@@ -3,28 +3,32 @@
   "repository": "tony19930204UCL/project-money",
   "pr_number": 28,
   "branch": "fix/issue16-original-callback-position-bridge",
-  "status": "BLOCKED",
-  "source_head_sha": "400889289be729244eca1b685bbd9343e1183b98",
-  "summary": "Main exact-head browser failure triage for PR28: not a PR28 source regression. At HEAD 9554759bd7a4cfeb90ab440ce0813fd7566fdf3a, Source regression passed while Browser regression failed only in tests/browser/test_workstation_smoke.py during sequential GET-only traversal. After Portfolio -> Strategy Lab navigation, the Strategy Lab view reported data-api-status=ok but its <pre> still contained the previous Portfolio payload (positions/orders/fills), so opening_range_breakout was asserted before the Strategy Lab payload had replaced stale content. PR28 source code did not change between the last successful browser run and this failure; only engineering mailbox JSON files changed. A reproducible fix requires changing browser synchronization in tests/browser/test_workstation_smoke.py and/or the frontend workspace data transition code, both outside the current PR28 authorized file allowlist. No assertion was weakened and no timeout was increased.",
+  "status": "WAITING_CI",
+  "source_head_sha": "2a089dacdc7444ae13ba426419d3e369d6be8057",
+  "summary": "Bounded Issue16 original-host underwriting stage-schema repair on PR28: the callback signature and host DAG remain unchanged, but OriginalHostUnderwritingOutput now exposes the existing PASS completeness contract directly in the generated JSON schema shown to inference. PASS conditionally requires every HOST_UNDERWRITING_REQUIRED_FIELDS field; INCOMPLETE/REJECT may omit unsupported facts. Field descriptions explicitly forbid inventing missing numerical values and direct insufficient public evidence to INCOMPLETE. Existing post-inference downgrade, timeout fail-closed handling, authenticated/nonfixture receipts, heterogeneous challenge, and free/local-only fallback constraints remain unchanged. This source repair does not claim the live 120-second underwriting timeout is solved or that ABC/original-host acceptance passed.",
   "tests": [
     {
+      "command": "python -m pytest -q tests/test_issue16_research_acceptance.py tests/test_issue16_live_bridge.py",
+      "result": "PENDING on source_head_sha in Source regression run 37825538062; workflow created but affected job had not started at handoff checkpoint. Do not treat as PASS."
+    },
+    {
+      "command": "python custom_scripts/issue16_public_intake_probe.py",
+      "result": "PENDING on source_head_sha in Source regression run 37825538062; not yet run at handoff checkpoint."
+    },
+    {
       "command": "python -m pytest",
-      "result": "PASS reported by Main on exact HEAD 9554759bd7a4cfeb90ab440ce0813fd7566fdf3a: 837 Python tests passed."
+      "result": "PENDING on source_head_sha in Source regression run 37825538062; not yet run at handoff checkpoint."
     },
     {
-      "command": "Source regression workflow",
-      "result": "PASS on exact HEAD 9554759bd7a4cfeb90ab440ce0813fd7566fdf3a, run 37801930097."
-    },
-    {
-      "command": "python -m pytest -q tests/browser/test_workstation_smoke.py tests/browser/test_paper_order_flows.py",
-      "result": "FAIL on exact HEAD 9554759bd7a4cfeb90ab440ce0813fd7566fdf3a, Browser regression run 37801929993: test_smoke_is_get_only_without_operator_actions expected opening_range_breakout in Strategy Lab but observed the preceding Portfolio JSON payload."
+      "command": "browser smoke and paper order flows from Browser regression workflow",
+      "result": "PENDING on source_head_sha in Browser regression run 37825538002. Existing Strategy Lab stale-payload race is not claimed fixed and remains outside this source repair authorization."
     }
   ],
   "remaining_work": [
-    "BLOCKED: current PR28 authorization does not include tests/browser/test_workstation_smoke.py or frontend workspace transition code. Main must explicitly authorize the minimal browser synchronization file(s) before this engineer can patch the reproducible race.",
-    "Preferred minimal repair target if authorized: tests/browser/test_workstation_smoke.py, replacing the current status-only workspace wait with synchronization on the requested endpoint/content while retaining the existing opening_range_breakout assertion and existing timeouts.",
-    "Alternative if Main determines the frontend violates its own transition contract: authorize the specific frontend workspace state/update file instead; do not broaden beyond the concrete Strategy Lab stale-payload race.",
-    "Original-host live acceptance remains incomplete: fetch/discovery/commercial passed; underwriting 120-second timeout was typed fail-closed correctly. Do not treat Python/source PASS or any mock/fallback fixture as whole-system success.",
-    "Do not merge, deploy, trade/order, add paid fallback, add an independent model acceptance path, or expand into unrelated roles/monitor/cron/jobs.json/issues."
+    "Wait for exact-source-head Source regression run 37825538062 and Browser regression run 37825538002 to complete; status remains WAITING_CI until visible checks finish.",
+    "Main independent acceptance after source CI: rerun the bounded fresh Microsoft FY2026 Q4 original-host underwriting case and verify whether schema-visible PASS requirements change the real underwriting behavior. A 120-second timeout must remain typed fail-closed if it still occurs.",
+    "Do not treat source/Python PASS, mock outputs, or authorized fallback fixtures as ABC/original-host completion. No true host PASS may be generated from documentation or synthetic runtime receipts.",
+    "Existing Strategy Lab stale-payload browser race remains unresolved and unauthorized for modification; do not claim it fixed.",
+    "Do not merge, deploy, trade/order, add paid fallback or independent model acceptance, change global provider configuration, or expand into roles/monitor/cron/jobs.json/other issues."
   ]
 }
