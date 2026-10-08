@@ -692,7 +692,17 @@ class OriginalResearchCallbackBridge:
         normalized = dict(payload)
         normalized.setdefault("symbol", symbol)
         if stage == "underwriting":
-            allowed = [str(url).strip() for url in (seed_urls or []) if str(url).strip()]
+            seeds = {str(url).strip() for url in (seed_urls or []) if str(url).strip()}
+            documents = normalized.get("documents")
+            if not isinstance(documents, list):
+                raise RuntimeError("HOST_UNDERWRITING_DOCUMENTS_REQUIRED")
+            allowed = []
+            for row in documents:
+                if not isinstance(row, Mapping):
+                    continue
+                url = str(row.get("url") or "").strip()
+                if url and url in seeds and url not in allowed:
+                    allowed.append(url)
             if not allowed:
                 raise RuntimeError("HOST_UNDERWRITING_ALLOWED_SOURCE_URLS_REQUIRED")
             normalized["underwriting_contract"] = {
@@ -720,6 +730,7 @@ class OriginalResearchCallbackBridge:
         output: OriginalHostUnderwritingOutput,
         *,
         seed_urls: list[str],
+        allowed_source_urls: list[str],
     ) -> None:
         if output.status != "PASS":
             return
@@ -727,8 +738,13 @@ class OriginalResearchCallbackBridge:
         if not mix:
             raise RuntimeError("HOST_UNDERWRITING_INDEPENDENT_SOURCE_MIX_REQUIRED")
         seeds = set(seed_urls)
+        allowed = set(allowed_source_urls)
         if any(url not in seeds for url in mix):
             raise RuntimeError("HOST_UNDERWRITING_INDEPENDENT_SOURCE_OUTSIDE_SEEDS")
+        if any(url not in allowed for url in mix):
+            raise RuntimeError("HOST_UNDERWRITING_INDEPENDENT_SOURCE_NOT_IN_TASK_EVIDENCE")
+        if any(url not in allowed for url in output.source_urls):
+            raise RuntimeError("HOST_UNDERWRITING_SOURCE_URL_NOT_IN_TASK_EVIDENCE")
 
     @staticmethod
     def _downgrade_incomplete_underwriting(
@@ -843,9 +859,16 @@ class OriginalResearchCallbackBridge:
                 validated_model = schema.model_validate(raw_output)
                 if stage == "underwriting":
                     validated_model = self._downgrade_incomplete_underwriting(validated_model)
+                    contract = payload.get("underwriting_contract")
+                    allowed_source_urls = (
+                        list(contract.get("allowed_source_urls") or [])
+                        if isinstance(contract, Mapping)
+                        else []
+                    )
                     self._validate_host_underwriting_evidence(
                         validated_model,
                         seed_urls=seed_urls,
+                        allowed_source_urls=allowed_source_urls,
                     )
                 validated = validated_model.model_dump(mode="json", exclude_none=True)
                 self._validate_host_source_urls(
