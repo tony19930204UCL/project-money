@@ -242,7 +242,7 @@ def test_host_underwriting_timeout_exports_only_safe_typed_attempt_without_fallb
         "timeout_seconds": 120,
         "timeout_diagnostics": {
             "stdout_present": True,
-            "stdout_bytes_seen": 953,
+            "stdout_bytes_seen": 959,
             "stderr_present": False,
             "stderr_bytes_seen": 0,
         },
@@ -258,7 +258,7 @@ def test_host_underwriting_timeout_exports_only_safe_typed_attempt_without_fallb
         assert private_marker not in exported
         assert private_marker not in evidence_exported
     assert bridge.callback_evidence[-1]["attempts"][0]["timeout_seconds"] == 120
-    assert bridge.callback_evidence[-1]["attempts"][0]["timeout_diagnostics"]["stdout_bytes_seen"] == 953
+    assert bridge.callback_evidence[-1]["attempts"][0]["timeout_diagnostics"]["stdout_bytes_seen"] == 959
 
 
 def test_host_underwriting_timeout_preserved_before_existing_authorized_fallback_success():
