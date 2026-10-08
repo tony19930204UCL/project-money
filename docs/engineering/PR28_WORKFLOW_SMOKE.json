@@ -4,10 +4,10 @@
   "pr_number": 28,
   "branch": "fix/issue16-original-callback-position-bridge",
   "run_id": "relay-live-20261008",
-  "stage": "A",
+  "stage": "B",
   "revision_round": 1,
   "status": "READY_FOR_REVIEW",
-  "summary": "live transport stage A",
+  "summary": "live transport stage B",
   "tests": [],
   "remaining_work": [],
   "source_head_sha": "7108616feab524771de16bdb3205569e96b00cef"
