@@ -5,9 +5,10 @@
   "branch": "fix/issue16-original-callback-position-bridge",
   "run_id": "current-main-live-20261008",
   "stage": "A",
+  "revision_version": 1,
   "status": "READY_FOR_REVIEW",
   "summary": "live transport stage A",
   "tests": [],
   "remaining_work": [],
-  "source_head_sha": "1cfba748ebe16c594a509b3e87dba97ad8eb59ed"
+  "source_head_sha": "2a969f9bc8039bf70c80040c20ae12d425173d8c"
 }
