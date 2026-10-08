@@ -3,31 +3,35 @@
   "repository": "tony19930204UCL/project-money",
   "pr_number": 28,
   "branch": "fix/issue16-original-callback-position-bridge",
-  "status": "READY_FOR_REVIEW",
-  "source_head_sha": "9c5cecaca164ce82a93cf92c8c4b8357454f7b0f",
-  "summary": "Bounded PR28 Issue16 original-host underwriting false-PASS repair: the host underwriting prompt payload now explicitly names all PASS-required fields and instructs INCOMPLETE with named MISSING_UNDERWRITING_FIELDS gaps when public evidence is insufficient; the bridge independently downgrades model-labeled PASS when any required field is absent, requires independent_source_mix to remain within supplied public seed URLs, and never fills missing numerical values. Added regression for Main's Microsoft official-earnings false-PASS shape. Existing host fail-closed behavior, heterogeneous challenge, strict authenticated/nonfixture inference receipts, delivery receipts, and authorized free/local-only routing remain unchanged.",
+  "status": "WAITING_CI",
+  "source_head_sha": "400889289be729244eca1b685bbd9343e1183b98",
+  "summary": "Bounded PR28 Issue16 original-host inference-timeout repair: _infer_host_route now catches subprocess.TimeoutExpired at the route boundary, retains a typed fail-closed attempt with only stage/route/provider/model/model-family/timeout seconds and stdout/stderr presence+byte-count primitives, and never exports raw command, stdout/stderr content, prompt, workspace, or local paths. Without fallback the deterministic stage reason is HOST_<STAGE>_INFERENCE_TIMEOUT; an explicitly configured existing authorized free/local heterogeneous fallback continues through the existing bounded loop. Added regressions for command-bearing underwriting timeout without fallback and with authorized fallback, while preserving underwriting missing-field semantics, authenticated/nonfixture receipt checks, heterogeneous challenge, strict delivery receipt, and host fail-closed behavior.",
   "tests": [
     {
       "command": "python -m pytest -q tests/test_issue16_research_acceptance.py tests/test_issue16_live_bridge.py",
-      "result": "PASS on source_head_sha in Source regression run 37713974307; GitHub Actions step 'Run Issue 16 original callback and monitor bridge' completed successfully, including the Microsoft underwriting false-PASS regression."
+      "result": "PASS on source_head_sha in Source regression run 37748226171; GitHub Actions step 'Run Issue 16 original callback and monitor bridge' completed successfully, including timeout-without-fallback and authorized-fallback privacy regressions."
     },
     {
       "command": "python custom_scripts/issue16_public_intake_probe.py",
-      "result": "PASS on source_head_sha in Source regression run 37713974307; genuine Microsoft public intake probe completed successfully."
+      "result": "PASS on source_head_sha in Source regression run 37748226171; genuine Microsoft public intake probe completed successfully."
     },
     {
-      "command": "browser smoke and paper order flows from Browser regression workflow",
-      "result": "PASS on source_head_sha in Browser regression run 37713974272."
+      "command": "frontend test command from .github/workflows/source-regression.yml",
+      "result": "PASS on source_head_sha in Source regression run 37748226171; frontend job completed successfully."
     },
     {
       "command": "python -m pytest",
-      "result": "PASS on source_head_sha in Source regression run 37713974307: 839 passed, 11 warnings."
+      "result": "PENDING on source_head_sha in Source regression run 37748226171 at handoff write time; portable source regression step is still in progress and is not recorded as PASS."
+    },
+    {
+      "command": "browser smoke and paper order flows from Browser regression workflow",
+      "result": "PENDING/IN_PROGRESS on source_head_sha in Browser regression run 37748226276 at handoff write time; not recorded as PASS."
     }
   ],
   "remaining_work": [
-    "Main independent acceptance: rerun the real Microsoft original-host underwriting case and verify the previous model-labeled false PASS now returns/downgrades to INCOMPLETE with named missing fields rather than progressing.",
-    "Only after that bounded underwriting acceptance should Main decide the next monitor/receipt step; this handoff does not claim the entire Issue16 system is complete.",
-    "Exact handoff-head verification completed at 81769ef3de9f32263d7ce7cfafa3153f5a8e9f77: Source regression run 37714238053 and Browser regression run 37714238077 both succeeded.",
-    "Do not merge, deploy, trade, add paid fallback, change global provider configuration, or extend into roles/cron/jobs.json/other issues."
+    "Wait for exact-source-head Source regression run 37748226171 and Browser regression run 37748226276 to finish; status remains WAITING_CI until visible exact-head checks succeed.",
+    "Main independent acceptance after CI: rerun one bounded fresh Microsoft FY2026 Q4 original-host underwriting case and verify a 120-second inference timeout is represented as an auditable HOST_UNDERWRITING_INFERENCE_TIMEOUT attempt without raw command/output leakage.",
+    "If Main supplies an already-authorized existing free/local heterogeneous fallback, verify the timed-out primary attempt remains in callback evidence and the fallback is evaluated through the existing bounded route loop; do not add/enable any fallback as part of acceptance.",
+    "This handoff does not claim whole-system closure. Do not merge, deploy, trade/order, add paid fallback, change global provider configuration, or expand into roles/monitor/cron/jobs.json/other issues."
   ]
 }
