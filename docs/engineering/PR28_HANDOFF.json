@@ -3,35 +3,28 @@
   "repository": "tony19930204UCL/project-money",
   "pr_number": 28,
   "branch": "fix/issue16-original-callback-position-bridge",
-  "status": "READY_FOR_REVIEW",
+  "status": "BLOCKED",
   "source_head_sha": "400889289be729244eca1b685bbd9343e1183b98",
-  "summary": "Bounded PR28 Issue16 original-host inference-timeout repair: _infer_host_route now catches subprocess.TimeoutExpired at the route boundary, retains a typed fail-closed attempt with only stage/route/provider/model/model-family/timeout seconds and stdout/stderr presence+byte-count primitives, and never exports raw command, stdout/stderr content, prompt, workspace, or local paths. Without fallback the deterministic stage reason is HOST_<STAGE>_INFERENCE_TIMEOUT; an explicitly configured existing authorized free/local heterogeneous fallback continues through the existing bounded loop. Added regressions for command-bearing underwriting timeout without fallback and with authorized fallback, while preserving underwriting missing-field semantics, authenticated/nonfixture receipt checks, heterogeneous challenge, strict delivery receipt, and host fail-closed behavior.",
+  "summary": "Main exact-head browser failure triage for PR28: not a PR28 source regression. At HEAD 9554759bd7a4cfeb90ab440ce0813fd7566fdf3a, Source regression passed while Browser regression failed only in tests/browser/test_workstation_smoke.py during sequential GET-only traversal. After Portfolio -> Strategy Lab navigation, the Strategy Lab view reported data-api-status=ok but its <pre> still contained the previous Portfolio payload (positions/orders/fills), so opening_range_breakout was asserted before the Strategy Lab payload had replaced stale content. PR28 source code did not change between the last successful browser run and this failure; only engineering mailbox JSON files changed. A reproducible fix requires changing browser synchronization in tests/browser/test_workstation_smoke.py and/or the frontend workspace data transition code, both outside the current PR28 authorized file allowlist. No assertion was weakened and no timeout was increased.",
   "tests": [
     {
-      "command": "python -m pytest -q tests/test_issue16_research_acceptance.py tests/test_issue16_live_bridge.py",
-      "result": "PASS on exact pre-handoff HEAD eb599a35b6ac3cb9a4c87248a2ff3e0672fe49cb in Source regression run 37755633332; Issue 16 original callback and monitor bridge step completed successfully, including timeout-without-fallback and authorized-fallback privacy regressions."
-    },
-    {
-      "command": "python custom_scripts/issue16_public_intake_probe.py",
-      "result": "PASS on exact pre-handoff HEAD eb599a35b6ac3cb9a4c87248a2ff3e0672fe49cb in Source regression run 37755633332."
-    },
-    {
-      "command": "frontend test command from .github/workflows/source-regression.yml",
-      "result": "PASS on exact pre-handoff HEAD eb599a35b6ac3cb9a4c87248a2ff3e0672fe49cb in Source regression run 37755633332; frontend job completed successfully."
-    },
-    {
       "command": "python -m pytest",
-      "result": "PASS on exact pre-handoff HEAD eb599a35b6ac3cb9a4c87248a2ff3e0672fe49cb in Source regression run 37755633332: 841 passed, 13 warnings."
+      "result": "PASS reported by Main on exact HEAD 9554759bd7a4cfeb90ab440ce0813fd7566fdf3a: 837 Python tests passed."
     },
     {
-      "command": "browser smoke and paper order flows from Browser regression workflow",
-      "result": "PASS on exact pre-handoff HEAD eb599a35b6ac3cb9a4c87248a2ff3e0672fe49cb in Browser regression run 37755633357."
+      "command": "Source regression workflow",
+      "result": "PASS on exact HEAD 9554759bd7a4cfeb90ab440ce0813fd7566fdf3a, run 37801930097."
+    },
+    {
+      "command": "python -m pytest -q tests/browser/test_workstation_smoke.py tests/browser/test_paper_order_flows.py",
+      "result": "FAIL on exact HEAD 9554759bd7a4cfeb90ab440ce0813fd7566fdf3a, Browser regression run 37801929993: test_smoke_is_get_only_without_operator_actions expected opening_range_breakout in Strategy Lab but observed the preceding Portfolio JSON payload."
     }
   ],
   "remaining_work": [
-    "Exact pre-handoff verification completed at eb599a35b6ac3cb9a4c87248a2ff3e0672fe49cb: Source regression run 37755633332 and Browser regression run 37755633357 both succeeded.",
-    "Main should directly inspect the PR28 diff/checks/evidence and rerun the bounded fresh Microsoft FY2026 Q4 original-host underwriting case; no additional independent model is requested by this handoff.",
-    "If Main supplies an already-authorized existing free/local heterogeneous fallback, verify the timed-out primary attempt remains in callback evidence and the fallback is evaluated through the existing bounded route loop; do not add/enable any fallback as part of acceptance.",
-    "After scoped acceptance, Main resumes the original ABC next item. This handoff does not claim whole-system closure and must not merge, deploy, trade/order, add paid fallback, change global provider configuration, or expand into other issues."
+    "BLOCKED: current PR28 authorization does not include tests/browser/test_workstation_smoke.py or frontend workspace transition code. Main must explicitly authorize the minimal browser synchronization file(s) before this engineer can patch the reproducible race.",
+    "Preferred minimal repair target if authorized: tests/browser/test_workstation_smoke.py, replacing the current status-only workspace wait with synchronization on the requested endpoint/content while retaining the existing opening_range_breakout assertion and existing timeouts.",
+    "Alternative if Main determines the frontend violates its own transition contract: authorize the specific frontend workspace state/update file instead; do not broaden beyond the concrete Strategy Lab stale-payload race.",
+    "Original-host live acceptance remains incomplete: fetch/discovery/commercial passed; underwriting 120-second timeout was typed fail-closed correctly. Do not treat Python/source PASS or any mock/fallback fixture as whole-system success.",
+    "Do not merge, deploy, trade/order, add paid fallback, add an independent model acceptance path, or expand into unrelated roles/monitor/cron/jobs.json/issues."
   ]
 }
