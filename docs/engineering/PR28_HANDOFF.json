@@ -3,30 +3,34 @@
   "repository": "tony19930204UCL/project-money",
   "pr_number": 28,
   "branch": "fix/issue16-original-callback-position-bridge",
-  "status": "WAITING_CI",
+  "status": "READY_FOR_REVIEW",
   "source_head_sha": "3741981bb5a395426de6263144dfb20fe04b1947",
   "summary": "Bounded PR28 Issue16 original-host underwriting task/output contract repair: demonstrated source gap fixed within the existing bridge allowlist. The underwriting task previously mislabeled PASS requirements as payload fields and required source_urls/independent_source_mix to stay within host seed URLs without explicitly exposing that allowlist to inference. The bridge now keeps the original generate(stage,payload) callback signature but injects required_output_fields_for_pass plus the exact sanitized allowed_source_urls from the host run_case seed list before underwriting inference. Missing allowed seed URLs fail closed before inference. Existing strict output schema, post-output seed-subset validation, false-PASS downgrade, typed timeout handling, authenticated/nonfixture receipts, heterogeneous challenge, and free/local-only fallback constraints remain unchanged. No host PASS is claimed.",
   "tests": [
     {
       "command": "python -m pytest -q tests/test_issue16_research_acceptance.py tests/test_issue16_live_bridge.py",
-      "result": "PENDING on source_head_sha in Source regression run 37832593770; affected job had not started at handoff checkpoint. Do not treat as PASS."
+      "result": "PASS on exact handoff HEAD 7602aa25808f73dc2d188a1b869da75e0074b2cf in Source regression run 37832679171; Issue 16 original callback and monitor bridge step completed successfully, including underwriting task/source contract regressions."
     },
     {
       "command": "python custom_scripts/issue16_public_intake_probe.py",
-      "result": "PENDING on source_head_sha in Source regression run 37832593770; not yet run at handoff checkpoint."
+      "result": "PASS on exact handoff HEAD 7602aa25808f73dc2d188a1b869da75e0074b2cf in Source regression run 37832679171."
     },
     {
       "command": "python -m pytest",
-      "result": "PENDING on source_head_sha in Source regression run 37832593770; not yet run at handoff checkpoint."
+      "result": "PASS on exact handoff HEAD 7602aa25808f73dc2d188a1b869da75e0074b2cf in Source regression run 37832679171: 844 passed, 11 warnings."
+    },
+    {
+      "command": "frontend test command from .github/workflows/source-regression.yml",
+      "result": "PASS on exact handoff HEAD 7602aa25808f73dc2d188a1b869da75e0074b2cf in Source regression run 37832679171; frontend job completed successfully."
     },
     {
       "command": "browser smoke and paper order flows from Browser regression workflow",
-      "result": "IN_PROGRESS on source_head_sha in Browser regression run 37832593818 at handoff checkpoint. Existing historical Strategy Lab stale-payload race is not claimed fixed and browser/frontend files were not modified."
+      "result": "PASS on exact handoff HEAD 7602aa25808f73dc2d188a1b869da75e0074b2cf in Browser regression run 37832679307. Existing historical Strategy Lab stale-payload race is not claimed fixed and browser/frontend files were not modified."
     }
   ],
   "remaining_work": [
-    "Wait for exact-source-head Source regression run 37832593770 and Browser regression run 37832593818 to complete; status remains WAITING_CI until visible checks finish.",
-    "Main independent acceptance after CI: inspect the actual underwriting callback task and confirm the model-visible payload contains required_output_fields_for_pass and allowed_source_urls matching the original host seed list without changing callback arity.",
+    "Exact handoff-head verification completed at 7602aa25808f73dc2d188a1b869da75e0074b2cf: Source regression run 37832679171 and Browser regression run 37832679307 both succeeded.",
+    "Main independent acceptance: inspect the actual underwriting callback task and confirm the model-visible payload contains required_output_fields_for_pass and allowed_source_urls matching the original host seed list without changing callback arity.",
     "Main may then rerun the bounded fresh Microsoft FY2026 Q4 original-host underwriting case. If the 120-second timeout still occurs, typed fail-closed timeout evidence remains the correct behavior; this source repair does not claim latency is solved.",
     "Do not treat source/Python PASS, mock outputs, authorized fallback fixtures, or documentation as ABC/original-host completion.",
     "Do not modify browser/frontend, merge, deploy, trade/order, add paid fallback or independent model acceptance, change policy/global provider configuration, or expand into other issues."
