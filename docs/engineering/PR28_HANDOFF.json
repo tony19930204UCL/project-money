@@ -3,32 +3,36 @@
   "repository": "tony19930204UCL/project-money",
   "pr_number": 28,
   "branch": "fix/issue16-original-callback-position-bridge",
-  "status": "WAITING_CI",
+  "status": "BLOCKED",
   "source_head_sha": "4df8d735a37da7fd3485768f028ce031677854a1",
-  "summary": "Bounded PR28 Issue16 underwriting evidence-citation repair: demonstrated source gap fixed within the existing bridge allowlist. The host seed list is only the maximum URL universe; underwriting PASS evidence must come from documents actually present in the underwriting task. The bridge now derives underwriting_contract.allowed_source_urls from the intersection of host seed_urls and task documents[*].url, and PASS validation rejects source_urls or independent_source_mix entries that are seed-listed but absent from the current underwriting task evidence. Original callback arity, stage order, strict output schema, false-PASS downgrade, typed timeout handling, authenticated/nonfixture receipts, heterogeneous challenge, and free/local-only fallback constraints remain unchanged. No host/ABC PASS is claimed.",
+  "summary": "Exact-head triage for PR28 underwriting evidence-citation repair. Source regression on 54443c7aaebd113d939cc5e3a4a084df86b8c6e5 passed, including the Issue16 focused bridge step, genuine Microsoft public intake probe, full backend suite, and frontend job. Browser regression failed in tests/browser/test_workstation_smoke.py during sequential GET-only traversal: after navigating from Research to Replay, the Replay view had data-api-status=ok but its <pre> still contained the previous Research payload (TEST_ONLY_RESEARCH_FIXTURE), so TEST_ONLY_BROWSER_EXPERIMENT was asserted before the Replay payload replaced stale content. This is the same stale-payload synchronization race class previously observed at Strategy Lab. It is not attributable to the current underwriting source change: the last browser-success exact head 7602aa25808f73dc2d188a1b869da75e0074b2cf and failing head 54443c7aaebd113d939cc5e3a4a084df86b8c6e5 differ only in cio_market_lab/research/issue16_live_bridge.py, tests/test_issue16_live_bridge.py, docs/ISSUE16_CALLBACK_MONITOR_BRIDGE.md, and PR28_HANDOFF.json; no browser/frontend files changed. Runner setup, frontend build, Python browser dependency install, and Chromium install all succeeded. Current PR28 authorization forbids browser/frontend changes, so this blocker cannot be repaired within the existing allowlist.",
   "tests": [
     {
       "command": "python -m pytest -q tests/test_issue16_research_acceptance.py tests/test_issue16_live_bridge.py",
-      "result": "PENDING on source_head_sha; no visible Source regression run had been created at handoff checkpoint. Do not treat as PASS."
+      "result": "PASS on exact head 54443c7aaebd113d939cc5e3a4a084df86b8c6e5 in Source regression run 37834941703; Issue 16 original callback and monitor bridge step completed successfully."
     },
     {
       "command": "python custom_scripts/issue16_public_intake_probe.py",
-      "result": "PENDING on source_head_sha; no visible Source regression run had been created at handoff checkpoint."
+      "result": "PASS on exact head 54443c7aaebd113d939cc5e3a4a084df86b8c6e5 in Source regression run 37834941703; genuine Microsoft public intake probe step completed successfully."
     },
     {
       "command": "python -m pytest",
-      "result": "PENDING on source_head_sha; no visible Source regression run had been created at handoff checkpoint."
+      "result": "PASS on exact head 54443c7aaebd113d939cc5e3a4a084df86b8c6e5 in Source regression run 37834941703: 846 passed, 11 warnings."
     },
     {
-      "command": "browser smoke and paper order flows from Browser regression workflow",
-      "result": "PENDING on source_head_sha; no visible Browser regression run had been created at handoff checkpoint. Browser/frontend files were not modified."
+      "command": "frontend test command from .github/workflows/source-regression.yml",
+      "result": "PASS on exact head 54443c7aaebd113d939cc5e3a4a084df86b8c6e5 in Source regression run 37834941703; frontend job completed successfully."
+    },
+    {
+      "command": "python -m pytest -q tests/browser/test_workstation_smoke.py tests/browser/test_paper_order_flows.py",
+      "result": "FAIL on exact head 54443c7aaebd113d939cc5e3a4a084df86b8c6e5 in Browser regression run 37834941902, job 113509469638: test_smoke_is_get_only_without_operator_actions expected TEST_ONLY_BROWSER_EXPERIMENT in Replay, but Replay <pre> still contained previous Research payload TEST_ONLY_RESEARCH_FIXTURE while data-api-status was already ok."
     }
   ],
   "remaining_work": [
-    "Wait for exact-source-head Source regression and Browser regression checks for 4df8d735a37da7fd3485768f028ce031677854a1; status remains WAITING_CI until visible checks complete.",
-    "Main independent acceptance after CI: inspect an underwriting task with multiple host seed URLs and confirm allowed_source_urls contains only URLs actually present in task documents, not unfetched/unpresented seeds.",
-    "Main may then rerun the bounded fresh Microsoft FY2026 Q4 original-host underwriting case. If the 120-second timeout still occurs, typed fail-closed timeout evidence remains correct; this repair does not claim latency is solved.",
-    "Do not treat source/Python PASS, mock outputs, authorized fallback fixtures, or documentation as ABC/original-host completion.",
-    "Do not modify browser/frontend, merge, deploy, trade/order, add paid fallback or independent model acceptance, change policy/global provider configuration, or expand into other issues."
+    "BLOCKED outside current allowlist: the reproducible failure is in tests/browser/test_workstation_smoke.py synchronization. Minimal additional authorization needed is that file only, to make _wait_workspace synchronize on the requested endpoint/payload transition while retaining existing core-content assertions and existing timeout values. Do not weaken assertions or increase timeouts.",
+    "Base-vs-head evidence: Browser regression passed at 7602aa25808f73dc2d188a1b869da75e0074b2cf (run 37832679307). From that head to failing 54443c7aaebd113d939cc5e3a4a084df86b8c6e5, changed files are only cio_market_lab/research/issue16_live_bridge.py, tests/test_issue16_live_bridge.py, docs/ISSUE16_CALLBACK_MONITOR_BRIDGE.md, and docs/engineering/PR28_HANDOFF.json; no browser/frontend file changed.",
+    "Main can independently continue the original-host bounded acceptance on source_head_sha 4df8d735a37da7fd3485768f028ce031677854a1: rerun the Microsoft FY2026 Q4 underwriting callback and verify task-visible allowed_source_urls contains only URLs present in underwriting documents. If underwriting still times out at 120 seconds, typed fail-closed timeout evidence remains correct and is not a source PASS.",
+    "Do not treat Source regression PASS as ABC/original-host completion. No mock/fallback fixture, documentation, or synthetic runtime receipt establishes live host acceptance.",
+    "Do not modify browser/frontend without explicit new authorization; do not merge, deploy, trade/order, add paid fallback or independent model acceptance, change policy/global provider configuration, or expand into other issues."
   ]
 }
