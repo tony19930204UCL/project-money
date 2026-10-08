@@ -59,13 +59,78 @@ class OriginalHostStageOutput(BaseModel):
 
 
 class OriginalHostUnderwritingOutput(OriginalHostStageOutput):
-    financials: Optional[dict[str, Any]] = None
-    market_metrics: Optional[dict[str, Any]] = None
-    capital_structure: Optional[dict[str, Any]] = None
-    independent_source_mix: Optional[list[str]] = None
-    reflexivity_score: Optional[float] = None
-    scenario_return_estimates: Optional[dict[str, Any]] = None
-    factor_labels: Optional[list[str]] = None
+    """Original-host underwriting result with schema-visible PASS requirements.
+
+    INCOMPLETE/REJECT may omit unsupported fields. PASS is advertised to the
+    inference model as requiring every underwriting fact below; the bridge
+    still independently downgrades incomplete PASS output after inference.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {"status": {"const": "PASS"}},
+                        "required": ["status"],
+                    },
+                    "then": {
+                        "required": [
+                            "financials",
+                            "market_metrics",
+                            "capital_structure",
+                            "independent_source_mix",
+                            "reflexivity_score",
+                            "scenario_return_estimates",
+                            "factor_labels",
+                            "business_maturity",
+                            "valuation_scenarios",
+                            "buy_zone",
+                            "invalidation_conditions",
+                            "review_by",
+                            "four_sentences",
+                        ]
+                    },
+                }
+            ]
+        },
+    )
+    status: str = Field(
+        pattern="^(PASS|REJECT|INCOMPLETE)$",
+        description=(
+            "PASS only when every schema-listed underwriting field is supported by supplied "
+            "public evidence; use INCOMPLETE when evidence is insufficient and never invent values."
+        ),
+    )
+    financials: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Public-evidence financial facts; never infer missing numeric values.",
+    )
+    market_metrics: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Public-evidence market metrics actually supported by supplied documents.",
+    )
+    capital_structure: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Public-evidence capital-structure facts actually supported by supplied documents.",
+    )
+    independent_source_mix: Optional[list[str]] = Field(
+        default=None,
+        description="Non-empty subset of supplied seed URLs used as underwriting evidence.",
+    )
+    reflexivity_score: Optional[float] = Field(
+        default=None,
+        description="Only provide when supportable from supplied evidence; otherwise return INCOMPLETE.",
+    )
+    scenario_return_estimates: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Scenario return estimates supported by supplied evidence; do not fabricate numbers.",
+    )
+    factor_labels: Optional[list[str]] = Field(
+        default=None,
+        description="Evidence-backed factor labels relevant to the underwriting case.",
+    )
     business_maturity: Optional[str] = None
     valuation_scenarios: Optional[dict[str, Any]] = None
     buy_zone: Optional[dict[str, Any]] = None
