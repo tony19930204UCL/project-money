@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+from subprocess import TimeoutExpired
 from typing import Any, Callable, Mapping, Optional
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -345,12 +346,15 @@ class OriginalResearchCallbackBridge:
                 {
                     key: row.get(key)
                     for key in (
+                        "stage",
                         "route",
                         "status",
                         "reason",
                         "provider",
                         "model",
                         "model_family",
+                        "timeout_seconds",
+                        "timeout_diagnostics",
                         "returncode",
                         "auth_verified",
                         "is_success_response",
@@ -677,6 +681,36 @@ class OriginalResearchCallbackBridge:
             return OriginalHostUnderwritingOutput.model_validate(payload)
         return output
 
+    @staticmethod
+    def _safe_timeout_diagnostics(
+        exc: TimeoutExpired,
+        *,
+        configured_timeout_seconds: Any,
+    ) -> dict[str, Any]:
+        """Project a subprocess timeout into public-safe primitive diagnostics only."""
+        def byte_count(value: Any) -> int:
+            if isinstance(value, bytes):
+                return len(value)
+            if isinstance(value, str):
+                return len(value.encode("utf-8", errors="replace"))
+            return 0
+
+        timeout_value = exc.timeout
+        if isinstance(timeout_value, bool) or not isinstance(timeout_value, (int, float)):
+            timeout_value = configured_timeout_seconds
+        if isinstance(timeout_value, bool) or not isinstance(timeout_value, (int, float)):
+            timeout_value = 0
+
+        stdout_value = getattr(exc, "output", None)
+        stderr_value = getattr(exc, "stderr", None)
+        return {
+            "timeout_seconds": timeout_value,
+            "stdout_present": stdout_value is not None,
+            "stdout_bytes_seen": byte_count(stdout_value),
+            "stderr_present": stderr_value is not None,
+            "stderr_bytes_seen": byte_count(stderr_value),
+        }
+
     def _infer_host_route(
         self,
         stage: str,
@@ -776,6 +810,33 @@ class OriginalResearchCallbackBridge:
                     "attempts": attempts,
                     "observed_at": _utc(now).isoformat(),
                 }
+            except TimeoutExpired as exc:
+                safe_timeout = self._safe_timeout_diagnostics(
+                    exc,
+                    configured_timeout_seconds=getattr(engine, "timeout_seconds", None),
+                )
+                attempts.append({
+                    "stage": stage,
+                    "route": route_name,
+                    "status": "BLOCKED",
+                    "reason": f"HOST_{stage.upper()}_INFERENCE_TIMEOUT",
+                    "provider": engine.contract.provider,
+                    "model": engine.contract.model,
+                    "model_family": model_family,
+                    "timeout_seconds": safe_timeout["timeout_seconds"],
+                    "timeout_diagnostics": {
+                        key: safe_timeout[key]
+                        for key in (
+                            "stdout_present",
+                            "stdout_bytes_seen",
+                            "stderr_present",
+                            "stderr_bytes_seen",
+                        )
+                    },
+                })
+                # The raw TimeoutExpired (including cmd/output/stderr) remains local to
+                # this exception scope and is never copied into public callback evidence.
+                continue
             except (ValidationError, ValueError, RuntimeError) as exc:
                 attempts.append({
                     "route": route_name,
