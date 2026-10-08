@@ -217,6 +217,7 @@ def test_host_underwriting_timeout_exports_only_safe_typed_attempt_without_fallb
             },
         },
         symbol="MSFT",
+        seed_urls=[SEED_URL],
     )
 
     result = bridge._record_callback_evidence(
@@ -296,6 +297,7 @@ def test_host_underwriting_timeout_preserved_before_existing_authorized_fallback
             "commercial": {"status": "PASS", "reason": "done", "source_urls": ["https://www.microsoft.com/en-us/Investor/test"]},
         },
         symbol="MSFT",
+        seed_urls=[SEED_URL],
     )
 
     result = bridge._record_callback_evidence(
@@ -1219,6 +1221,25 @@ def test_underwriting_schema_advertises_complete_pass_contract_to_inference_mode
     assert incomplete.scenario_return_estimates is None
 
 
+def test_underwriting_task_contract_requires_explicit_allowed_seed_urls():
+    bridge = OriginalResearchCallbackBridge(routes={}, coordinator=FakeCoordinator())
+    try:
+        bridge._host_stage_payload(
+            "underwriting",
+            {
+                "documents": [],
+                "discovery": {"status": "PASS", "reason": "done", "source_urls": [SEED_URL]},
+                "commercial": {"status": "PASS", "reason": "done", "source_urls": [SEED_URL]},
+            },
+            symbol="MSFT",
+            seed_urls=[],
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "HOST_UNDERWRITING_ALLOWED_SOURCE_URLS_REQUIRED"
+    else:
+        raise AssertionError("underwriting task contract must fail closed without explicit allowed seed URLs")
+
+
 def test_underwriting_prompt_contains_schema_visible_pass_requirements_without_fabrication():
     seen = {}
     def transport(message, **kwargs):
@@ -1272,6 +1293,7 @@ def test_underwriting_prompt_contains_schema_visible_pass_requirements_without_f
             "commercial": {"status": "PASS", "reason": "done", "source_urls": [SEED_URL]},
         },
         symbol="MSFT",
+        seed_urls=[SEED_URL],
     )
     result = bridge._infer_host_route(
         "underwriting",
@@ -1287,6 +1309,9 @@ def test_underwriting_prompt_contains_schema_visible_pass_requirements_without_f
         assert f'"{field}"' in prompt
     assert "never invent values" in prompt
     assert "MISSING_UNDERWRITING_FIELDS" in prompt
+    assert '"required_output_fields_for_pass"' in prompt
+    assert '"allowed_source_urls"' in prompt
+    assert SEED_URL in prompt
 
 
 def test_microsoft_official_false_pass_missing_main_underwriting_fields_downgrades_incomplete():
@@ -1348,11 +1373,13 @@ def test_microsoft_official_false_pass_missing_main_underwriting_fields_downgrad
             },
         },
         symbol="MSFT",
+        seed_urls=[SEED_URL],
     )
     contract = payload["underwriting_contract"]
-    assert set(contract["required_payload_fields_for_pass"]) == set(
+    assert set(contract["required_output_fields_for_pass"]) == set(
         live_bridge.HOST_UNDERWRITING_REQUIRED_FIELDS
     )
+    assert contract["allowed_source_urls"] == [SEED_URL]
     assert "Do not infer or invent missing numerical values" in contract["pass_semantics"]
     assert "MISSING_UNDERWRITING_FIELDS" in contract["insufficient_evidence_semantics"]
 
