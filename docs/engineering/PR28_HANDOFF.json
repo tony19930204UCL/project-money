@@ -9,29 +9,29 @@
   "tests": [
     {
       "command": "python -m pytest -q tests/test_issue16_research_acceptance.py tests/test_issue16_live_bridge.py",
-      "result": "PASS on exact handoff HEAD ca227e8db432159a3ca07b58135ed25463c9029c in Source regression run 37748461460; Issue 16 original callback and monitor bridge step completed successfully, covering timeout-without-fallback and authorized-fallback privacy regressions."
+      "result": "PASS on exact pre-handoff HEAD eb599a35b6ac3cb9a4c87248a2ff3e0672fe49cb in Source regression run 37755633332; Issue 16 original callback and monitor bridge step completed successfully, including timeout-without-fallback and authorized-fallback privacy regressions."
     },
     {
       "command": "python custom_scripts/issue16_public_intake_probe.py",
-      "result": "PASS on exact handoff HEAD ca227e8db432159a3ca07b58135ed25463c9029c in Source regression run 37748461460."
+      "result": "PASS on exact pre-handoff HEAD eb599a35b6ac3cb9a4c87248a2ff3e0672fe49cb in Source regression run 37755633332."
     },
     {
       "command": "frontend test command from .github/workflows/source-regression.yml",
-      "result": "PASS on exact handoff HEAD ca227e8db432159a3ca07b58135ed25463c9029c in Source regression run 37748461460; frontend job completed successfully."
+      "result": "PASS on exact pre-handoff HEAD eb599a35b6ac3cb9a4c87248a2ff3e0672fe49cb in Source regression run 37755633332; frontend job completed successfully."
     },
     {
       "command": "python -m pytest",
-      "result": "PASS on exact handoff HEAD ca227e8db432159a3ca07b58135ed25463c9029c in Source regression run 37748461460: 841 passed, 11 warnings."
+      "result": "PASS on exact pre-handoff HEAD eb599a35b6ac3cb9a4c87248a2ff3e0672fe49cb in Source regression run 37755633332: 841 passed, 13 warnings."
     },
     {
       "command": "browser smoke and paper order flows from Browser regression workflow",
-      "result": "PASS on exact handoff HEAD ca227e8db432159a3ca07b58135ed25463c9029c in Browser regression run 37748461467."
+      "result": "PASS on exact pre-handoff HEAD eb599a35b6ac3cb9a4c87248a2ff3e0672fe49cb in Browser regression run 37755633357."
     }
   ],
   "remaining_work": [
-    "Exact handoff-head verification completed at ca227e8db432159a3ca07b58135ed25463c9029c: Source regression run 37748461460 and Browser regression run 37748461467 both succeeded.",
-    "Main independent acceptance after CI: rerun one bounded fresh Microsoft FY2026 Q4 original-host underwriting case and verify a 120-second inference timeout is represented as an auditable HOST_UNDERWRITING_INFERENCE_TIMEOUT attempt without raw command/output leakage.",
+    "Exact pre-handoff verification completed at eb599a35b6ac3cb9a4c87248a2ff3e0672fe49cb: Source regression run 37755633332 and Browser regression run 37755633357 both succeeded.",
+    "Main should directly inspect the PR28 diff/checks/evidence and rerun the bounded fresh Microsoft FY2026 Q4 original-host underwriting case; no additional independent model is requested by this handoff.",
     "If Main supplies an already-authorized existing free/local heterogeneous fallback, verify the timed-out primary attempt remains in callback evidence and the fallback is evaluated through the existing bounded route loop; do not add/enable any fallback as part of acceptance.",
-    "This handoff does not claim whole-system closure. Do not merge, deploy, trade/order, add paid fallback, change global provider configuration, or expand into roles/monitor/cron/jobs.json/other issues."
+    "After scoped acceptance, Main resumes the original ABC next item. This handoff does not claim whole-system closure and must not merge, deploy, trade/order, add paid fallback, change global provider configuration, or expand into other issues."
   ]
 }
