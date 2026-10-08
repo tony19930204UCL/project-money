@@ -3,32 +3,36 @@
   "repository": "tony19930204UCL/project-money",
   "pr_number": 28,
   "branch": "fix/issue16-original-callback-position-bridge",
-  "status": "WAITING_CI",
+  "status": "READY_FOR_REVIEW",
   "source_head_sha": "2a089dacdc7444ae13ba426419d3e369d6be8057",
   "summary": "Bounded Issue16 original-host underwriting stage-schema repair on PR28: the callback signature and host DAG remain unchanged, but OriginalHostUnderwritingOutput now exposes the existing PASS completeness contract directly in the generated JSON schema shown to inference. PASS conditionally requires every HOST_UNDERWRITING_REQUIRED_FIELDS field; INCOMPLETE/REJECT may omit unsupported facts. Field descriptions explicitly forbid inventing missing numerical values and direct insufficient public evidence to INCOMPLETE. Existing post-inference downgrade, timeout fail-closed handling, authenticated/nonfixture receipts, heterogeneous challenge, and free/local-only fallback constraints remain unchanged. This source repair does not claim the live 120-second underwriting timeout is solved or that ABC/original-host acceptance passed.",
   "tests": [
     {
       "command": "python -m pytest -q tests/test_issue16_research_acceptance.py tests/test_issue16_live_bridge.py",
-      "result": "PENDING on source_head_sha in Source regression run 37825538062; workflow created but affected job had not started at handoff checkpoint. Do not treat as PASS."
+      "result": "PASS on exact handoff HEAD 9f847023770008ec7305adda96055b3ac1b33aa1 in Source regression run 37825605825; Issue 16 original callback and monitor bridge step completed successfully, including schema-visible underwriting PASS requirements."
     },
     {
       "command": "python custom_scripts/issue16_public_intake_probe.py",
-      "result": "PENDING on source_head_sha in Source regression run 37825538062; not yet run at handoff checkpoint."
+      "result": "PASS on exact handoff HEAD 9f847023770008ec7305adda96055b3ac1b33aa1 in Source regression run 37825605825."
     },
     {
       "command": "python -m pytest",
-      "result": "PENDING on source_head_sha in Source regression run 37825538062; not yet run at handoff checkpoint."
+      "result": "PASS on exact handoff HEAD 9f847023770008ec7305adda96055b3ac1b33aa1 in Source regression run 37825605825: 843 passed, 12 warnings."
+    },
+    {
+      "command": "frontend test command from .github/workflows/source-regression.yml",
+      "result": "PASS on exact handoff HEAD 9f847023770008ec7305adda96055b3ac1b33aa1 in Source regression run 37825605825; frontend job completed successfully."
     },
     {
       "command": "browser smoke and paper order flows from Browser regression workflow",
-      "result": "PENDING on source_head_sha in Browser regression run 37825538002. Existing Strategy Lab stale-payload race is not claimed fixed and remains outside this source repair authorization."
+      "result": "PASS on exact handoff HEAD 9f847023770008ec7305adda96055b3ac1b33aa1 in Browser regression run 37825606020. Existing historical Strategy Lab stale-payload race is not claimed fixed by this source change."
     }
   ],
   "remaining_work": [
-    "Wait for exact-source-head Source regression run 37825538062 and Browser regression run 37825538002 to complete; status remains WAITING_CI until visible checks finish.",
-    "Main independent acceptance after source CI: rerun the bounded fresh Microsoft FY2026 Q4 original-host underwriting case and verify whether schema-visible PASS requirements change the real underwriting behavior. A 120-second timeout must remain typed fail-closed if it still occurs.",
+    "Exact handoff-head verification completed at 9f847023770008ec7305adda96055b3ac1b33aa1: Source regression run 37825605825 and Browser regression run 37825606020 both succeeded.",
+    "Main independent acceptance: rerun the bounded fresh Microsoft FY2026 Q4 original-host underwriting case and verify whether schema-visible PASS requirements change the real underwriting behavior. A 120-second timeout must remain typed fail-closed if it still occurs.",
     "Do not treat source/Python PASS, mock outputs, or authorized fallback fixtures as ABC/original-host completion. No true host PASS may be generated from documentation or synthetic runtime receipts.",
-    "Existing Strategy Lab stale-payload browser race remains unresolved and unauthorized for modification; do not claim it fixed.",
+    "Existing historical Strategy Lab stale-payload browser race is not claimed fixed and was not modified by this repair.",
     "Do not merge, deploy, trade/order, add paid fallback or independent model acceptance, change global provider configuration, or expand into roles/monitor/cron/jobs.json/other issues."
   ]
 }
