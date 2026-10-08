@@ -59,6 +59,12 @@ class OriginalHostStageOutput(BaseModel):
 
 class OriginalHostUnderwritingOutput(OriginalHostStageOutput):
     financials: Optional[dict[str, Any]] = None
+    market_metrics: Optional[dict[str, Any]] = None
+    capital_structure: Optional[dict[str, Any]] = None
+    independent_source_mix: Optional[list[str]] = None
+    reflexivity_score: Optional[float] = None
+    scenario_return_estimates: Optional[dict[str, Any]] = None
+    factor_labels: Optional[list[str]] = None
     business_maturity: Optional[str] = None
     valuation_scenarios: Optional[dict[str, Any]] = None
     buy_zone: Optional[dict[str, Any]] = None
@@ -88,6 +94,37 @@ HOST_STAGE_SCHEMAS: dict[str, type[BaseModel]] = {
     "challenge": OriginalHostChallengeOutput,
 }
 
+
+HOST_UNDERWRITING_REQUIRED_FIELDS = (
+    "financials",
+    "market_metrics",
+    "capital_structure",
+    "independent_source_mix",
+    "reflexivity_score",
+    "scenario_return_estimates",
+    "factor_labels",
+    "business_maturity",
+    "valuation_scenarios",
+    "buy_zone",
+    "invalidation_conditions",
+    "review_by",
+    "four_sentences",
+)
+
+HOST_UNDERWRITING_PROMPT_CONTRACT = {
+    "required_payload_fields_for_pass": list(HOST_UNDERWRITING_REQUIRED_FIELDS),
+    "pass_semantics": (
+        "Return PASS only when every required field is non-empty and supported by the supplied "
+        "public documents/source_urls. Do not infer or invent missing numerical values."
+    ),
+    "insufficient_evidence_semantics": (
+        "When any required field cannot be supported by supplied public evidence, return INCOMPLETE "
+        "and name every missing field in reason using MISSING_UNDERWRITING_FIELDS:<comma-separated-fields>."
+    ),
+    "public_evidence_semantics": (
+        "source_urls must contain only supplied seed URLs actually used as public evidence."
+    ),
+}
 
 class OriginalResearchCallbackBridge:
     """Bind verified source/inference adapters into the original callback entrypoint.
@@ -584,6 +621,8 @@ class OriginalResearchCallbackBridge:
             raise RuntimeError(f"HOST_{stage.upper()}_PAYLOAD_MAPPING_REQUIRED")
         normalized = dict(payload)
         normalized.setdefault("symbol", symbol)
+        if stage == "underwriting":
+            normalized["underwriting_contract"] = dict(HOST_UNDERWRITING_PROMPT_CONTRACT)
         _reject_private_content(normalized, f"host_{stage}.payload")
         return normalized
 
@@ -606,32 +645,21 @@ class OriginalResearchCallbackBridge:
     ) -> OriginalHostUnderwritingOutput:
         if output.status != "PASS":
             return output
-        required = {
-            "financials": output.financials,
-            "business_maturity": output.business_maturity,
-            "valuation_scenarios": output.valuation_scenarios,
-            "buy_zone": output.buy_zone,
-            "invalidation_conditions": output.invalidation_conditions,
-            "review_by": output.review_by,
-            "four_sentences": output.four_sentences,
+        values = {
+            field: getattr(output, field)
+            for field in HOST_UNDERWRITING_REQUIRED_FIELDS
         }
         missing = [
-            key for key, value in required.items()
+            key for key, value in values.items()
             if value is None or value == "" or value == {} or value == []
         ]
+        if not output.source_urls:
+            missing.append("public_source_evidence")
         if missing:
-            return OriginalHostUnderwritingOutput(
-                status="INCOMPLETE",
-                reason="MISSING_UNDERWRITING_FACTS:" + ",".join(sorted(missing)),
-                source_urls=list(output.source_urls),
-                financials=output.financials,
-                business_maturity=output.business_maturity,
-                valuation_scenarios=output.valuation_scenarios,
-                buy_zone=output.buy_zone,
-                invalidation_conditions=output.invalidation_conditions,
-                review_by=output.review_by,
-                four_sentences=output.four_sentences,
-            )
+            payload = output.model_dump()
+            payload["status"] = "INCOMPLETE"
+            payload["reason"] = "MISSING_UNDERWRITING_FIELDS:" + ",".join(sorted(set(missing)))
+            return OriginalHostUnderwritingOutput.model_validate(payload)
         return output
 
     def _infer_host_route(
