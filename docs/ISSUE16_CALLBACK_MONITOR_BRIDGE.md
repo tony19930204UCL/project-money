@@ -52,6 +52,12 @@ The route JSON contains only free/local route contracts, never credentials. Each
 }
 ```
 
+### Inference timeout boundary
+
+The original-host inference route catches `subprocess.TimeoutExpired` at the bridge boundary so a timeout cannot escape into the host as a raw command-bearing exception. A timed-out attempt is retained as a typed fail-closed callback attempt with only public-safe primitive fields: stage, route, configured provider/model, declared model family, timeout seconds, stdout/stderr presence booleans, and stdout/stderr byte counts.
+
+The bridge never copies the timeout exception's raw command, stdout/stderr content, prompt, workspace, or local paths into public results or callback evidence. Without an authorized fallback, the stage returns the deterministic reason `HOST_<STAGE>_INFERENCE_TIMEOUT`. If an explicitly configured existing fallback is present, the normal bounded route loop may continue only under the existing free/local authorization and model-family rules; a timeout never manufactures runtime authentication/success receipts and never turns an unsuccessful attempt into PASS.
+
 ### Underwriting PASS semantics
 
 The original-host underwriting bridge now treats `PASS` as a complete, evidenced state rather than accepting the model's status label at face value. The underwriting prompt payload explicitly lists the required fields for PASS:
