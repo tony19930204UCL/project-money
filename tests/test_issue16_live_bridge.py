@@ -652,6 +652,16 @@ def _host_routes(
         "reason": "public evidence supports bounded research review",
         "source_urls": source_urls,
         "financials": {"revenue": "public issuer disclosure"},
+        "market_metrics": {"revenue_growth": "supported by supplied public disclosure"},
+        "capital_structure": {"net_cash_context": "supported by supplied public disclosure"},
+        "independent_source_mix": source_urls,
+        "reflexivity_score": 0.5,
+        "scenario_return_estimates": {
+            "bear": "supported public-evidence estimate",
+            "base": "supported public-evidence estimate",
+            "bull": "supported public-evidence estimate"
+        },
+        "factor_labels": ["public-earnings", "valuation"],
         "business_maturity": "mature public operating business",
         "valuation_scenarios": {
             "bear": "public-evidence downside case",
@@ -731,6 +741,12 @@ def _validate_original_stage_result(stage, result, seed_urls):
     if stage == "underwriting" and result["status"] == "PASS":
         required = {
             "financials",
+            "market_metrics",
+            "capital_structure",
+            "independent_source_mix",
+            "reflexivity_score",
+            "scenario_return_estimates",
+            "factor_labels",
             "business_maturity",
             "valuation_scenarios",
             "buy_zone",
@@ -740,6 +756,13 @@ def _validate_original_stage_result(stage, result, seed_urls):
         }
         assert required <= set(result), "Underwriting PASS missing required facts"
         assert isinstance(result["financials"], dict) and result["financials"]
+        assert isinstance(result["market_metrics"], dict) and result["market_metrics"]
+        assert isinstance(result["capital_structure"], dict) and result["capital_structure"]
+        assert isinstance(result["independent_source_mix"], list) and result["independent_source_mix"]
+        assert set(result["independent_source_mix"]) <= set(seed_urls)
+        assert result["reflexivity_score"] is not None
+        assert isinstance(result["scenario_return_estimates"], dict) and result["scenario_return_estimates"]
+        assert isinstance(result["factor_labels"], list) and result["factor_labels"]
         assert isinstance(result["business_maturity"], str) and result["business_maturity"].strip()
         assert isinstance(result["valuation_scenarios"], dict) and result["valuation_scenarios"]
         assert isinstance(result["buy_zone"], dict) and result["buy_zone"]
@@ -997,6 +1020,89 @@ def test_original_run_case_faithful_contract_executes_all_five_stages():
     assert result["callback_evidence"][4]["challenge_model_distinct"] is True
 
 
+def test_microsoft_official_false_pass_missing_main_underwriting_fields_downgrades_incomplete():
+    """Regression for Main's real-host false PASS observed on Microsoft earnings input."""
+    missing_fields = {
+        "financials",
+        "market_metrics",
+        "capital_structure",
+        "independent_source_mix",
+        "reflexivity_score",
+        "scenario_return_estimates",
+        "factor_labels",
+    }
+    false_pass = {
+        "status": "PASS",
+        "reason": "model incorrectly promoted incomplete Microsoft public evidence",
+        "source_urls": [SEED_URL],
+        "business_maturity": "mature public operating business",
+        "valuation_scenarios": {
+            "bear": "qualitative downside case only",
+            "base": "qualitative base case only",
+            "bull": "qualitative upside case only",
+        },
+        "buy_zone": {"research_only": True},
+        "invalidation_conditions": ["public operating facts materially deteriorate"],
+        "review_by": "2026-10-08",
+        "four_sentences": [
+            "Microsoft public earnings evidence was available.",
+            "Discovery and commercial stages produced public-source artifacts.",
+            "Required underwriting fields were not supported by the supplied evidence.",
+            "This candidate must remain incomplete rather than invent missing values.",
+        ],
+    }
+    route = StageRoute(
+        primary=_engine("underwriting", false_pass, model="underwriter-false-pass"),
+        primary_model_family="underwriting-family",
+    )
+    bridge = OriginalResearchCallbackBridge(
+        routes={"underwriting": route},
+        coordinator=FakeCoordinator(),
+    )
+    payload = bridge._host_stage_payload(
+        "underwriting",
+        {
+            "documents": [{
+                "url": SEED_URL,
+                "text": "Microsoft official earnings revenue and operating income disclosure.",
+                "observed_at": NOW.isoformat(),
+            }],
+            "discovery": {
+                "status": "PASS",
+                "reason": "official Microsoft disclosure discovered",
+                "source_urls": [SEED_URL],
+            },
+            "commercial": {
+                "status": "PASS",
+                "reason": "commercial evidence produced",
+                "source_urls": [SEED_URL],
+            },
+        },
+        symbol="MSFT",
+    )
+    contract = payload["underwriting_contract"]
+    assert set(contract["required_payload_fields_for_pass"]) == set(
+        live_bridge.HOST_UNDERWRITING_REQUIRED_FIELDS
+    )
+    assert "Do not infer or invent missing numerical values" in contract["pass_semantics"]
+    assert "MISSING_UNDERWRITING_FIELDS" in contract["insufficient_evidence_semantics"]
+
+    result = bridge._infer_host_route(
+        "underwriting",
+        payload,
+        now=NOW,
+        seed_urls=[SEED_URL],
+    )
+    assert result["status"] == "COMPLETED"
+    assert result["output"]["status"] == "INCOMPLETE"
+    assert result["schema_valid"] is True
+    reason = result["output"]["reason"]
+    assert reason.startswith("MISSING_UNDERWRITING_FIELDS:")
+    assert set(reason.split(":", 1)[1].split(",")) == missing_fields
+    for field in missing_fields:
+        assert field not in result["output"]
+
+
 def test_original_run_case_missing_underwriting_facts_downgrades_incomplete():
     bridge = OriginalResearchCallbackBridge(
         routes=_host_routes(missing_underwriting=True),
@@ -1025,7 +1131,7 @@ def test_original_run_case_missing_underwriting_facts_downgrades_incomplete():
         )
         seen["underwriting"] = underwriting
         assert underwriting["status"] == "INCOMPLETE"
-        assert underwriting["reason"] == "MISSING_UNDERWRITING_FACTS:financials"
+        assert underwriting["reason"] == "MISSING_UNDERWRITING_FIELDS:financials"
         challenged = _validate_original_stage_result(
             "challenge",
             challenge({"documents": [document], "underwriting": underwriting}),
