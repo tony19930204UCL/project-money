@@ -3,12 +3,11 @@
   "repository": "tony19930204UCL/project-money",
   "pr_number": 28,
   "branch": "fix/issue16-original-callback-position-bridge",
-  "run_id": "relay-live-20261008",
-  "stage": "B",
-  "revision_round": 1,
+  "run_id": "current-main-live-20261008",
+  "stage": "A",
   "status": "READY_FOR_REVIEW",
-  "summary": "live transport stage B",
+  "summary": "live transport stage A",
   "tests": [],
   "remaining_work": [],
-  "source_head_sha": "7108616feab524771de16bdb3205569e96b00cef"
+  "source_head_sha": "1cfba748ebe16c594a509b3e87dba97ad8eb59ed"
 }
