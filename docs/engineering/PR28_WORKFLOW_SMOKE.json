@@ -4,11 +4,11 @@
   "pr_number": 28,
   "branch": "fix/issue16-original-callback-position-bridge",
   "run_id": "current-main-live-20261008",
-  "stage": "A",
+  "stage": "B",
   "revision_version": 1,
   "status": "READY_FOR_REVIEW",
-  "summary": "live transport stage A",
+  "summary": "live transport stage B",
   "tests": [],
   "remaining_work": [],
-  "source_head_sha": "2a969f9bc8039bf70c80040c20ae12d425173d8c"
+  "source_head_sha": "64a9eafdcad6cde48c5ab2a0f636c38d64bb27bb"
 }
