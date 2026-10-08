@@ -5,6 +5,7 @@
   "branch": "fix/issue16-original-callback-position-bridge",
   "run_id": "relay-live-20261008",
   "stage": "A",
+  "revision_round": 1,
   "status": "READY_FOR_REVIEW",
   "summary": "live transport stage A",
   "tests": [],
