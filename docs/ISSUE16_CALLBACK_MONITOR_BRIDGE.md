@@ -58,6 +58,12 @@ The original-host inference route catches `subprocess.TimeoutExpired` at the bri
 
 The bridge never copies the timeout exception's raw command, stdout/stderr content, prompt, workspace, or local paths into public results or callback evidence. Without an authorized fallback, the stage returns the deterministic reason `HOST_<STAGE>_INFERENCE_TIMEOUT`. If an explicitly configured existing fallback is present, the normal bounded route loop may continue only under the existing free/local authorization and model-family rules; a timeout never manufactures runtime authentication/success receipts and never turns an unsuccessful attempt into PASS.
 
+### Underwriting evidence citation boundary
+
+The host seed list defines the maximum public URL universe, but underwriting may only cite evidence that is actually present in that underwriting task. The bridge therefore derives `allowed_source_urls` from the intersection of the original host seed list and the `documents[*].url` values supplied to the underwriting callback.
+
+A PASS cannot use `source_urls` or `independent_source_mix` entries that are merely present in the host seed list but absent from the current underwriting task documents. Those outputs fail closed with a typed task-evidence error. This preserves the existing seed-subset rule while preventing unfetched/unpresented seed URLs from being treated as evidence.
+
 ### Underwriting task/output source contract alignment
 
 The original host callback arity remains unchanged. Before calling the existing underwriting inference route, the bridge now makes two previously implicit constraints explicit inside the underwriting task payload:
