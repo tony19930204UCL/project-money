@@ -3,35 +3,31 @@
   "repository": "tony19930204UCL/project-money",
   "pr_number": 28,
   "branch": "fix/issue16-original-callback-position-bridge",
-  "status": "READY_FOR_REVIEW",
-  "source_head_sha": "eeb9a995ccd84ac53cac3710e19fe9a01b1b258e",
-  "summary": "Implemented Main revision for genuine official Microsoft intake through the existing official_documents parser, preserved the four-stage strict schema/authenticated receipt boundaries, added explicit model-family routing and heterogeneous challenge enforcement, persisted fail-closed fetch diagnostics/provenance, and added a genuine Microsoft public intake probe outside pytest network isolation. No merge, deploy, trading, paid fallback, fabricated model output, or global provider change.",
+  "status": "WAITING_CI",
+  "source_head_sha": "9c5cecaca164ce82a93cf92c8c4b8357454f7b0f",
+  "summary": "Bounded PR28 Issue16 original-host underwriting false-PASS repair: the host underwriting prompt payload now explicitly names all PASS-required fields and instructs INCOMPLETE with named MISSING_UNDERWRITING_FIELDS gaps when public evidence is insufficient; the bridge independently downgrades model-labeled PASS when any required field is absent, requires independent_source_mix to remain within supplied public seed URLs, and never fills missing numerical values. Added regression for Main's Microsoft official-earnings false-PASS shape. Existing host fail-closed behavior, heterogeneous challenge, strict authenticated/nonfixture inference receipts, delivery receipts, and authorized free/local-only routing remain unchanged.",
   "tests": [
     {
       "command": "python -m pytest -q tests/test_issue16_research_acceptance.py tests/test_issue16_live_bridge.py",
-      "result": "PASS on source_head_sha in Source regression run 37690901173 (Issue 16 focused step completed successfully)."
+      "result": "PASS on source_head_sha in Source regression run 37713974307; GitHub Actions step 'Run Issue 16 original callback and monitor bridge' completed successfully, including the Microsoft underwriting false-PASS regression."
     },
     {
       "command": "python custom_scripts/issue16_public_intake_probe.py",
-      "result": "PASS on source_head_sha in Source regression run 37690901173 against genuine Microsoft FY2026 Q4 investor disclosure; fetch COMPLETED, 38 parsed parts, 37 accepted, 1 rejected by existing outbound boundary, extraction_succeeded=true."
-    },
-    {
-      "command": "python -m pytest",
-      "result": "PASS on source_head_sha in Source regression run 37690901173: 838 passed, 11 warnings."
-    },
-    {
-      "command": "frontend test command from .github/workflows/source-regression.yml",
-      "result": "PASS on source_head_sha in Source regression run 37690901173: 603 passed, 2 skipped; 71 test files passed, 1 skipped."
+      "result": "PASS on source_head_sha in Source regression run 37713974307; genuine Microsoft public intake probe completed successfully."
     },
     {
       "command": "browser smoke and paper order flows from Browser regression workflow",
-      "result": "PASS on source_head_sha in Browser regression run 37690901174; sanitized browser evidence artifact uploaded."
+      "result": "PASS on source_head_sha in Browser regression run 37713974272."
+    },
+    {
+      "command": "python -m pytest",
+      "result": "PENDING on source_head_sha in Source regression run 37713974307 at handoff write time; do not treat as PASS until exact-head Source regression completes."
     }
   ],
   "remaining_work": [
-    "Main independent acceptance: inspect PR diff/checks at exact HEAD 4cb355ba0b029a8a4ca3457bfdeadcd201230581; Source regression run 37702412483 and Browser regression run 37702412500 both completed successfully.",
-    "Main independent acceptance: execute genuine affected tests and authenticated four-stage original host run_case using real model outputs/receipts.",
-    "Main independent acceptance: verify private local position-contract join against canonical registry and authentic platform delivery receipt if required by scoped acceptance.",
-    "Do not merge, deploy, trade, add paid fallback, or change global provider configuration as part of this handoff."
+    "Wait for exact-source-head Source regression run 37713974307 to finish; current portable full pytest step is still in progress. Until then status remains WAITING_CI.",
+    "After CI success, Main independent acceptance should rerun the real Microsoft original-host underwriting case and verify the previous model-labeled false PASS now returns/downgrades to INCOMPLETE with named missing fields rather than progressing.",
+    "Only after that bounded underwriting acceptance should Main decide the next monitor/receipt step; this handoff does not claim the entire Issue16 system is complete.",
+    "Do not merge, deploy, trade, add paid fallback, change global provider configuration, or extend into roles/cron/jobs.json/other issues."
   ]
 }
