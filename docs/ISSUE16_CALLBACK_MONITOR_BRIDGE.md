@@ -52,6 +52,28 @@ The route JSON contains only free/local route contracts, never credentials. Each
 }
 ```
 
+### Underwriting PASS semantics
+
+The original-host underwriting bridge now treats `PASS` as a complete, evidenced state rather than accepting the model's status label at face value. The underwriting prompt payload explicitly lists the required fields for PASS:
+
+- `financials`
+- `market_metrics`
+- `capital_structure`
+- `independent_source_mix`
+- `reflexivity_score`
+- `scenario_return_estimates`
+- `factor_labels`
+- `business_maturity`
+- `valuation_scenarios`
+- `buy_zone`
+- `invalidation_conditions`
+- `review_by`
+- `four_sentences`
+
+The prompt instructs the model to use only supplied public documents and seed URLs, never invent missing numerical values, and return `INCOMPLETE` with `MISSING_UNDERWRITING_FIELDS:<names>` when evidence is insufficient. As a second fail-closed boundary, the bridge independently downgrades any model-labeled `PASS` with missing required fields to `INCOMPLETE` and preserves the missing fields by name. A remaining `PASS` must also carry a non-empty `independent_source_mix` whose URLs are a subset of the supplied seed URLs.
+
+This specifically covers the Microsoft official-earnings false-PASS observed during Main acceptance: discovery/commercial output may exist, but underwriting cannot progress to challenge merely because the model returned `PASS` while the required financial/market/capital/source-mix/reflexivity/scenario/factor fields are absent.
+
 Successful stage callbacks retain resolved provider/model plus affirmative auth,
 non-fixture and successful-returncode evidence. Missing adapter/route,
 unauthorized inference, schema failure, private output or same-model challenge
