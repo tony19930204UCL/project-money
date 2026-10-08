@@ -178,7 +178,7 @@ HOST_UNDERWRITING_REQUIRED_FIELDS = (
 )
 
 HOST_UNDERWRITING_PROMPT_CONTRACT = {
-    "required_payload_fields_for_pass": list(HOST_UNDERWRITING_REQUIRED_FIELDS),
+    "required_output_fields_for_pass": list(HOST_UNDERWRITING_REQUIRED_FIELDS),
     "pass_semantics": (
         "Return PASS only when every required field is non-empty and supported by the supplied "
         "public documents/source_urls. Do not infer or invent missing numerical values."
@@ -685,13 +685,20 @@ class OriginalResearchCallbackBridge:
         payload: Mapping[str, Any],
         *,
         symbol: str,
+        seed_urls: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         if not isinstance(payload, Mapping):
             raise RuntimeError(f"HOST_{stage.upper()}_PAYLOAD_MAPPING_REQUIRED")
         normalized = dict(payload)
         normalized.setdefault("symbol", symbol)
         if stage == "underwriting":
-            normalized["underwriting_contract"] = dict(HOST_UNDERWRITING_PROMPT_CONTRACT)
+            allowed = [str(url).strip() for url in (seed_urls or []) if str(url).strip()]
+            if not allowed:
+                raise RuntimeError("HOST_UNDERWRITING_ALLOWED_SOURCE_URLS_REQUIRED")
+            normalized["underwriting_contract"] = {
+                **HOST_UNDERWRITING_PROMPT_CONTRACT,
+                "allowed_source_urls": allowed,
+            }
         _reject_private_content(normalized, f"host_{stage}.payload")
         return normalized
 
@@ -937,7 +944,12 @@ class OriginalResearchCallbackBridge:
             return self._fetch_host_public_document(url, now=now, reader=reader)
 
         def generate_callback(stage: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-            normalized = self._host_stage_payload(stage, payload, symbol=symbol)
+            normalized = self._host_stage_payload(
+                stage,
+                payload,
+                symbol=symbol,
+                seed_urls=seed_urls,
+            )
             if stage not in self.GENERATE_STAGES:
                 raise RuntimeError("HOST_GENERATE_STAGE_MISMATCH")
             result = self._record_callback_evidence(
