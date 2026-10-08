@@ -58,6 +58,14 @@ The original-host inference route catches `subprocess.TimeoutExpired` at the bri
 
 The bridge never copies the timeout exception's raw command, stdout/stderr content, prompt, workspace, or local paths into public results or callback evidence. Without an authorized fallback, the stage returns the deterministic reason `HOST_<STAGE>_INFERENCE_TIMEOUT`. If an explicitly configured existing fallback is present, the normal bounded route loop may continue only under the existing free/local authorization and model-family rules; a timeout never manufactures runtime authentication/success receipts and never turns an unsuccessful attempt into PASS.
 
+### Strict underwriting schema visibility
+
+The original-host callback signature remains unchanged: `generate("underwriting", payload)` receives the host-provided `documents + discovery + commercial` task input, and challenge remains a separate callback. This repair does not redesign the host DAG or change stage ordering.
+
+The underwriting JSON schema shown to the inference route now exposes the same PASS contract that the bridge already enforced after inference. Its generated schema contains a conditional PASS rule requiring every field in `HOST_UNDERWRITING_REQUIRED_FIELDS`, while `INCOMPLETE` and `REJECT` may still omit facts that public evidence cannot support. Field descriptions explicitly instruct the model not to invent unsupported values and to use `INCOMPLETE` when evidence is insufficient.
+
+This closes a source contract gap where the prompt's generated JSON schema previously advertised underwriting fields as optional even though the host/bridge would reject or downgrade an incomplete PASS afterward. It does **not** claim that the live 120-second underwriting latency is eliminated; runtime timeout handling remains fail-closed and Main must re-run the real host underwriting case for acceptance.
+
 ### Underwriting PASS semantics
 
 The original-host underwriting bridge now treats `PASS` as a complete, evidenced state rather than accepting the model's status label at face value. The underwriting prompt payload explicitly lists the required fields for PASS:
