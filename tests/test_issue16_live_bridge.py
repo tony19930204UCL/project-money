@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+from subprocess import TimeoutExpired
 
 import cio_market_lab.research.issue16_live_bridge as live_bridge
 from custom_scripts import issue16_bridge_candidate as candidate_cli
@@ -64,6 +65,37 @@ def _transport_for(stage, output, *, provider, model):
             },
         }
     return transport
+
+
+def _timeout_engine(
+    stage,
+    *,
+    provider="local-provider",
+    model="timeout-model",
+    authorized=True,
+    timeout_seconds=120,
+):
+    def transport(message, **kwargs):
+        assert f"stage={stage}" in message
+        raise TimeoutExpired(
+            cmd=["/private/runtime/bin/hermes", "--workspace", "/home/user/private-workspace"],
+            timeout=timeout_seconds,
+            output=b"PRIVATE_PROMPT_MARKER /home/user/private-workspace " + (b"x" * 908),
+            stderr=None,
+        )
+
+    return HermesLocalInference(
+        InferenceContract(
+            provider=provider,
+            model=model,
+            session_id=f"issue16-{stage}-{model}",
+            workspace_root="/workspace",
+            is_free_or_local_authorized=authorized,
+            purpose=f"issue16 {stage}",
+        ),
+        transport=transport,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def _engine(stage, output, provider="local-provider", model="model-a", authorized=True):
@@ -153,6 +185,149 @@ def test_original_entrypoint_receives_real_callbacks_and_runtime_receipts():
         "returncode": 0,
     }
     assert result["callback_evidence"][-1]["challenge_model_distinct"] is True
+
+
+def test_host_underwriting_timeout_exports_only_safe_typed_attempt_without_fallback():
+    bridge = OriginalResearchCallbackBridge(
+        routes={
+            "underwriting": StageRoute(
+                primary=_timeout_engine("underwriting", model="nemotron-timeout"),
+                primary_model_family="nemotron",
+            )
+        },
+        coordinator=FakeCoordinator(),
+    )
+    payload = bridge._host_stage_payload(
+        "underwriting",
+        {
+            "documents": [{
+                "url": "https://www.microsoft.com/en-us/Investor/test",
+                "text": "Microsoft official earnings revenue and operating income disclosure.",
+                "observed_at": NOW.isoformat(),
+            }],
+            "discovery": {
+                "status": "PASS",
+                "reason": "official public discovery complete",
+                "source_urls": ["https://www.microsoft.com/en-us/Investor/test"],
+            },
+            "commercial": {
+                "status": "PASS",
+                "reason": "public commercial evidence complete",
+                "source_urls": ["https://www.microsoft.com/en-us/Investor/test"],
+            },
+        },
+        symbol="MSFT",
+    )
+
+    result = bridge._record_callback_evidence(
+        bridge._infer_host_route(
+            "underwriting",
+            payload,
+            now=NOW,
+            seed_urls=["https://www.microsoft.com/en-us/Investor/test"],
+        )
+    )
+    assert result["status"] == "BLOCKED"
+    assert result["reason"] == "HOST_UNDERWRITING_INFERENCE_TIMEOUT"
+    assert len(result["attempts"]) == 1
+    attempt = result["attempts"][0]
+    assert attempt == {
+        "stage": "underwriting",
+        "route": "primary",
+        "status": "BLOCKED",
+        "reason": "HOST_UNDERWRITING_INFERENCE_TIMEOUT",
+        "provider": "local-provider",
+        "model": "nemotron-timeout",
+        "model_family": "nemotron",
+        "timeout_seconds": 120,
+        "timeout_diagnostics": {
+            "stdout_present": True,
+            "stdout_bytes_seen": 953,
+            "stderr_present": False,
+            "stderr_bytes_seen": 0,
+        },
+    }
+    exported = json.dumps(result, sort_keys=True)
+    evidence_exported = json.dumps(bridge.callback_evidence, sort_keys=True)
+    for private_marker in (
+        "/private/runtime/bin/hermes",
+        "/home/user/private-workspace",
+        "PRIVATE_PROMPT_MARKER",
+        "--workspace",
+    ):
+        assert private_marker not in exported
+        assert private_marker not in evidence_exported
+    assert bridge.callback_evidence[-1]["attempts"][0]["timeout_seconds"] == 120
+    assert bridge.callback_evidence[-1]["attempts"][0]["timeout_diagnostics"]["stdout_bytes_seen"] == 953
+
+
+def test_host_underwriting_timeout_preserved_before_existing_authorized_fallback_success():
+    fallback_output = {
+        "status": "INCOMPLETE",
+        "reason": "public evidence insufficient after primary timeout; no values invented",
+        "source_urls": ["https://www.microsoft.com/en-us/Investor/test"],
+    }
+    bridge = OriginalResearchCallbackBridge(
+        routes={
+            "underwriting": StageRoute(
+                primary=_timeout_engine("underwriting", model="nemotron-timeout"),
+                primary_model_family="nemotron",
+                fallback=_engine(
+                    "underwriting",
+                    fallback_output,
+                    provider="local-provider",
+                    model="authorized-fallback",
+                    authorized=True,
+                ),
+                fallback_model_family="fallback-family",
+            )
+        },
+        coordinator=FakeCoordinator(),
+    )
+    payload = bridge._host_stage_payload(
+        "underwriting",
+        {
+            "documents": [{
+                "url": "https://www.microsoft.com/en-us/Investor/test",
+                "text": "Microsoft official earnings public disclosure.",
+                "observed_at": NOW.isoformat(),
+            }],
+            "discovery": {"status": "PASS", "reason": "done", "source_urls": ["https://www.microsoft.com/en-us/Investor/test"]},
+            "commercial": {"status": "PASS", "reason": "done", "source_urls": ["https://www.microsoft.com/en-us/Investor/test"]},
+        },
+        symbol="MSFT",
+    )
+
+    result = bridge._record_callback_evidence(
+        bridge._infer_host_route(
+            "underwriting",
+            payload,
+            now=NOW,
+            seed_urls=["https://www.microsoft.com/en-us/Investor/test"],
+        )
+    )
+    assert result["status"] == "COMPLETED"
+    assert result["route"] == "fallback"
+    assert result["output"]["status"] == "INCOMPLETE"
+    assert len(result["attempts"]) == 2
+    assert result["attempts"][0]["reason"] == "HOST_UNDERWRITING_INFERENCE_TIMEOUT"
+    assert result["attempts"][0]["timeout_seconds"] == 120
+    assert result["attempts"][1]["status"] == "COMPLETED"
+    assert result["attempts"][1]["model"] == "authorized-fallback"
+    assert result["attempts"][1]["auth_verified"] is True
+    assert result["attempts"][1]["is_success_response"] is True
+    assert result["attempts"][1]["is_fixture"] is False
+    assert result["attempts"][1]["returncode"] == 0
+    exported = json.dumps(result, sort_keys=True)
+    evidence_exported = json.dumps(bridge.callback_evidence, sort_keys=True)
+    for private_marker in (
+        "/private/runtime/bin/hermes",
+        "/home/user/private-workspace",
+        "PRIVATE_PROMPT_MARKER",
+        "--workspace",
+    ):
+        assert private_marker not in exported
+        assert private_marker not in evidence_exported
 
 
 def test_original_entrypoint_missing_route_and_contract_mismatch_fail_closed():
