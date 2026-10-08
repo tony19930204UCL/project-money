@@ -1195,6 +1195,100 @@ def test_original_run_case_faithful_contract_executes_all_five_stages():
     assert result["callback_evidence"][4]["challenge_model_distinct"] is True
 
 
+def test_underwriting_schema_advertises_complete_pass_contract_to_inference_model():
+    schema = live_bridge.OriginalHostUnderwritingOutput.model_json_schema()
+    conditional = schema.get("allOf")
+    assert isinstance(conditional, list) and conditional
+    pass_rule = conditional[0]
+    assert pass_rule["if"]["properties"]["status"]["const"] == "PASS"
+    required = set(pass_rule["then"]["required"])
+    assert required == set(live_bridge.HOST_UNDERWRITING_REQUIRED_FIELDS)
+
+    status_description = schema["properties"]["status"]["description"]
+    assert "PASS only when every schema-listed underwriting field" in status_description
+    assert "INCOMPLETE" in status_description
+    assert "never invent values" in status_description
+
+    incomplete = live_bridge.OriginalHostUnderwritingOutput.model_validate({
+        "status": "INCOMPLETE",
+        "reason": "public evidence does not support required underwriting facts",
+        "source_urls": [SEED_URL],
+    })
+    assert incomplete.status == "INCOMPLETE"
+    assert incomplete.financials is None
+    assert incomplete.scenario_return_estimates is None
+
+
+def test_underwriting_prompt_contains_schema_visible_pass_requirements_without_fabrication():
+    seen = {}
+    def transport(message, **kwargs):
+        seen["message"] = message
+        return {
+            "response": json.dumps({
+                "status": "INCOMPLETE",
+                "reason": "MISSING_UNDERWRITING_FIELDS:financials",
+                "source_urls": [SEED_URL],
+            }),
+            "returncode": 0,
+            "runtime_metadata": {
+                "resolved_provider": "local-provider",
+                "resolved_model": "underwriter-schema",
+                "auth_verified": True,
+                "is_success_response": True,
+                "is_fixture": False,
+                "fallback_active": False,
+            },
+        }
+
+    engine = HermesLocalInference(
+        InferenceContract(
+            provider="local-provider",
+            model="underwriter-schema",
+            session_id="issue16-underwriting-schema",
+            workspace_root="/workspace",
+            is_free_or_local_authorized=True,
+            purpose="issue16 underwriting schema visibility",
+        ),
+        transport=transport,
+    )
+    bridge = OriginalResearchCallbackBridge(
+        routes={
+            "underwriting": StageRoute(
+                primary=engine,
+                primary_model_family="underwriting-family",
+            )
+        },
+        coordinator=FakeCoordinator(),
+    )
+    payload = bridge._host_stage_payload(
+        "underwriting",
+        {
+            "documents": [{
+                "url": SEED_URL,
+                "text": "Microsoft official earnings public disclosure.",
+                "observed_at": NOW.isoformat(),
+            }],
+            "discovery": {"status": "PASS", "reason": "done", "source_urls": [SEED_URL]},
+            "commercial": {"status": "PASS", "reason": "done", "source_urls": [SEED_URL]},
+        },
+        symbol="MSFT",
+    )
+    result = bridge._infer_host_route(
+        "underwriting",
+        payload,
+        now=NOW,
+        seed_urls=[SEED_URL],
+    )
+    assert result["status"] == "COMPLETED"
+    assert result["output"]["status"] == "INCOMPLETE"
+    prompt = seen["message"]
+    assert '"allOf"' in prompt
+    for field in live_bridge.HOST_UNDERWRITING_REQUIRED_FIELDS:
+        assert f'"{field}"' in prompt
+    assert "never invent values" in prompt
+    assert "MISSING_UNDERWRITING_FIELDS" in prompt
+
+
 def test_microsoft_official_false_pass_missing_main_underwriting_fields_downgrades_incomplete():
     """Regression for Main's real-host false PASS observed on Microsoft earnings input."""
     missing_fields = {
