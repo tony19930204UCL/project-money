@@ -3,7 +3,7 @@
   "repository": "tony19930204UCL/project-money",
   "pr_number": 28,
   "branch": "fix/issue16-original-callback-position-bridge",
-  "status": "WAITING_CI",
+  "status": "READY_FOR_REVIEW",
   "source_head_sha": "9c5cecaca164ce82a93cf92c8c4b8357454f7b0f",
   "summary": "Bounded PR28 Issue16 original-host underwriting false-PASS repair: the host underwriting prompt payload now explicitly names all PASS-required fields and instructs INCOMPLETE with named MISSING_UNDERWRITING_FIELDS gaps when public evidence is insufficient; the bridge independently downgrades model-labeled PASS when any required field is absent, requires independent_source_mix to remain within supplied public seed URLs, and never fills missing numerical values. Added regression for Main's Microsoft official-earnings false-PASS shape. Existing host fail-closed behavior, heterogeneous challenge, strict authenticated/nonfixture inference receipts, delivery receipts, and authorized free/local-only routing remain unchanged.",
   "tests": [
@@ -21,13 +21,13 @@
     },
     {
       "command": "python -m pytest",
-      "result": "PENDING on source_head_sha in Source regression run 37713974307 at handoff write time; do not treat as PASS until exact-head Source regression completes."
+      "result": "PASS on source_head_sha in Source regression run 37713974307: 839 passed, 11 warnings."
     }
   ],
   "remaining_work": [
-    "Wait for exact-source-head Source regression run 37713974307 to finish; current portable full pytest step is still in progress. Until then status remains WAITING_CI.",
-    "After CI success, Main independent acceptance should rerun the real Microsoft original-host underwriting case and verify the previous model-labeled false PASS now returns/downgrades to INCOMPLETE with named missing fields rather than progressing.",
+    "Main independent acceptance: rerun the real Microsoft original-host underwriting case and verify the previous model-labeled false PASS now returns/downgrades to INCOMPLETE with named missing fields rather than progressing.",
     "Only after that bounded underwriting acceptance should Main decide the next monitor/receipt step; this handoff does not claim the entire Issue16 system is complete.",
+    "Exact handoff-head verification completed at 81769ef3de9f32263d7ce7cfafa3153f5a8e9f77: Source regression run 37714238053 and Browser regression run 37714238077 both succeeded.",
     "Do not merge, deploy, trade, add paid fallback, change global provider configuration, or extend into roles/cron/jobs.json/other issues."
   ]
 }
