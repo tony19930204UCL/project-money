@@ -1,1 +1,49 @@
-{"status":"PENDING","task":"issue16-judgment-layer"}
+{
+  "schema_version": 2,
+  "repository": "tony19930204UCL/project-money",
+  "pr_number": 31,
+  "branch": "feat/issue16-judgment-layer",
+  "task_id": "issue16-judgment-layer-20261010",
+  "instruction_id": "J1-r1",
+  "status": "BLOCKED",
+  "source_head_sha": "ed41825f8f513b6b2ab051ee6adbe090a6060fa8",
+  "summary": "Implemented snapshot freshness validation and isolated draft judgments on existing PR #31; CI acceptance not established. Runtime tests cannot be executed from this environment because GitHub is unreachable from the container; GitHub connector supports repository edits but not pytest execution. Requires further integration verification before Main acceptance.",
+  "changed_files": [
+    "cio_market_lab/research/issue16_live_bridge.py",
+    "tests/test_issue16_live_bridge.py",
+    "docs/engineering/ISSUE16_JUDGMENT_HANDOFF.json"
+  ],
+  "tests": [
+    {
+      "command": "git ls-remote https://github.com/tony19930204UCL/project-money.git refs/heads/feat/issue16-judgment-layer",
+      "result": "FAILED",
+      "evidence": "fatal: unable to access 'https://github.com/tony19930204UCL/project-money.git/': Could not resolve host: github.com"
+    },
+    {
+      "command": "pytest -q tests/test_issue16_live_bridge.py",
+      "result": "NOT_EXECUTED",
+      "evidence": "No repository checkout in container; git remote cannot resolve github.com. Do not interpret as PASS."
+    }
+  ],
+  "remaining_work": [
+    {
+      "item": "Run full issue16 bridge regression and adjacent suites; fix any integration failures",
+      "status": "ACTIONABLE_NOW",
+      "owner": "Implementer"
+    },
+    {
+      "item": "Check exact HEAD Source regression and verify host contract end-to-end",
+      "status": "ACTIONABLE_NOW",
+      "owner": "Main CIO"
+    }
+  ],
+  "next_step_reminder": {
+    "to": "Main CIO",
+    "verify_now": "Verify diff, execute tests/test_issue16_live_bridge.py and Source regression on exact HEAD; inspect judgment draft host integration.",
+    "if_pass": "Approve only after independently confirming required acceptance criteria.",
+    "if_fail": "Return exact failing tests and logs for correction.",
+    "blockers": [
+      "fatal: unable to access 'https://github.com/tony19930204UCL/project-money.git/': Could not resolve host: github.com"
+    ]
+  }
+}
