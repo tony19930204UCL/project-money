@@ -4,10 +4,10 @@
   "pr_number": 31,
   "branch": "feat/issue16-judgment-layer",
   "task_id": "issue16-judgment-layer-20261010",
-  "instruction_id": "J1-r1",
-  "status": "BLOCKED",
-  "source_head_sha": "ed41825f8f513b6b2ab051ee6adbe090a6060fa8",
-  "summary": "Implemented snapshot freshness validation and isolated draft judgments on existing PR #31; CI acceptance not established. Runtime tests cannot be executed from this environment because GitHub is unreachable from the container; GitHub connector supports repository edits but not pytest execution. Requires further integration verification before Main acceptance.",
+  "instruction_id": "J1-r2",
+  "status": "READY_FOR_REVIEW",
+  "source_head_sha": "252bf645d3192091a6ff508eb909fff6edfa482a",
+  "summary": "Restored exact legacy underwriting prompt contract keys and semantics, preserved no-market_snapshot original downgrade/PASS path, restricted snapshot draft logic to explicit market_snapshot payloads, and added no-snapshot legacy PASS regression. Main CIO reported seven pre-existing failures on prior HEAD 73d6de5; this change addresses the shared compatibility cause. Tests have not been rerun on new HEAD.",
   "changed_files": [
     "cio_market_lab/research/issue16_live_bridge.py",
     "tests/test_issue16_live_bridge.py",
@@ -15,35 +15,33 @@
   ],
   "tests": [
     {
-      "command": "git ls-remote https://github.com/tony19930204UCL/project-money.git refs/heads/feat/issue16-judgment-layer",
-      "result": "FAILED",
-      "evidence": "fatal: unable to access 'https://github.com/tony19930204UCL/project-money.git/': Could not resolve host: github.com"
+      "command": "pytest -q tests/test_issue16_live_bridge.py",
+      "result": "NOT_RUN_ON_J1_R2_HEAD",
+      "evidence": "Main CIO reported seven pre-existing tests failing on prior HEAD 73d6de5; new tests passed there. No execution environment with checkout available in this session; no test result claimed for 252bf645."
     },
     {
-      "command": "pytest -q tests/test_issue16_live_bridge.py",
-      "result": "NOT_EXECUTED",
-      "evidence": "No repository checkout in container; git remote cannot resolve github.com. Do not interpret as PASS."
+      "command": "GitHub fetch_file/update_file for branch feat/issue16-judgment-layer",
+      "result": "SUCCESS",
+      "evidence": "Source update commit 505d7adca8a6df81a7a5830980bfc11da351ec47; regression update commit 252bf645d3192091a6ff508eb909fff6edfa482a."
     }
   ],
   "remaining_work": [
     {
-      "item": "Run full issue16 bridge regression and adjacent suites; fix any integration failures",
+      "item": "Main CIO rerun full tests/test_issue16_live_bridge.py and adjacent suites on final HEAD",
       "status": "ACTIONABLE_NOW",
-      "owner": "Implementer"
+      "owner": "Main CIO"
     },
     {
-      "item": "Check exact HEAD Source regression and verify host contract end-to-end",
+      "item": "Verify GitHub Source regression green and draft snapshot host integration",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Verify diff, execute tests/test_issue16_live_bridge.py and Source regression on exact HEAD; inspect judgment draft host integration.",
-    "if_pass": "Approve only after independently confirming required acceptance criteria.",
-    "if_fail": "Return exact failing tests and logs for correction.",
-    "blockers": [
-      "fatal: unable to access 'https://github.com/tony19930204UCL/project-money.git/': Could not resolve host: github.com"
-    ]
+    "verify_now": "Run pytest -q tests/test_issue16_live_bridge.py and Source regression on exact PR #31 HEAD; inspect no-snapshot legacy PASS and explicit snapshot INCOMPLETE judgment draft.",
+    "if_pass": "Independently accept J1-r2 after verifying allowlist and source evidence boundaries.",
+    "if_fail": "Return exact failing assertion/log and HEAD for bounded correction.",
+    "blockers": []
   }
 }
