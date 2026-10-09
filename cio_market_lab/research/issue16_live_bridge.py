@@ -964,6 +964,13 @@ class OriginalResearchCallbackBridge:
             try:
                 if stage == "underwriting" and self.market_snapshot is not None and "market_snapshot" not in payload:
                     payload = {**payload, "market_snapshot": self.market_snapshot}
+                    contract_in = payload.get("underwriting_contract")
+                    if isinstance(contract_in, Mapping) and "judgment_output_format" not in contract_in:
+                        # Re-run the static builder so the judgment format ships with the injected snapshot.
+                        rebuilt = self._host_stage_payload(
+                            "underwriting", payload, symbol=str(payload.get("symbol") or ""), seed_urls=seed_urls
+                        )
+                        payload = {**payload, "underwriting_contract": rebuilt["underwriting_contract"]}
                 _reject_private_content(payload)
                 model_identity, raw_output = engine.infer(stage, payload, schema)
                 validated_model = schema.model_validate(raw_output)
