@@ -285,8 +285,10 @@ class OriginalResearchCallbackBridge:
         routes: Mapping[str, StageRoute],
         coordinator: Optional[FreeSourceCoordinator] = None,
         max_serialized_bytes: int = 250_000,
+        market_snapshot: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self.routes = dict(routes)
+        self.market_snapshot = dict(market_snapshot) if market_snapshot is not None else None
         self.coordinator = coordinator or FreeSourceCoordinator()
         self._projection = PublicOnlyResearchWorkflowAdapter(
             coordinator=self.coordinator,
@@ -934,6 +936,8 @@ class OriginalResearchCallbackBridge:
                 })
                 continue
             try:
+                if stage == "underwriting" and self.market_snapshot is not None and "market_snapshot" not in payload:
+                    payload = {**payload, "market_snapshot": self.market_snapshot}
                 _reject_private_content(payload)
                 model_identity, raw_output = engine.infer(stage, payload, schema)
                 validated_model = schema.model_validate(raw_output)
