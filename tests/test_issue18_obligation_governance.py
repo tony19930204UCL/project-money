@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 
 from custom_scripts.issue18_client_claim_compat import (
@@ -529,7 +529,10 @@ def test_canonical_installed_shape_adapter_is_nonmutating_and_validates_without_
 
 
 def test_namespaced_registry_adapter_cli_does_not_replace_installed_register_complete_interface(tmp_path,capsys):
-    raw=canonical_shape_fixture()
+    # The CLI uses the real clock; keep this fixture in its future window.
+    run_at=datetime.now(timezone.utc)+timedelta(days=1)
+    raw=canonical_shape_fixture(run_at=run_at.isoformat())
+    raw["obligations"][0]["deadline"]=(run_at+timedelta(days=1)).isoformat()
     path=tmp_path/"canonical.json"
     path.write_text(json.dumps(raw),encoding="utf-8")
 
