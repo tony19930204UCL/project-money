@@ -1,1 +1,42 @@
-{"status":"PENDING","task":"issue16-judgment-prompt"}
+{
+  "schema_version": 2,
+  "repository": "tony19930204UCL/project-money",
+  "pr_number": 33,
+  "branch": "feat/issue16-judgment-prompt",
+  "task_id": "issue16-judgment-prompt-20261010",
+  "instruction_id": "J2-r0",
+  "status": "READY_FOR_REVIEW",
+  "source_head_sha": "bae968a7be165ef65e5e7c1ba42450f537026aec",
+  "summary": "Added snapshot-only judgment_output_format with explicit seven-field shapes, evidence/null instructions and invalid EXAMPLE_ONLY example; added regression tests. Independent acceptance pending.",
+  "changed_files": [
+    "cio_market_lab/research/issue16_live_bridge.py",
+    "tests/test_issue16_live_bridge.py",
+    "docs/engineering/ISSUE16_PROMPT_HANDOFF.json"
+  ],
+  "tests": [
+    {
+      "command": "pytest -q tests/test_issue16_live_bridge.py",
+      "result": "NOT_RUN",
+      "evidence": "No repository execution environment available through GitHub connector; no pytest output obtained."
+    },
+    {
+      "command": "GitHub fetch_file/update_file",
+      "result": "COMPLETED",
+      "evidence": "Source commit 37df592926aa25970acb693edea4ba50fa82ad6f; tests commit bae968a7be165ef65e5e7c1ba42450f537026aec"
+    }
+  ],
+  "remaining_work": [
+    {
+      "item": "Execute full tests/test_issue16_live_bridge.py and independently validate live host prompt and regression compatibility",
+      "status": "ACTIONABLE_NOW",
+      "owner": "Main CIO"
+    }
+  ],
+  "next_step_reminder": {
+    "to": "Main CIO",
+    "verify_now": "Verify PR #33 exact HEAD, three-file allowlist diff, snapshot-only contract and run full pytest.",
+    "if_pass": "Accept only after independent host and test verification.",
+    "if_fail": "Return exact failures for bounded correction.",
+    "blockers": []
+  }
+}
