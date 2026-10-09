@@ -3,42 +3,42 @@
   "repository": "tony19930204UCL/project-money",
   "pr_number": 28,
   "branch": "fix/issue16-original-callback-position-bridge",
-  "task_id": "newmode-live-20261009",
-  "instruction_id": "newmode-live-v1",
-  "source_head_sha": "feace3d69cec2c04142a8664194e953e29b781f0",
+  "task_id": "e2e-full-20261009",
+  "instruction_id": "e2e-v1",
+  "source_head_sha": "563ada6f469bfec0481cea9d53ec66fe105133d7",
   "status": "READY_FOR_REVIEW",
-  "summary": "新對話模式傳遞測試，無程式變更",
+  "summary": "端到端測試第一輪，無程式變更",
   "changed_files": [
     "docs/engineering/PR28_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "GitHub fetch_pr(repo=tony19930204UCL/project-money,pr_number=28)",
-      "result": "PASS: PR28 branch and pre-write HEAD retrieved",
-      "evidence": "PR28 head=feace3d69cec2c04142a8664194e953e29b781f0; branch=fix/issue16-original-callback-position-bridge"
+      "command": "GitHub fetch_pr(repo_full_name=tony19930204UCL/project-money,pr_number=28)",
+      "result": "PASS: PR HEAD and branch read",
+      "evidence": "head_sha=563ada6f469bfec0481cea9d53ec66fe105133d7; head=fix/issue16-original-callback-position-bridge"
     },
     {
-      "command": "GitHub fetch_file(path=docs/engineering/PR28_HANDOFF.json,ref=fix/issue16-original-callback-position-bridge)",
-      "result": "PASS: prior mailbox read",
-      "evidence": "prior blob SHA=d99e9054a5e3e49986ebfbfb6962d0f2943091ea; prior task_id=abc-decoupling-live-test-20261009"
+      "command": "GitHub fetch_file(path=docs/engineering/PR28_HANDOFF.json,ref=563ada6f469bfec0481cea9d53ec66fe105133d7)",
+      "result": "PASS: prior mailbox read and JSON parsed",
+      "evidence": "blob_sha=c5a058c3acaa86f54a941fc0784c9472fa882869; prior_task_id=newmode-live-20261009"
     },
     {
       "command": "Python/source/browser tests",
-      "result": "NOT_RUN: mailbox-only instruction; no source, browser or host validation performed",
-      "evidence": "No Python/source/browser test command executed"
+      "result": "NOT_RUN: mailbox-only instruction",
+      "evidence": "No Python/source/browser commands executed"
     }
   ],
   "remaining_work": [
     {
-      "item": "Main CIO independently verify new conversation handoff, exact IDs, schema, pre-write HEAD, historical reference and mailbox-only diff",
+      "item": "Main CIO independently verify post-write mailbox, exact IDs, historical reference and mailbox-only diff",
       "owner": "Main CIO",
       "status": "ACTIONABLE_NOW"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Read exact post-write HEAD and mailbox; verify schema_version=2, exact task/instruction IDs, source_head_sha matches pre-write HEAD, historical_reference retains prior full mailbox, and commit diff only mailbox",
-    "if_pass": "Accept this transport-only new-conversation receipt; do not infer ABC/source/host acceptance",
+    "verify_now": "Verify post-write exact HEAD, schema2, IDs, pre-write source_head_sha, complete historical_reference and mailbox-only commit diff",
+    "if_pass": "Accept first-round transport receipt only; no source/host acceptance implied",
     "if_fail": "Reject and request bounded mailbox correction",
     "blockers": []
   },
@@ -47,57 +47,102 @@
     "repository": "tony19930204UCL/project-money",
     "pr_number": 28,
     "branch": "fix/issue16-original-callback-position-bridge",
-    "task_id": "abc-decoupling-live-test-20261009",
-    "instruction_id": "abc-live-revise-legacy-v1-20261009",
+    "task_id": "newmode-live-20261009",
+    "instruction_id": "newmode-live-v1",
+    "source_head_sha": "feace3d69cec2c04142a8664194e953e29b781f0",
     "status": "READY_FOR_REVIEW",
-    "source_head_sha": "c689791f6ad699e04d54c12c4013f38ec9fac822",
-    "summary": "PR28 handoff contract migrated from schema v1 to schema v2 and the revised report has been written for Main CIO review. This reports transport/contract migration only and does not represent original ABC or original-host acceptance.",
+    "summary": "新對話模式傳遞測試，無程式變更",
     "changed_files": [
       "docs/engineering/PR28_HANDOFF.json"
     ],
     "tests": [
       {
-        "command": "GitHub fetch_pr: read PR28 current branch HEAD before mailbox write",
-        "result": "READ_OK; current branch HEAD was c689791f6ad699e04d54c12c4013f38ec9fac822.",
-        "evidence": "https://github.com/tony19930204UCL/project-money/pull/28 @ c689791f6ad699e04d54c12c4013f38ec9fac822"
+        "command": "GitHub fetch_pr(repo=tony19930204UCL/project-money,pr_number=28)",
+        "result": "PASS: PR28 branch and pre-write HEAD retrieved",
+        "evidence": "PR28 head=feace3d69cec2c04142a8664194e953e29b781f0; branch=fix/issue16-original-callback-position-bridge"
       },
       {
-        "command": "GitHub fetch_file: read existing docs/engineering/PR28_HANDOFF.json before migration",
-        "result": "READ_OK; existing report was schema_version=1 with status=BLOCKED. Existing historical host/browser limitations were preserved by reference.",
-        "evidence": "blob 1abf90fa86e90c8adaf7e30922c1a4188b0ac006 at branch HEAD c689791f6ad699e04d54c12c4013f38ec9fac822"
+        "command": "GitHub fetch_file(path=docs/engineering/PR28_HANDOFF.json,ref=fix/issue16-original-callback-position-bridge)",
+        "result": "PASS: prior mailbox read",
+        "evidence": "prior blob SHA=d99e9054a5e3e49986ebfbfb6962d0f2943091ea; prior task_id=abc-decoupling-live-test-20261009"
       },
       {
-        "command": "Python/source/browser test execution for this schema-migration instruction",
-        "result": "NOT_RUN; this instruction authorizes mailbox-only contract migration, so no Python, source, browser, frontend, host, or ABC test was executed and no PASS is claimed.",
-        "evidence": "No test command executed in this mailbox-only revision."
+        "command": "Python/source/browser tests",
+        "result": "NOT_RUN: mailbox-only instruction; no source, browser or host validation performed",
+        "evidence": "No Python/source/browser test command executed"
       }
     ],
     "remaining_work": [
       {
-        "item": "Main獨立驗證此真實GitHub回報，驗證通過後派送本次限定的第二封回執指令並驗證送達",
-        "status": "ACTIONABLE_NOW",
-        "owner": "Main CIO"
+        "item": "Main CIO independently verify new conversation handoff, exact IDs, schema, pre-write HEAD, historical reference and mailbox-only diff",
+        "owner": "Main CIO",
+        "status": "ACTIONABLE_NOW"
       }
     ],
     "next_step_reminder": {
       "to": "Main CIO",
-      "verify_now": "從GitHub以exact HEAD驗證schema2、IDs、僅mailbox diff以及真實證據，不代表ABC驗收",
-      "if_pass": "派送第二封限定回執驗證指令",
-      "if_fail": "退回本回報修正，未經Main驗收不可稱完成",
+      "verify_now": "Read exact post-write HEAD and mailbox; verify schema_version=2, exact task/instruction IDs, source_head_sha matches pre-write HEAD, historical_reference retains prior full mailbox, and commit diff only mailbox",
+      "if_pass": "Accept this transport-only new-conversation receipt; do not infer ABC/source/host acceptance",
+      "if_fail": "Reject and request bounded mailbox correction",
       "blockers": []
     },
-    "scope_statement": "This revision changes only docs/engineering/PR28_HANDOFF.json on PR28 branch fix/issue16-original-callback-position-bridge. It does not modify source, tests, browser/frontend code, policy, providers, models, deployment, trading, user accounts, or original ABC execution.",
     "historical_reference": {
-      "prior_schema_version": 1,
-      "prior_status": "BLOCKED",
-      "prior_mailbox_blob_sha": "1abf90fa86e90c8adaf7e30922c1a4188b0ac006",
-      "prior_report_head_sha": "c689791f6ad699e04d54c12c4013f38ec9fac822",
-      "prior_source_head_sha": "4df8d735a37da7fd3485768f028ce031677854a1",
-      "prior_limitations": [
-        "Historical report recorded an existing browser stale-payload synchronization race outside the then-authorized browser/frontend scope.",
-        "Historical report did not claim original ABC/original-host completion; Source regression PASS was explicitly insufficient for live host acceptance.",
-        "Historical original-host acceptance still required Main-owned real-host verification and retained typed fail-closed underwriting timeout semantics."
-      ]
+      "schema_version": 2,
+      "repository": "tony19930204UCL/project-money",
+      "pr_number": 28,
+      "branch": "fix/issue16-original-callback-position-bridge",
+      "task_id": "abc-decoupling-live-test-20261009",
+      "instruction_id": "abc-live-revise-legacy-v1-20261009",
+      "status": "READY_FOR_REVIEW",
+      "source_head_sha": "c689791f6ad699e04d54c12c4013f38ec9fac822",
+      "summary": "PR28 handoff contract migrated from schema v1 to schema v2 and the revised report has been written for Main CIO review. This reports transport/contract migration only and does not represent original ABC or original-host acceptance.",
+      "changed_files": [
+        "docs/engineering/PR28_HANDOFF.json"
+      ],
+      "tests": [
+        {
+          "command": "GitHub fetch_pr: read PR28 current branch HEAD before mailbox write",
+          "result": "READ_OK; current branch HEAD was c689791f6ad699e04d54c12c4013f38ec9fac822.",
+          "evidence": "https://github.com/tony19930204UCL/project-money/pull/28 @ c689791f6ad699e04d54c12c4013f38ec9fac822"
+        },
+        {
+          "command": "GitHub fetch_file: read existing docs/engineering/PR28_HANDOFF.json before migration",
+          "result": "READ_OK; existing report was schema_version=1 with status=BLOCKED. Existing historical host/browser limitations were preserved by reference.",
+          "evidence": "blob 1abf90fa86e90c8adaf7e30922c1a4188b0ac006 at branch HEAD c689791f6ad699e04d54c12c4013f38ec9fac822"
+        },
+        {
+          "command": "Python/source/browser test execution for this schema-migration instruction",
+          "result": "NOT_RUN; this instruction authorizes mailbox-only contract migration, so no Python, source, browser, frontend, host, or ABC test was executed and no PASS is claimed.",
+          "evidence": "No test command executed in this mailbox-only revision."
+        }
+      ],
+      "remaining_work": [
+        {
+          "item": "Main獨立驗證此真實GitHub回報，驗證通過後派送本次限定的第二封回執指令並驗證送達",
+          "status": "ACTIONABLE_NOW",
+          "owner": "Main CIO"
+        }
+      ],
+      "next_step_reminder": {
+        "to": "Main CIO",
+        "verify_now": "從GitHub以exact HEAD驗證schema2、IDs、僅mailbox diff以及真實證據，不代表ABC驗收",
+        "if_pass": "派送第二封限定回執驗證指令",
+        "if_fail": "退回本回報修正，未經Main驗收不可稱完成",
+        "blockers": []
+      },
+      "scope_statement": "This revision changes only docs/engineering/PR28_HANDOFF.json on PR28 branch fix/issue16-original-callback-position-bridge. It does not modify source, tests, browser/frontend code, policy, providers, models, deployment, trading, user accounts, or original ABC execution.",
+      "historical_reference": {
+        "prior_schema_version": 1,
+        "prior_status": "BLOCKED",
+        "prior_mailbox_blob_sha": "1abf90fa86e90c8adaf7e30922c1a4188b0ac006",
+        "prior_report_head_sha": "c689791f6ad699e04d54c12c4013f38ec9fac822",
+        "prior_source_head_sha": "4df8d735a37da7fd3485768f028ce031677854a1",
+        "prior_limitations": [
+          "Historical report recorded an existing browser stale-payload synchronization race outside the then-authorized browser/frontend scope.",
+          "Historical report did not claim original ABC/original-host completion; Source regression PASS was explicitly insufficient for live host acceptance.",
+          "Historical original-host acceptance still required Main-owned real-host verification and retained typed fail-closed underwriting timeout semantics."
+        ]
+      }
     }
   }
 }
