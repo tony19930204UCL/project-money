@@ -791,6 +791,32 @@ class OriginalResearchCallbackBridge:
                 **HOST_UNDERWRITING_PROMPT_CONTRACT,
                 "allowed_source_urls": allowed,
             }
+            if "market_snapshot" in normalized:
+                normalized["underwriting_contract"]["judgment_output_format"] = {
+                    "judgment_status": "DRAFT_FOR_MAIN_CIO (literal string)",
+                    "reflexivity_score": "JSON number 0..1",
+                    "scenario_return_estimates": {"bear": "number (fraction)", "base": "number (fraction)", "bull": "number (fraction)"},
+                    "business_maturity": "short string",
+                    "valuation_scenarios": {"bear": "number (per-share price)", "base": "number (per-share price)", "bull": "number (per-share price)"},
+                    "buy_zone": {"low": "number (per-share price)", "high": "number (per-share price)", "constraint": "0 < low < high; both within 0.3x-1.5x snapshot price"},
+                    "invalidation_conditions": "non-empty list of strings",
+                    "review_by": "YYYY-MM-DD within 120 days after now",
+                    "instruction": (
+                        "These are drafts for Main CIO. Derive only from supplied official facts plus "
+                        "market_snapshot. If unsupported, set the field to JSON null rather than invent."
+                    ),
+                    "worked_example": {
+                        "label": "EXAMPLE_ONLY; placeholder values, never use as a real draft",
+                        "judgment_status": "DRAFT_FOR_MAIN_CIO",
+                        "reflexivity_score": 0.5,
+                        "scenario_return_estimates": {"bear": -0.2, "base": 0.1, "bull": 0.3},
+                        "business_maturity": "EXAMPLE_ONLY",
+                        "valuation_scenarios": {"bear": 400, "base": 500, "bull": 600},
+                        "buy_zone": {"low": 450, "high": 480},
+                        "invalidation_conditions": ["EXAMPLE_ONLY"],
+                        "review_by": "YYYY-MM-DD",
+                    },
+                }
         _reject_private_content(normalized, f"host_{stage}.payload")
         return normalized
 
