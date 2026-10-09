@@ -189,15 +189,25 @@ HOST_UNDERWRITING_JUDGMENT_FIELDS = (
     "valuation_scenarios", "buy_zone", "invalidation_conditions", "review_by",
 )
 HOST_UNDERWRITING_PROMPT_CONTRACT = {
+    "required_output_fields_for_pass": list(HOST_UNDERWRITING_REQUIRED_FIELDS),
+    "pass_semantics": (
+        "Return PASS only when every required field is non-empty and supported by the supplied "
+        "public documents/source_urls. Do not infer or invent missing numerical values."
+    ),
+    "insufficient_evidence_semantics": (
+        "When any required field cannot be supported by supplied public evidence, return INCOMPLETE "
+        "and name every missing field in reason using MISSING_UNDERWRITING_FIELDS:<comma-separated-fields>."
+    ),
+    "public_evidence_semantics": (
+        "source_urls must contain only supplied seed URLs actually used as public evidence."
+    ),
     "required_fact_fields": list(HOST_UNDERWRITING_FACT_FIELDS),
     "judgment_fields": list(HOST_UNDERWRITING_JUDGMENT_FIELDS),
-    "fact_semantics": "Facts and source_urls must come exclusively from supplied official seed documents.",
-    "judgment_semantics": (
-        "Only with a validated market_snapshot, draft the seven judgment fields; "
-        "set judgment_status to DRAFT_FOR_MAIN_CIO. Never claim approval or PASS. "
-        "Snapshot is market context, NOT official documentary evidence."
+    "judgment_snapshot_semantics": (
+        "Only when market_snapshot is supplied and validated (timezone-aware, not future, "
+        "within 36 hours), draft seven judgment fields with judgment_status "
+        "DRAFT_FOR_MAIN_CIO. Judgment is never PASS; snapshot is not official evidence."
     ),
-    "public_evidence_semantics": "source_urls and independent_source_mix must be official seed URLs only.",
 }
 
 def _valid_market_snapshot(value: Any, now: datetime) -> bool:
@@ -928,33 +938,31 @@ class OriginalResearchCallbackBridge:
                 model_identity, raw_output = engine.infer(stage, payload, schema)
                 validated_model = schema.model_validate(raw_output)
                 if stage == "underwriting":
-                    raw = validated_model.model_dump(mode="json", exclude_none=True)
-                    snapshot = payload.get("market_snapshot")
-                    valid_snapshot = _valid_market_snapshot(snapshot, now)
-                    draft = {k: raw.get(k) for k in HOST_UNDERWRITING_JUDGMENT_FIELDS}
-                    # The host's stage validator cannot accept a new status. Every
-                    # judgment is unapproved until Main CIO explicitly reviews it.
-                    raw["status"] = "INCOMPLETE"
-                    raw["judgment_draft"] = None
-                    raw["judgment_status"] = None
-                    if not valid_snapshot:
-                        raw["reason"] = "MARKET_SNAPSHOT_STALE_OR_MISSING"
+                    if "market_snapshot" not in payload:
+                        # Preserve the original host contract byte-for-byte for legacy callers.
+                        validated_model = self._downgrade_incomplete_underwriting(validated_model)
                     else:
-                        invalid = _validate_judgment_draft(draft, float(snapshot["price"]), now)
-                        if invalid:
-                            raw["reason"] = "INVALID_JUDGMENT_FIELD:" + invalid
-                        elif raw.get("judgment_status") != "DRAFT_FOR_MAIN_CIO" and (
-                            not isinstance(raw_output, Mapping)
-                            or raw_output.get("judgment_status") != "DRAFT_FOR_MAIN_CIO"
-                        ):
-                            raw["reason"] = "INVALID_JUDGMENT_FIELD:judgment_status"
+                        raw = validated_model.model_dump(mode="json", exclude_none=True)
+                        snapshot = payload["market_snapshot"]
+                        draft = {k: raw.get(k) for k in HOST_UNDERWRITING_JUDGMENT_FIELDS}
+                        raw["status"] = "INCOMPLETE"
+                        raw["judgment_draft"] = None
+                        raw["judgment_status"] = None
+                        if not _valid_market_snapshot(snapshot, now):
+                            raw["reason"] = "MARKET_SNAPSHOT_STALE_OR_MISSING"
                         else:
-                            raw["reason"] = "PENDING_MAIN_CIO_REVIEW"
-                            raw["judgment_status"] = "DRAFT_FOR_MAIN_CIO"
-                            raw["judgment_draft"] = draft
-                    for key in HOST_UNDERWRITING_JUDGMENT_FIELDS:
-                        raw[key] = None
-                    validated_model = OriginalHostUnderwritingOutput.model_validate(raw)
+                            invalid = _validate_judgment_draft(draft, float(snapshot["price"]), now)
+                            if invalid:
+                                raw["reason"] = "INVALID_JUDGMENT_FIELD:" + invalid
+                            elif not isinstance(raw_output, Mapping) or raw_output.get("judgment_status") != "DRAFT_FOR_MAIN_CIO":
+                                raw["reason"] = "INVALID_JUDGMENT_FIELD:judgment_status"
+                            else:
+                                raw["reason"] = "PENDING_MAIN_CIO_REVIEW"
+                                raw["judgment_status"] = "DRAFT_FOR_MAIN_CIO"
+                                raw["judgment_draft"] = draft
+                        for key in HOST_UNDERWRITING_JUDGMENT_FIELDS:
+                            raw[key] = None
+                        validated_model = OriginalHostUnderwritingOutput.model_validate(raw)
                     contract = payload.get("underwriting_contract")
                     allowed_source_urls = (
                         list(contract.get("allowed_source_urls") or [])
