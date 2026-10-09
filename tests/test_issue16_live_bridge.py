@@ -2025,3 +2025,59 @@ def test_judgment_no_snapshot_preserves_legacy_complete_pass():
     assert result["status"] == "COMPLETED"
     assert result["output"]["status"] == "PASS"
     assert "judgment_draft" not in result["output"]
+
+
+def _snapshot_injection_run(snapshot, draft_overrides=None, judgment_status="DRAFT_FOR_MAIN_CIO"):
+    out = {
+        "status": "PASS", "reason": "drafted", "source_urls": [SEED_URL],
+        "financials": {"revenue": "supported"}, "market_metrics": {"growth": "supported"},
+        "capital_structure": {"cash": "supported"}, "independent_source_mix": [SEED_URL],
+        "factor_labels": ["earnings"],
+        "four_sentences": ["One.", "Two.", "Three.", "Four."],
+        **_judgment_draft(**(draft_overrides or {})),
+    }
+    if judgment_status:
+        out["judgment_status"] = judgment_status
+    bridge = OriginalResearchCallbackBridge(
+        routes={"underwriting": StageRoute(
+            primary=_engine("underwriting", out, model="underwriter-snapshot"),
+            primary_model_family="underwriting-family")},
+        coordinator=FakeCoordinator(),
+        market_snapshot=snapshot,
+    )
+    payload = bridge._host_stage_payload(
+        "underwriting",
+        {
+            "documents": [{"url": SEED_URL, "text": "Microsoft official earnings public disclosure.",
+                           "observed_at": NOW.isoformat()}],
+            "discovery": {"status": "PASS", "reason": "done", "source_urls": [SEED_URL]},
+            "commercial": {"status": "PASS", "reason": "done", "source_urls": [SEED_URL]},
+        },
+        symbol="MSFT", seed_urls=[SEED_URL],
+    )
+    return bridge._infer_host_route("underwriting", payload, now=NOW, seed_urls=[SEED_URL])
+
+
+def test_constructor_snapshot_valid_yields_draft_never_pass():
+    result = _snapshot_injection_run(_judgment_snapshot())
+    out = result["output"] if "output" in result else result
+    assert result["status"] != "PASS"
+    assert out.get("status") == "INCOMPLETE"
+    assert out.get("judgment_status") == "DRAFT_FOR_MAIN_CIO"
+    assert out["judgment_draft"]["buy_zone"] == {"low": 90.0, "high": 105.0}
+
+
+def test_constructor_snapshot_stale_never_pass():
+    from datetime import timedelta
+    result = _snapshot_injection_run(_judgment_snapshot(as_of=(NOW - timedelta(hours=40)).isoformat()))
+    out = result["output"] if "output" in result else result
+    assert result["status"] != "PASS"
+    assert "MARKET_SNAPSHOT_STALE_OR_MISSING" in str(out.get("reason"))
+    assert not out.get("judgment_draft")
+
+
+def test_constructor_snapshot_out_of_scale_buy_zone_rejected():
+    result = _snapshot_injection_run(_judgment_snapshot(), {"buy_zone": {"low": 5.0, "high": 9.0}})
+    out = result["output"] if "output" in result else result
+    assert result["status"] != "PASS"
+    assert "INVALID_JUDGMENT_FIELD:buy_zone" in str(out.get("reason"))
