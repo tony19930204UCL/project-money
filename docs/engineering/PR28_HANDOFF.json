@@ -1,38 +1,58 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "repository": "tony19930204UCL/project-money",
   "pr_number": 28,
   "branch": "fix/issue16-original-callback-position-bridge",
-  "status": "BLOCKED",
-  "source_head_sha": "4df8d735a37da7fd3485768f028ce031677854a1",
-  "summary": "Exact-head triage for PR28 underwriting evidence-citation repair. Source regression on 54443c7aaebd113d939cc5e3a4a084df86b8c6e5 passed, including the Issue16 focused bridge step, genuine Microsoft public intake probe, full backend suite, and frontend job. Browser regression failed in tests/browser/test_workstation_smoke.py during sequential GET-only traversal: after navigating from Research to Replay, the Replay view had data-api-status=ok but its <pre> still contained the previous Research payload (TEST_ONLY_RESEARCH_FIXTURE), so TEST_ONLY_BROWSER_EXPERIMENT was asserted before the Replay payload replaced stale content. This is the same stale-payload synchronization race class previously observed at Strategy Lab. It is not attributable to the current underwriting source change: the last browser-success exact head 7602aa25808f73dc2d188a1b869da75e0074b2cf and failing head 54443c7aaebd113d939cc5e3a4a084df86b8c6e5 differ only in cio_market_lab/research/issue16_live_bridge.py, tests/test_issue16_live_bridge.py, docs/ISSUE16_CALLBACK_MONITOR_BRIDGE.md, and PR28_HANDOFF.json; no browser/frontend files changed. Runner setup, frontend build, Python browser dependency install, and Chromium install all succeeded. Current PR28 authorization forbids browser/frontend changes, so this blocker cannot be repaired within the existing allowlist.",
+  "task_id": "abc-decoupling-live-test-20261009",
+  "instruction_id": "abc-live-revise-legacy-v1-20261009",
+  "status": "READY_FOR_REVIEW",
+  "source_head_sha": "c689791f6ad699e04d54c12c4013f38ec9fac822",
+  "summary": "PR28 handoff contract migrated from schema v1 to schema v2 and the revised report has been written for Main CIO review. This reports transport/contract migration only and does not represent original ABC or original-host acceptance.",
+  "changed_files": [
+    "docs/engineering/PR28_HANDOFF.json"
+  ],
   "tests": [
     {
-      "command": "python -m pytest -q tests/test_issue16_research_acceptance.py tests/test_issue16_live_bridge.py",
-      "result": "PASS on exact head 54443c7aaebd113d939cc5e3a4a084df86b8c6e5 in Source regression run 37834941703; Issue 16 original callback and monitor bridge step completed successfully."
+      "command": "GitHub fetch_pr: read PR28 current branch HEAD before mailbox write",
+      "result": "READ_OK; current branch HEAD was c689791f6ad699e04d54c12c4013f38ec9fac822.",
+      "evidence": "https://github.com/tony19930204UCL/project-money/pull/28 @ c689791f6ad699e04d54c12c4013f38ec9fac822"
     },
     {
-      "command": "python custom_scripts/issue16_public_intake_probe.py",
-      "result": "PASS on exact head 54443c7aaebd113d939cc5e3a4a084df86b8c6e5 in Source regression run 37834941703; genuine Microsoft public intake probe step completed successfully."
+      "command": "GitHub fetch_file: read existing docs/engineering/PR28_HANDOFF.json before migration",
+      "result": "READ_OK; existing report was schema_version=1 with status=BLOCKED. Existing historical host/browser limitations were preserved by reference.",
+      "evidence": "blob 1abf90fa86e90c8adaf7e30922c1a4188b0ac006 at branch HEAD c689791f6ad699e04d54c12c4013f38ec9fac822"
     },
     {
-      "command": "python -m pytest",
-      "result": "PASS on exact head 54443c7aaebd113d939cc5e3a4a084df86b8c6e5 in Source regression run 37834941703: 846 passed, 11 warnings."
-    },
-    {
-      "command": "frontend test command from .github/workflows/source-regression.yml",
-      "result": "PASS on exact head 54443c7aaebd113d939cc5e3a4a084df86b8c6e5 in Source regression run 37834941703; frontend job completed successfully."
-    },
-    {
-      "command": "python -m pytest -q tests/browser/test_workstation_smoke.py tests/browser/test_paper_order_flows.py",
-      "result": "FAIL on exact head 54443c7aaebd113d939cc5e3a4a084df86b8c6e5 in Browser regression run 37834941902, job 113509469638: test_smoke_is_get_only_without_operator_actions expected TEST_ONLY_BROWSER_EXPERIMENT in Replay, but Replay <pre> still contained previous Research payload TEST_ONLY_RESEARCH_FIXTURE while data-api-status was already ok."
+      "command": "Python/source/browser test execution for this schema-migration instruction",
+      "result": "NOT_RUN; this instruction authorizes mailbox-only contract migration, so no Python, source, browser, frontend, host, or ABC test was executed and no PASS is claimed.",
+      "evidence": "No test command executed in this mailbox-only revision."
     }
   ],
   "remaining_work": [
-    "BLOCKED outside current allowlist: the reproducible failure is in tests/browser/test_workstation_smoke.py synchronization. Minimal additional authorization needed is that file only, to make _wait_workspace synchronize on the requested endpoint/payload transition while retaining existing core-content assertions and existing timeout values. Do not weaken assertions or increase timeouts.",
-    "Base-vs-head evidence: Browser regression passed at 7602aa25808f73dc2d188a1b869da75e0074b2cf (run 37832679307). From that head to failing 54443c7aaebd113d939cc5e3a4a084df86b8c6e5, changed files are only cio_market_lab/research/issue16_live_bridge.py, tests/test_issue16_live_bridge.py, docs/ISSUE16_CALLBACK_MONITOR_BRIDGE.md, and docs/engineering/PR28_HANDOFF.json; no browser/frontend file changed.",
-    "Main can independently continue the original-host bounded acceptance on source_head_sha 4df8d735a37da7fd3485768f028ce031677854a1: rerun the Microsoft FY2026 Q4 underwriting callback and verify task-visible allowed_source_urls contains only URLs present in underwriting documents. If underwriting still times out at 120 seconds, typed fail-closed timeout evidence remains correct and is not a source PASS.",
-    "Do not treat Source regression PASS as ABC/original-host completion. No mock/fallback fixture, documentation, or synthetic runtime receipt establishes live host acceptance.",
-    "Do not modify browser/frontend without explicit new authorization; do not merge, deploy, trade/order, add paid fallback or independent model acceptance, change policy/global provider configuration, or expand into other issues."
-  ]
+    {
+      "item": "Main獨立驗證此真實GitHub回報，驗證通過後派送本次限定的第二封回執指令並驗證送達",
+      "status": "ACTIONABLE_NOW",
+      "owner": "Main CIO"
+    }
+  ],
+  "next_step_reminder": {
+    "to": "Main CIO",
+    "verify_now": "從GitHub以exact HEAD驗證schema2、IDs、僅mailbox diff以及真實證據，不代表ABC驗收",
+    "if_pass": "派送第二封限定回執驗證指令",
+    "if_fail": "退回本回報修正，未經Main驗收不可稱完成",
+    "blockers": []
+  },
+  "scope_statement": "This revision changes only docs/engineering/PR28_HANDOFF.json on PR28 branch fix/issue16-original-callback-position-bridge. It does not modify source, tests, browser/frontend code, policy, providers, models, deployment, trading, user accounts, or original ABC execution.",
+  "historical_reference": {
+    "prior_schema_version": 1,
+    "prior_status": "BLOCKED",
+    "prior_mailbox_blob_sha": "1abf90fa86e90c8adaf7e30922c1a4188b0ac006",
+    "prior_report_head_sha": "c689791f6ad699e04d54c12c4013f38ec9fac822",
+    "prior_source_head_sha": "4df8d735a37da7fd3485768f028ce031677854a1",
+    "prior_limitations": [
+      "Historical report recorded an existing browser stale-payload synchronization race outside the then-authorized browser/frontend scope.",
+      "Historical report did not claim original ABC/original-host completion; Source regression PASS was explicitly insufficient for live host acceptance.",
+      "Historical original-host acceptance still required Main-owned real-host verification and retained typed fail-closed underwriting timeout semantics."
+    ]
+  }
 }
