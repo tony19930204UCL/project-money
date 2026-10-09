@@ -7,7 +7,8 @@ receipt consumers without creating a second ACK store.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta, date
+import math
 import hashlib
 from subprocess import TimeoutExpired
 from typing import Any, Callable, Mapping, Optional
@@ -137,6 +138,8 @@ class OriginalHostUnderwritingOutput(OriginalHostStageOutput):
     invalidation_conditions: Optional[list[str]] = None
     review_by: Optional[str] = None
     four_sentences: Optional[list[str]] = Field(default=None, min_length=4, max_length=4)
+    judgment_status: Optional[str] = Field(default=None, pattern="^DRAFT_FOR_MAIN_CIO$")
+    judgment_draft: Optional[dict[str, Any]] = None
 
 
 class OriginalHostChallengeOutput(BaseModel):
@@ -177,6 +180,14 @@ HOST_UNDERWRITING_REQUIRED_FIELDS = (
     "four_sentences",
 )
 
+HOST_UNDERWRITING_FACT_FIELDS = (
+    "financials", "market_metrics", "capital_structure",
+    "independent_source_mix", "factor_labels", "four_sentences",
+)
+HOST_UNDERWRITING_JUDGMENT_FIELDS = (
+    "reflexivity_score", "scenario_return_estimates", "business_maturity",
+    "valuation_scenarios", "buy_zone", "invalidation_conditions", "review_by",
+)
 HOST_UNDERWRITING_PROMPT_CONTRACT = {
     "required_output_fields_for_pass": list(HOST_UNDERWRITING_REQUIRED_FIELDS),
     "pass_semantics": (
@@ -190,7 +201,73 @@ HOST_UNDERWRITING_PROMPT_CONTRACT = {
     "public_evidence_semantics": (
         "source_urls must contain only supplied seed URLs actually used as public evidence."
     ),
+    "required_fact_fields": list(HOST_UNDERWRITING_FACT_FIELDS),
+    "judgment_fields": list(HOST_UNDERWRITING_JUDGMENT_FIELDS),
+    "judgment_snapshot_semantics": (
+        "Only when market_snapshot is supplied and validated (timezone-aware, not future, "
+        "within 36 hours), draft seven judgment fields with judgment_status "
+        "DRAFT_FOR_MAIN_CIO. Judgment is never PASS; snapshot is not official evidence."
+    ),
 }
+
+def _valid_market_snapshot(value: Any, now: datetime) -> bool:
+    """Conservative 36-hour wall-clock bound; timezone and future checks are mandatory."""
+    if not isinstance(value, Mapping):
+        return False
+    try:
+        _reject_private_content(value, "market_snapshot")
+        price = value.get("price")
+        if isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(price) or price <= 0:
+            return False
+        if not isinstance(value.get("source"), str) or not value["source"].strip():
+            return False
+        stamp = value.get("as_of")
+        if not isinstance(stamp, str):
+            return False
+        observed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if observed.tzinfo is None or observed.utcoffset() is None:
+            return False
+        current = _utc(now)
+        age = current - observed.astimezone(timezone.utc)
+        if age < timedelta(0) or age > timedelta(hours=36):
+            return False
+        for key in ("week52_high", "week52_low", "forward_pe"):
+            n = value.get(key)
+            if n is not None and (isinstance(n, bool) or not isinstance(n, (int, float)) or not math.isfinite(n) or n <= 0):
+                return False
+        return True
+    except (ValueError, TypeError, OverflowError):
+        return False
+
+
+def _validate_judgment_draft(draft: Mapping[str, Any], price: float, now: datetime) -> Optional[str]:
+    for field in HOST_UNDERWRITING_JUDGMENT_FIELDS:
+        value = draft.get(field)
+        if value is None or value == "" or value == [] or value == {}:
+            return field
+    zone = draft["buy_zone"]
+    if not isinstance(zone, Mapping):
+        return "buy_zone"
+    low, high = zone.get("low"), zone.get("high")
+    if any(isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x) for x in (low, high)):
+        return "buy_zone"
+    if not (0 < low < high and 0.3 * price <= low <= 1.5 * price and 0.3 * price <= high <= 1.5 * price):
+        return "buy_zone"
+    scenarios = draft["valuation_scenarios"]
+    if not isinstance(scenarios, Mapping) or any(
+        isinstance(scenarios.get(k), bool) or not isinstance(scenarios.get(k), (int, float))
+        or not math.isfinite(scenarios[k]) for k in ("bear", "base", "bull")
+    ):
+        return "valuation_scenarios"
+    try:
+        deadline = date.fromisoformat(draft["review_by"])
+        days = (deadline - _utc(now).date()).days
+        if not 0 < days <= 120:
+            return "review_by"
+    except (TypeError, ValueError):
+        return "review_by"
+    return None
+
 
 class OriginalResearchCallbackBridge:
     """Bind verified source/inference adapters into the original callback entrypoint.
@@ -861,7 +938,31 @@ class OriginalResearchCallbackBridge:
                 model_identity, raw_output = engine.infer(stage, payload, schema)
                 validated_model = schema.model_validate(raw_output)
                 if stage == "underwriting":
-                    validated_model = self._downgrade_incomplete_underwriting(validated_model)
+                    if "market_snapshot" not in payload:
+                        # Preserve the original host contract byte-for-byte for legacy callers.
+                        validated_model = self._downgrade_incomplete_underwriting(validated_model)
+                    else:
+                        raw = validated_model.model_dump(mode="json", exclude_none=True)
+                        snapshot = payload["market_snapshot"]
+                        draft = {k: raw.get(k) for k in HOST_UNDERWRITING_JUDGMENT_FIELDS}
+                        raw["status"] = "INCOMPLETE"
+                        raw["judgment_draft"] = None
+                        raw["judgment_status"] = None
+                        if not _valid_market_snapshot(snapshot, now):
+                            raw["reason"] = "MARKET_SNAPSHOT_STALE_OR_MISSING"
+                        else:
+                            invalid = _validate_judgment_draft(draft, float(snapshot["price"]), now)
+                            if invalid:
+                                raw["reason"] = "INVALID_JUDGMENT_FIELD:" + invalid
+                            elif not isinstance(raw_output, Mapping) or raw_output.get("judgment_status") != "DRAFT_FOR_MAIN_CIO":
+                                raw["reason"] = "INVALID_JUDGMENT_FIELD:judgment_status"
+                            else:
+                                raw["reason"] = "PENDING_MAIN_CIO_REVIEW"
+                                raw["judgment_status"] = "DRAFT_FOR_MAIN_CIO"
+                                raw["judgment_draft"] = draft
+                        for key in HOST_UNDERWRITING_JUDGMENT_FIELDS:
+                            raw[key] = None
+                        validated_model = OriginalHostUnderwritingOutput.model_validate(raw)
                     contract = payload.get("underwriting_contract")
                     allowed_source_urls = (
                         list(contract.get("allowed_source_urls") or [])

@@ -1930,3 +1930,98 @@ def test_underwriting_payload_accepts_installed_host_official_documents_key():
         seed_urls=[SEED_URL],
     )
     assert payload["underwriting_contract"]["allowed_source_urls"] == [SEED_URL]
+
+
+# Judgment layer regression: host status must remain INCOMPLETE until Main CIO review.
+def _judgment_snapshot(**changes):
+    snapshot = {
+        "price": 100.0, "as_of": NOW.isoformat(), "source": "public market quote",
+        "week52_high": 120.0, "week52_low": 80.0,
+    }
+    snapshot.update(changes)
+    return snapshot
+
+
+def _judgment_draft(**changes):
+    from datetime import timedelta
+    draft = {
+        "reflexivity_score": 0.5,
+        "scenario_return_estimates": {"bear": -0.2, "base": 0.1, "bull": 0.3},
+        "business_maturity": "mature",
+        "valuation_scenarios": {"bear": 80.0, "base": 110.0, "bull": 130.0},
+        "buy_zone": {"low": 90.0, "high": 105.0},
+        "invalidation_conditions": ["material deterioration"],
+        "review_by": (NOW + timedelta(days=30)).date().isoformat(),
+    }
+    draft.update(changes)
+    return draft
+
+
+def test_judgment_snapshot_stale_tzless_future_and_missing_never_pass():
+    from datetime import timedelta
+    for snapshot in (
+        None,
+        _judgment_snapshot(as_of=(NOW - timedelta(hours=37)).isoformat()),
+        _judgment_snapshot(as_of=NOW.replace(tzinfo=None).isoformat()),
+        _judgment_snapshot(as_of=(NOW + timedelta(seconds=1)).isoformat()),
+    ):
+        assert live_bridge._valid_market_snapshot(snapshot, NOW) is False
+
+
+def test_judgment_valid_snapshot_and_draft_requires_main_cio():
+    snapshot = _judgment_snapshot()
+    draft = _judgment_draft()
+    assert live_bridge._valid_market_snapshot(snapshot, NOW)
+    assert live_bridge._validate_judgment_draft(draft, snapshot["price"], NOW) is None
+    assert "PASS_PENDING_MAIN_CIO_REVIEW" not in live_bridge.OriginalHostUnderwritingOutput.model_fields["status"].metadata[0].pattern
+
+
+def test_judgment_buy_zone_out_of_scale_rejected():
+    assert live_bridge._validate_judgment_draft(
+        _judgment_draft(buy_zone={"low": 10.0, "high": 20.0}), 100.0, NOW
+    ) == "buy_zone"
+
+
+def test_judgment_valuation_and_review_deadline_rejected():
+    from datetime import timedelta
+    assert live_bridge._validate_judgment_draft(
+        _judgment_draft(valuation_scenarios={"bear": 80, "base": "unsupported", "bull": 120}), 100, NOW
+    ) == "valuation_scenarios"
+    assert live_bridge._validate_judgment_draft(
+        _judgment_draft(review_by=(NOW + timedelta(days=121)).date().isoformat()), 100, NOW
+    ) == "review_by"
+
+
+def test_judgment_official_disclosure_allowlist_unchanged():
+    import pytest
+    from cio_market_lab.research.official_documents import parse_official_document
+    with pytest.raises(ValueError, match="UNAPPROVED_DISCLOSURE_HOST"):
+        parse_official_document(
+            "https://finance.yahoo.com/quote/MSFT",
+            b"<html><body><p>Revenue disclosure</p></body></html>",
+            "text/html",
+        )
+
+
+def test_judgment_snapshot_private_content_rejected():
+    import pytest
+    with pytest.raises((ValueError, RuntimeError)):
+        live_bridge._reject_private_content(
+            {"price": 100, "source": "private account", "account_number": "123456789"},
+            "market_snapshot",
+        )
+
+
+def test_judgment_no_snapshot_preserves_legacy_complete_pass():
+    """No market_snapshot key must preserve the installed original host PASS semantics."""
+    bridge = OriginalResearchCallbackBridge(routes=_host_routes(), coordinator=FakeCoordinator())
+    payload = bridge._host_stage_payload(
+        "underwriting",
+        {"documents": [{"url": SEED_URL, "text": "Official issuer disclosure", "observed_at": NOW.isoformat()}]},
+        symbol="MSFT", seed_urls=[SEED_URL],
+    )
+    assert "market_snapshot" not in payload
+    result = bridge._infer_host_route("underwriting", payload, now=NOW, seed_urls=[SEED_URL])
+    assert result["status"] == "COMPLETED"
+    assert result["output"]["status"] == "PASS"
+    assert "judgment_draft" not in result["output"]
