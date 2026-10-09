@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "repository": "tony19930204UCL/project-money",
+  "pr_number": 28,
+  "branch": "fix/issue16-original-callback-position-bridge",
+  "run_id": "current-main-live-20261008",
+  "stage": "B",
+  "revision_version": 1,
+  "status": "READY_FOR_REVIEW",
+  "summary": "live transport stage B",
+  "tests": [],
+  "remaining_work": [],
+  "source_head_sha": "64a9eafdcad6cde48c5ab2a0f636c38d64bb27bb"
+}
