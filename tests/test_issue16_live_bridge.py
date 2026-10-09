@@ -2081,3 +2081,33 @@ def test_constructor_snapshot_out_of_scale_buy_zone_rejected():
     out = result["output"] if "output" in result else result
     assert result["status"] != "PASS"
     assert "INVALID_JUDGMENT_FIELD:buy_zone" in str(out.get("reason"))
+
+
+def test_snapshot_judgment_output_format_and_legacy_absence():
+    from cio_market_lab.research.issue16_live_bridge import OriginalResearchCallbackBridge
+    document = {"url": "https://example.com/official"}
+    base = {"official_documents": [document]}
+    kwargs = {"symbol": "MSFT", "seed_urls": [document["url"]]}
+    legacy = OriginalResearchCallbackBridge._host_stage_payload("underwriting", base, **kwargs)
+    assert "judgment_output_format" not in legacy["underwriting_contract"]
+    snapshot = {**base, "market_snapshot": {"price": 535.07, "source": "public", "as_of": NOW.isoformat()}}
+    enriched = OriginalResearchCallbackBridge._host_stage_payload("underwriting", snapshot, **kwargs)
+    fmt = enriched["underwriting_contract"]["judgment_output_format"]
+    assert set(live_bridge.HOST_UNDERWRITING_JUDGMENT_FIELDS).issubset(fmt)
+    assert "DRAFT_FOR_MAIN_CIO" in fmt["judgment_status"]
+    assert legacy["underwriting_contract"] == {
+        **live_bridge.HOST_UNDERWRITING_PROMPT_CONTRACT,
+        "allowed_source_urls": [document["url"]],
+    }
+
+
+def test_judgment_prompt_example_cannot_validate_as_real_draft():
+    from cio_market_lab.research.issue16_live_bridge import OriginalResearchCallbackBridge
+    document = {"url": "https://example.com/official"}
+    payload = {"official_documents": [document], "market_snapshot": {"price": 535.07}}
+    normalized = OriginalResearchCallbackBridge._host_stage_payload(
+        "underwriting", payload, symbol="MSFT", seed_urls=[document["url"]]
+    )
+    example = normalized["underwriting_contract"]["judgment_output_format"]["worked_example"]
+    assert example["label"].startswith("EXAMPLE_ONLY")
+    assert live_bridge._validate_judgment_draft(example, 535.07, NOW) is not None
