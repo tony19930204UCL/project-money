@@ -1919,3 +1919,14 @@ def test_original_run_case_challenge_before_underwriting_is_blocked():
     )
     assert result["status"] == "BLOCKED"
     assert "HOST_UNDERWRITING_MODEL_IDENTITY_REQUIRED" in result["reason"]
+
+
+def test_underwriting_payload_accepts_installed_host_official_documents_key():
+    """Installed run_case sends `official_documents`, not `documents` (live PR28 failure)."""
+    payload = OriginalResearchCallbackBridge._host_stage_payload(
+        "underwriting",
+        {"ticker": "MSFT", "official_documents": [{"url": SEED_URL, "text": "x"}], "prior_public_results": {}},
+        symbol="MSFT",
+        seed_urls=[SEED_URL],
+    )
+    assert payload["underwriting_contract"]["allowed_source_urls"] == [SEED_URL]

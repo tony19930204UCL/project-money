@@ -693,7 +693,10 @@ class OriginalResearchCallbackBridge:
         normalized.setdefault("symbol", symbol)
         if stage == "underwriting":
             seeds = {str(url).strip() for url in (seed_urls or []) if str(url).strip()}
-            documents = normalized.get("documents")
+            # Installed host run_case sends `official_documents`; keep `documents` as legacy alias.
+            documents = normalized.get("official_documents")
+            if not isinstance(documents, list):
+                documents = normalized.get("documents")
             if not isinstance(documents, list):
                 raise RuntimeError("HOST_UNDERWRITING_DOCUMENTS_REQUIRED")
             allowed = []
