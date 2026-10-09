@@ -2010,3 +2010,18 @@ def test_judgment_snapshot_private_content_rejected():
             {"price": 100, "source": "private account", "account_number": "123456789"},
             "market_snapshot",
         )
+
+
+def test_judgment_no_snapshot_preserves_legacy_complete_pass():
+    """No market_snapshot key must preserve the installed original host PASS semantics."""
+    bridge = OriginalResearchCallbackBridge(routes=_host_routes(), coordinator=FakeCoordinator())
+    payload = bridge._host_stage_payload(
+        "underwriting",
+        {"documents": [{"url": SEED_URL, "text": "Official issuer disclosure", "observed_at": NOW.isoformat()}]},
+        symbol="MSFT", seed_urls=[SEED_URL],
+    )
+    assert "market_snapshot" not in payload
+    result = bridge._infer_host_route("underwriting", payload, now=NOW, seed_urls=[SEED_URL])
+    assert result["status"] == "COMPLETED"
+    assert result["output"]["status"] == "PASS"
+    assert "judgment_draft" not in result["output"]
