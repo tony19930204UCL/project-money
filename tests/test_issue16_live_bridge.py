@@ -2149,3 +2149,47 @@ def test_four_sentences_shape_only_with_market_snapshot():
     assert shape["example"] == ["S1.", "S2.", "S3.", "S4."]
     assert len(shape["example"]) == 4
     assert all(isinstance(sentence, str) for sentence in shape["example"])
+
+
+def _eps_snapshot(**changes):
+    return _judgment_snapshot(forward_eps=20.0, pe_bear=20.0, pe_base=25.0, pe_bull=30.0, **changes)
+
+
+def _eps_draft(**changes):
+    draft = {
+        "judgment_status": "DRAFT_FOR_MAIN_CIO",
+        "reflexivity_score": 0.4,
+        "scenario_return_estimates": {"bear": 400 / 500 - 1, "base": 500 / 500 - 1, "bull": 600 / 500 - 1},
+        "business_maturity": "Mature",
+        "valuation_scenarios": {"bear": 400.0, "base": 500.0, "bull": 600.0},
+        "buy_zone": {"low": 420.0, "high": 480.0},
+        "invalidation_conditions": ["x"],
+        "review_by": (NOW + timedelta(days=30)).date().isoformat(),
+    }
+    draft.update(changes)
+    return draft
+
+
+def test_eps_pe_snapshot_valid_and_legacy_unchanged():
+    assert live_bridge._valid_market_snapshot(_eps_snapshot(), NOW)
+    assert live_bridge._valid_market_snapshot(_judgment_snapshot(), NOW)
+
+
+def test_eps_pe_snapshot_fails_closed_on_bad_inputs():
+    assert not live_bridge._valid_market_snapshot(_judgment_snapshot(forward_eps=-1.0, pe_bear=20, pe_base=25, pe_bull=30), NOW)
+    assert not live_bridge._valid_market_snapshot(_judgment_snapshot(forward_eps=20.0), NOW)
+    assert not live_bridge._valid_market_snapshot(_judgment_snapshot(forward_eps=20.0, pe_bear=30, pe_base=25, pe_bull=20), NOW)
+
+
+def test_judgment_cross_check_accepts_exact_and_rejects_mismatch():
+    snap = _eps_snapshot()
+    price = snap["price"] if False else 500.0
+    assert live_bridge._validate_judgment_draft(_eps_draft(), price, NOW, snap) is None
+    bad = _eps_draft(valuation_scenarios={"bear": 400.0, "base": 560.0, "bull": 600.0})
+    assert live_bridge._validate_judgment_draft(bad, price, NOW, snap) == "valuation_scenarios"
+    bad_r = _eps_draft(scenario_return_estimates={"bear": -0.2, "base": 0.5, "bull": 0.2})
+    assert live_bridge._validate_judgment_draft(bad_r, price, NOW, snap) == "scenario_return_estimates"
+    bad_z = _eps_draft(buy_zone={"low": 420.0, "high": 520.0})
+    assert live_bridge._validate_judgment_draft(bad_z, price, NOW, snap) == "buy_zone"
+    # legacy snapshot without eps skips the cross-check
+    assert live_bridge._validate_judgment_draft(_eps_draft(valuation_scenarios={"bear": 1, "base": 2, "bull": 3}, buy_zone={"low": 450.0, "high": 480.0}), price, NOW, _judgment_snapshot()) is None

@@ -231,16 +231,34 @@ def _valid_market_snapshot(value: Any, now: datetime) -> bool:
         age = current - observed.astimezone(timezone.utc)
         if age < timedelta(0) or age > timedelta(hours=36):
             return False
-        for key in ("week52_high", "week52_low", "forward_pe"):
+        for key in ("week52_high", "week52_low", "forward_pe", "forward_eps", "pe_bear", "pe_base", "pe_bull"):
             n = value.get(key)
             if n is not None and (isinstance(n, bool) or not isinstance(n, (int, float)) or not math.isfinite(n) or n <= 0):
+                return False
+        pes = [value.get(k) for k in ("pe_bear", "pe_base", "pe_bull")]
+        if any(x is not None for x in pes) or value.get("forward_eps") is not None:
+            if value.get("forward_eps") is None or any(x is None for x in pes):
+                return False
+            if not (pes[0] <= pes[1] <= pes[2]):
                 return False
         return True
     except (ValueError, TypeError, OverflowError):
         return False
 
 
-def _validate_judgment_draft(draft: Mapping[str, Any], price: float, now: datetime) -> Optional[str]:
+def _snapshot_valuation_inputs(snapshot: Optional[Mapping[str, Any]]) -> Optional[dict]:
+    if not isinstance(snapshot, Mapping) or snapshot.get("forward_eps") is None:
+        return None
+    return {
+        "bear": snapshot["forward_eps"] * snapshot["pe_bear"],
+        "base": snapshot["forward_eps"] * snapshot["pe_base"],
+        "bull": snapshot["forward_eps"] * snapshot["pe_bull"],
+    }
+
+
+def _validate_judgment_draft(
+    draft: Mapping[str, Any], price: float, now: datetime, snapshot: Optional[Mapping[str, Any]] = None
+) -> Optional[str]:
     for field in HOST_UNDERWRITING_JUDGMENT_FIELDS:
         value = draft.get(field)
         if value is None or value == "" or value == [] or value == {}:
@@ -259,6 +277,22 @@ def _validate_judgment_draft(draft: Mapping[str, Any], price: float, now: dateti
         or not math.isfinite(scenarios[k]) for k in ("bear", "base", "bull")
     ):
         return "valuation_scenarios"
+    expected = _snapshot_valuation_inputs(snapshot)
+    if expected is not None:
+        for k in ("bear", "base", "bull"):
+            if abs(scenarios[k] - expected[k]) > 0.01 * expected[k]:
+                return "valuation_scenarios"
+        returns = draft["scenario_return_estimates"]
+        if not isinstance(returns, Mapping):
+            return "scenario_return_estimates"
+        for k in ("bear", "base", "bull"):
+            r = returns.get(k)
+            if isinstance(r, bool) or not isinstance(r, (int, float)) or not math.isfinite(r):
+                return "scenario_return_estimates"
+            if abs(r - (scenarios[k] / price - 1)) > 0.02:
+                return "scenario_return_estimates"
+        if zone["high"] > scenarios["base"] or zone["low"] < scenarios["bear"]:
+            return "buy_zone"
     try:
         deadline = date.fromisoformat(draft["review_by"])
         days = (deadline - _utc(now).date()).days
@@ -810,6 +844,21 @@ class OriginalResearchCallbackBridge:
                         "These are drafts for Main CIO. Derive only from supplied official facts plus "
                         "market_snapshot. If unsupported, set the field to JSON null rather than invent."
                     ),
+                    **(
+                        {
+                            "valuation_method": (
+                                "valuation_scenarios.bear/base/bull MUST equal forward_eps * pe_bear/pe_base/pe_bull "
+                                "from market_snapshot (show exactly these products). scenario_return_estimates.k = "
+                                "valuation_scenarios.k / snapshot price - 1. buy_zone.high <= valuation_scenarios.base "
+                                "and buy_zone.low >= valuation_scenarios.bear. reflexivity_score: number 0..1 for how much "
+                                "the price depends on narrative/sentiment versus reported fundamentals, justified only from "
+                                "supplied facts."
+                            ),
+                            "computed_valuation_scenarios": _snapshot_valuation_inputs(normalized["market_snapshot"]),
+                        }
+                        if _snapshot_valuation_inputs(normalized["market_snapshot"]) is not None
+                        else {}
+                    ),
                     "worked_example": {
                         "label": "EXAMPLE_ONLY; placeholder values, never use as a real draft",
                         "judgment_status": "DRAFT_FOR_MAIN_CIO",
@@ -993,7 +1042,7 @@ class OriginalResearchCallbackBridge:
                         if not _valid_market_snapshot(snapshot, now):
                             raw["reason"] = "MARKET_SNAPSHOT_STALE_OR_MISSING"
                         else:
-                            invalid = _validate_judgment_draft(draft, float(snapshot["price"]), now)
+                            invalid = _validate_judgment_draft(draft, float(snapshot["price"]), now, snapshot)
                             if invalid:
                                 raw["reason"] = "INVALID_JUDGMENT_FIELD:" + invalid
                             elif not isinstance(raw_output, Mapping) or raw_output.get("judgment_status") != "DRAFT_FOR_MAIN_CIO":
