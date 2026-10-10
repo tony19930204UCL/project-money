@@ -178,7 +178,24 @@ class IntradayFeed:
             raise FeedUnavailable("no valid Cboe options")
         return result
 
+    latency_log = None  # optional Path: JSONL of per-fetch source/age/failure
+
+    def _log_latency(self, symbol, source, age, error=None):
+        if not self.latency_log:
+            return
+        try:
+            with open(self.latency_log, "a") as fh:
+                fh.write(json.dumps({"at": _utc(self.clock()).isoformat(), "symbol": symbol,
+                                     "source": source, "age_s": age, "error": error}) + "\n")
+        except OSError:
+            pass
+
     def latest(self, symbol, *, market=None, require_open=False):
+        r = self._latest(symbol, market=market, require_open=require_open)
+        self._log_latency(symbol, r.source, round(r.staleness_seconds, 1))
+        return r
+
+    def _latest(self, symbol, *, market=None, require_open=False):
         market = market or ("TW" if symbol.upper().endswith(".TW") else "US")
         if require_open and not market_open(market, self.clock()):
             raise FeedUnavailable("market closed")
@@ -189,4 +206,5 @@ class IntradayFeed:
                 return adapter(symbol)
             except (ValueError, KeyError, IndexError, TypeError, FeedUnavailable) as exc:
                 failures.append(type(exc).__name__ + ":" + str(exc))
+        self._log_latency(symbol, None, None, "; ".join(failures)[:300])
         raise FeedUnavailable("; ".join(failures))

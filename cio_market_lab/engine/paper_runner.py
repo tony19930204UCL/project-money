@@ -81,7 +81,7 @@ class MeanRev(_Base):
 
 class _RealSleepSession(PaperSession):
     def run_session(self, max_ticks, sleep=None):
-        return super().run_session(max_ticks, sleep or time.sleep)
+        return super().run_session(max_ticks, sleep or (lambda _s: time.sleep(TICK_SECONDS)))
 
 
 def _seed(path, cash):
@@ -102,6 +102,8 @@ def build_config(root, feed=None, order_service=None, ticks=None, sleep_free=Fal
         save_table(wt, {"schema_version": 1, "weights": {}})
     from cio_market_lab.engine.strategy_feedback import load_table
     feed = feed or IntradayFeed()
+    if getattr(feed, 'latency_log', 1) is None:
+        feed.latency_log = root / 'feed_latency.jsonl'
     markets = {}
     for mkt, spec in UNIVERSE.items():
         acct, jr = root / (mkt + "_account.json"), root / (mkt + "_journal.jsonl")
