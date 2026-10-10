@@ -4,43 +4,43 @@
   "pr_number": 43,
   "branch": "feat/paper-trading-phase3",
   "task_id": "paper-phase3-20261010",
-  "instruction_id": "Q1-r0",
-  "source_head_sha": "ac026f0ed5d3c09f1be2c3f40e48eb4df274ed7a",
+  "instruction_id": "Q2-r0",
+  "source_head_sha": "8cb5d887edb44b905a1ce921d34e12607063b33f",
   "status": "WAITING_CI",
-  "summary": "Added PAPER-only persistent session runner and 14 offline test cases. GitHub edits completed; pytest not executed in this environment; independent acceptance pending.",
+  "summary": "Implemented PAPER-only bounded strategy expectancy feedback and non-mutating signal-size adapter, with 20 offline pytest cases. Test execution pending independent CI; no live orders.",
   "changed_files": [
-    "cio_market_lab/engine/paper_session.py",
-    "tests/test_paper_session.py",
+    "cio_market_lab/engine/strategy_feedback.py",
+    "tests/test_strategy_feedback.py",
     "docs/engineering/PAPER_PHASE3_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "GitHub create_file cio_market_lab/engine/paper_session.py",
+      "command": "GitHub create_file cio_market_lab/engine/strategy_feedback.py",
       "result": "SUCCESS",
-      "evidence": "commit 53fdcbfa037f5db88a7408f3458048702eeb96c5"
+      "evidence": "commit 9ef49405f0624eb70ccb2f15dca3262d09c21077"
     },
     {
-      "command": "GitHub create_file tests/test_paper_session.py",
+      "command": "GitHub create_file tests/test_strategy_feedback.py",
       "result": "SUCCESS",
-      "evidence": "commit ac026f0ed5d3c09f1be2c3f40e48eb4df274ed7a"
+      "evidence": "commit 8cb5d887edb44b905a1ce921d34e12607063b33f"
     },
     {
-      "command": "pytest -q tests/test_paper_session.py",
+      "command": "pytest -q tests/test_strategy_feedback.py",
       "result": "NOT_RUN",
-      "evidence": "No test runner invoked; pending Main CI"
+      "evidence": "GitHub connector does not execute pytest; no runner invoked"
     }
   ],
   "remaining_work": [
     {
-      "item": "Run pytest and inspect integration compatibility; independently verify exact HEAD and allowlist",
+      "item": "Run pytest and review integration and exact-HEAD allowlist independently",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Inspect PR #43 and run pytest -q tests/test_paper_session.py plus relevant regression suites",
-    "if_pass": "Accept Q1 implementation after independent review",
+    "verify_now": "Run pytest -q tests/test_strategy_feedback.py and relevant regression suites; inspect PR #43 exact HEAD",
+    "if_pass": "Accept Q2 after independent code review",
     "if_fail": "Return exact failure output for bounded correction",
     "blockers": []
   }
