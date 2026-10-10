@@ -51,3 +51,15 @@ def test_http_fetch_sends_ua_and_retries_429(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda s: None)
     assert m.IntradayFeed._http_fetch("https://x") == {"ok": 1}
     assert len(seen) == 3 and all("Mozilla" in u for u in seen)
+
+
+def test_real_session_sleeps_one_tick_interval(monkeypatch):
+    from cio_market_lab.engine import paper_runner as pr
+    slept = []
+    monkeypatch.setattr(pr.time, "sleep", lambda s: slept.append(s))
+    captured = {}
+    from cio_market_lab.engine.paper_session import PaperSession
+    monkeypatch.setattr(PaperSession, "run_session", lambda self, n, sleep=None: captured.setdefault("sleep", sleep))
+    pr._RealSleepSession.__new__(pr._RealSleepSession).run_session(2)
+    captured["sleep"](1)
+    assert slept == [pr.TICK_SECONDS] and pr.TICK_SECONDS == 60
