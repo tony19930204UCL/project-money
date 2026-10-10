@@ -28,3 +28,9 @@ def test_fee_drag():
 def test_bad_input():
     with pytest.raises(ValueError):
         simulate_nav(LeveredEtfSpec("X", 3.0), [-1.0])
+
+
+def test_presets_leverage_signs():
+    from cio_market_lab.engine.leveraged_etf_sim import PRESETS
+    assert PRESETS["00631L.TW"].leverage == 2.0 and PRESETS["00632R.TW"].leverage == -1.0
+    assert PRESETS["TQQQ"].leverage == 3.0 and PRESETS["SQQQ"].leverage == -3.0

@@ -46,3 +46,13 @@ def decay_vs_naive(spec: LeveredEtfSpec, daily_returns: Sequence[float]) -> dict
     naive = spec.leverage * (under - 1.0)
     return {"true_return": true_ret, "naive_return": naive,
             "path_decay": true_ret - naive, "underlying_return": under - 1.0}
+
+
+# Presets (expense ratios approximate; verify against issuer prospectus before relying on cost).
+PRESETS = {
+    "00631L.TW": LeveredEtfSpec("00631L.TW", 2.0, annual_expense=0.0100),
+    "00632R.TW": LeveredEtfSpec("00632R.TW", -1.0, annual_expense=0.0100),
+    "TQQQ": LeveredEtfSpec("TQQQ", 3.0, annual_expense=0.0084),
+    "SQQQ": LeveredEtfSpec("SQQQ", -3.0, annual_expense=0.0095),
+    "NVDL": LeveredEtfSpec("NVDL", 2.0, annual_expense=0.0115),
+}
