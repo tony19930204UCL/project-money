@@ -4,37 +4,49 @@
   "pr_number": 39,
   "branch": "feat/paper-trading-phase1",
   "task_id": "paper-phase1-20261010",
-  "instruction_id": "W1-r1",
-  "source_head_sha": "2fbbe64caeeb4db07df51bbda44c5eb8270d408a",
-  "status": "READY_FOR_REVIEW",
-  "summary": "PAPER ONLY: W1-r1 corrects mailbox status contract only; warrant implementation unchanged. Main CIO independently confirmed acceptance at 2fbbe64caeeb4db07df51bbda44c5eb8270d408a: 27 passed, rc=0, no failures.",
+  "instruction_id": "W2-r0",
+  "source_head_sha": "5befb0414fca8e3b72116365f90195bea2d5626d",
+  "status": "IMPLEMENTED_UNTESTED",
+  "summary": "PAPER ONLY: added Taiwan single-stock futures ContractSpec factory and real PaperDerivativesEngine integration tests; no engine changes. Tests deliberately not executed; Main CIO owns independent acceptance.",
   "changed_files": [
+    "cio_market_lab/engine/tw_stock_futures.py",
+    "tests/test_tw_stock_futures.py",
     "docs/engineering/PAPER_PHASE1_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "python3 -m pytest -q tests/test_tw_warrant_sim.py tests/test_leveraged_etf_sim.py",
-      "result": "PASS (Main CIO independently executed; not rerun by worker)",
-      "evidence": "Main CIO reported HEAD 2fbbe64caeeb4db07df51bbda44c5eb8270d408a; passed=27; rc=0; failures=no"
+      "command": "GitHub connector fetch_file paper_derivatives.py, tests/test_paper_derivatives.py and existing mailbox",
+      "result": "SUCCESS",
+      "evidence": "Read existing engine APIs, tests and mailbox on feat/paper-trading-phase1"
     },
     {
-      "command": "GitHub connector fetch_file docs/engineering/PAPER_PHASE1_HANDOFF.json",
+      "command": "GitHub connector create_file cio_market_lab/engine/tw_stock_futures.py",
       "result": "SUCCESS",
-      "evidence": "Read existing mailbox blob bab2c0abe4b4f58995a0f28be0e517c20652f36a"
+      "evidence": "commit 398da35f9eba49ee84dbb9bf42ae5901e68a809d"
+    },
+    {
+      "command": "GitHub connector create_file tests/test_tw_stock_futures.py",
+      "result": "SUCCESS",
+      "evidence": "commit 5befb0414fca8e3b72116365f90195bea2d5626d"
+    },
+    {
+      "command": "python3 -m pytest -q tests/test_tw_stock_futures.py tests/test_paper_derivatives.py",
+      "result": "NOT_RUN",
+      "evidence": "Per Main bounded instruction: no local clone or test execution; Main CIO independently runs acceptance"
     }
   ],
   "remaining_work": [
     {
-      "item": "Main CIO verify W1-r1 mailbox schema/status, exact pre-mailbox SHA and mailbox-only diff",
+      "item": "Main CIO run acceptance pytest command and report exact failures or passing count",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Verify schema_version=2, W1-r1 IDs, READY_FOR_REVIEW, source_head_sha=2fbbe64caeeb4db07df51bbda44c5eb8270d408a and mailbox-only commit; acceptance already passed 27 tests.",
-    "if_pass": "Accept W1-r1 handback for PAPER ONLY; no merge/deploy/trade authorized.",
-    "if_fail": "Return exact contract validation failure and commit SHA.",
+    "verify_now": "Verify W2-r0 files, unchanged paper_derivatives.py, exact source_head_sha and run python3 -m pytest -q tests/test_tw_stock_futures.py tests/test_paper_derivatives.py",
+    "if_pass": "Accept PAPER ONLY W2-r0; no merge/deploy/trade",
+    "if_fail": "Return exact failing assertions, traceback and tested HEAD for bounded repair",
     "blockers": []
   }
 }
