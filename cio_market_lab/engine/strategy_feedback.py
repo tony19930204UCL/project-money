@@ -27,7 +27,7 @@ def validate_table(table):
             raise ValueError("negative weight")
         if row.get("last_direction", 0) not in (-1, 0, 1):
             raise ValueError("invalid direction")
-        if not isinstance(row.get("pending", 0), int) or isinstance(row.get("pending", 0), bool) or row["pending"] < 0:
+        if not isinstance(row.get("pending", 0), int) or isinstance(row.get("pending", 0), bool) or row.get("pending", 0) < 0:
             raise ValueError("invalid pending")
     return table
 
