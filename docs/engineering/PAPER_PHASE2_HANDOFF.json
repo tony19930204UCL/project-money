@@ -4,44 +4,43 @@
   "pr_number": 41,
   "branch": "feat/paper-trading-phase2",
   "task_id": "paper-phase2-20261010",
-  "instruction_id": "P1-r0",
-  "source_head_sha": "ef592468bba8f983e524c86ac5f659b80fbef5ac",
-  "status": "BLOCKED",
-  "summary": "Implemented offline injectable intraday feed and 16 fixture-based tests; pytest execution unavailable in GitHub connector environment, acceptance not established.",
+  "instruction_id": "P1-r1",
+  "source_head_sha": "77eeb5d796153e500f8d55712f6a130be0128ad9",
+  "status": "READY_FOR_REVIEW",
+  "summary": "Corrected test_closed_market_gate fixture: previous NOW was Friday 10:00 America/New_York (open); regression now uses Saturday and verifies no fetch occurs while closed. Production feed unchanged. Main previously observed 15 passed, 1 failed at c67d236; revised tests not rerun.",
   "changed_files": [
-    "cio_market_lab/data/intraday_feed.py",
     "tests/test_intraday_feed.py",
     "docs/engineering/PAPER_PHASE2_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "GitHub create_file cio_market_lab/data/intraday_feed.py",
-      "result": "SUCCESS",
-      "evidence": "commit 5c04aaf79c37f6ca494c54f6f75c0ae6d3bfcc38"
+      "command": "Main: pytest tests/test_intraday_feed.py (HEAD c67d236292299ddeba953982d775623285d76ecb)",
+      "result": "FAILED (15 passed, 1 failed)",
+      "evidence": "User-provided Main acceptance log: test_closed_market_gate DID NOT RAISE FeedUnavailable; 1 failed, 15 passed in 0.15s"
     },
     {
-      "command": "GitHub create_file tests/test_intraday_feed.py",
+      "command": "GitHub update_file tests/test_intraday_feed.py",
       "result": "SUCCESS",
-      "evidence": "commit ef592468bba8f983e524c86ac5f659b80fbef5ac"
+      "evidence": "commit 77eeb5d796153e500f8d55712f6a130be0128ad9"
     },
     {
-      "command": "pytest tests/test_intraday_feed.py",
+      "command": "pytest tests/test_intraday_feed.py (P1-r1)",
       "result": "NOT_RUN",
-      "evidence": "GitHub connector does not execute pytest"
+      "evidence": "No local pytest execution; Main owns independent acceptance"
     }
   ],
   "remaining_work": [
     {
-      "item": "Run pytest tests/test_intraday_feed.py and correct any failures; independent review of data contract and market-hours behavior",
+      "item": "Main independently run pytest tests/test_intraday_feed.py on exact new PR HEAD and verify >=12 tests, zero failures and allowlist-only diff",
       "owner": "Main CIO",
       "status": "ACTIONABLE_NOW"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Review PR #41 exact HEAD, allowlist diff, run pytest tests/test_intraday_feed.py",
-    "if_pass": "Accept P1 after independent verification",
-    "if_fail": "Return failing logs for bounded revision",
+    "verify_now": "Check PR #41 exact HEAD and diff, then run pytest tests/test_intraday_feed.py",
+    "if_pass": "Accept P1-r1 only after independent green acceptance",
+    "if_fail": "Return failing test output and exact HEAD for bounded follow-up",
     "blockers": []
   }
 }
