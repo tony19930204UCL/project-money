@@ -94,8 +94,18 @@ class IntradayFeed:
 
     @staticmethod
     def _http_fetch(url):
-        with urlopen(url, timeout=10) as response:
-            return json.load(response)
+        import time
+        from urllib.error import HTTPError
+        from urllib.request import Request
+        req = Request(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
+        for attempt in range(3):
+            try:
+                with urlopen(req, timeout=10) as response:
+                    return json.load(response)
+            except HTTPError as exc:
+                if exc.code not in (429, 502, 503) or attempt == 2:
+                    raise
+                time.sleep(2 ** attempt)
 
     def _load(self, url):
         data = self.fetch(url)

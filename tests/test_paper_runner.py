@@ -33,3 +33,21 @@ def test_runner_end_to_end(tmp_path):
     assert (tmp_path / "reports" / "2026-10-12.md").exists()
     rows = [json.loads(x) for x in (tmp_path / "US_journal.jsonl").read_text().splitlines()]
     assert any(r.get("status") == "SIMULATED" for r in rows), rows[:5]
+
+
+def test_http_fetch_sends_ua_and_retries_429(monkeypatch):
+    import io
+    from urllib.error import HTTPError
+    from cio_market_lab.data import intraday_feed as m
+    seen = []
+
+    def fake(req, timeout):
+        seen.append(req.get_header("User-agent"))
+        if len(seen) < 3:
+            raise HTTPError(req.full_url, 429, "x", {}, None)
+        return io.BytesIO(b'{"ok": 1}')
+
+    monkeypatch.setattr(m, "urlopen", fake)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    assert m.IntradayFeed._http_fetch("https://x") == {"ok": 1}
+    assert len(seen) == 3 and all("Mozilla" in u for u in seen)
