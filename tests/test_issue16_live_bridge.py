@@ -2130,3 +2130,22 @@ def test_constructor_snapshot_injection_ships_judgment_format_to_model():
     assert captured["snapshot"]["price"] == 100.0
     fmt = captured["contract"]["judgment_output_format"]
     assert "reflexivity_score" in fmt and "buy_zone" in fmt and "review_by" in fmt
+
+
+def test_four_sentences_shape_only_with_market_snapshot():
+    bridge = OriginalResearchCallbackBridge(routes=_host_routes(), coordinator=FakeCoordinator())
+    base = {"documents": [{"url": SEED_URL, "text": "Official issuer disclosure", "observed_at": NOW.isoformat()}]}
+    legacy = bridge._host_stage_payload("underwriting", base, symbol="MSFT", seed_urls=[SEED_URL])
+    assert "four_sentences_shape" not in legacy["underwriting_contract"]
+    assert "judgment_output_format" not in legacy["underwriting_contract"]
+    with_snapshot = bridge._host_stage_payload(
+        "underwriting", {**base, "market_snapshot": _judgment_snapshot()},
+        symbol="MSFT", seed_urls=[SEED_URL],
+    )
+    shape = with_snapshot["underwriting_contract"]["four_sentences_shape"]
+    assert "EXACTLY 4 separate strings" in shape["rule"]
+    assert "one sentence per element" in shape["rule"]
+    assert shape["example_label"].startswith("EXAMPLE_ONLY")
+    assert shape["example"] == ["S1.", "S2.", "S3.", "S4."]
+    assert len(shape["example"]) == 4
+    assert all(isinstance(sentence, str) for sentence in shape["example"])
