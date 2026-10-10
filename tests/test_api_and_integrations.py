@@ -464,3 +464,15 @@ def test_plugin_register_function(monkeypatch: pytest.MonkeyPatch):
     assert reg_info["server_status"] == "online"
     assert reg_info["safety"]["simulation_only"] is True
 
+
+
+def test_paper_live_endpoint_reads_runner_state(tmp_path):
+    from cio_market_lab.api.live_view import build_live
+    (tmp_path / "US_account.json").write_text(json.dumps({"cash": 29000.0, "positions": {"NVDA": 5}, "realized_pnl": 0.0, "marks": {"NVDA": 220.0}, "daily_start_equity": None}))
+    (tmp_path / "US_journal.jsonl").write_text(json.dumps({"status": "SIMULATED", "ticker": "NVDA", "side": "BUY", "size": 5, "fill_price": 200.0, "timestamp": "2026-10-12T14:00:00+00:00"}) + "\n")
+    out = build_live(tmp_path)
+    assert out["paper_only"] is True
+    us = out["markets"]["US"]
+    assert us["equity"] == 30100.0 and us["fills_count"] == 1
+    assert out["markets"]["TW"]["state"] == "NO_DATA"
+    assert out["fills"][0]["ticker"] == "NVDA"

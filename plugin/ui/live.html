@@ -1,0 +1,44 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CIO Live · Paper Desk</title>
+<style>
+:root{--bg:#0b1018;--card:#121a27;--line:#1f2b3d;--tx:#e6edf6;--mu:#7d8ca3;--up:#2fd38a;--dn:#ff6b7a;--ac:#5cc8ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.5 -apple-system,Segoe UI,sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;padding:14px 22px;border-bottom:1px solid var(--line)}
+h1{font-size:16px;margin:0}.badge{background:#2a2410;color:#f0c14b;border:1px solid #5a4a14;padding:2px 10px;border-radius:99px;font-size:12px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--up);margin-right:6px;animation:p 1.6s infinite}@keyframes p{50%{opacity:.25}}
+main{padding:18px 22px;display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(380px,1fr))}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.k{color:var(--mu);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+.big{font-size:30px;font-weight:700;margin:4px 0}.up{color:var(--up)}.dn{color:var(--dn)}
+table{width:100%;border-collapse:collapse;margin-top:8px}th,td{text-align:right;padding:5px 6px;border-bottom:1px solid var(--line);font-size:13px}
+th:first-child,td:first-child{text-align:left}th{color:var(--mu);font-weight:500}
+.wide{grid-column:1/-1}.row{display:flex;gap:22px;flex-wrap:wrap;color:var(--mu);font-size:12px}.row b{color:var(--tx)}
+canvas{width:100%;height:90px;margin-top:8px}
+</style></head><body>
+<header><h1><span class="dot"></span>CIO Live · 自主紙盤交易</h1><span class="badge">PAPER ONLY · 15s 自動更新</span></header>
+<main id="m"></main>
+<script>
+const f=(n,d=0)=>n==null?"—":Number(n).toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d});
+const cls=n=>n>0?"up":n<0?"dn":"";const hist={US:[],TW:[]};
+function card(k,m){
+ if(m.state!=="OK")return `<div class="card"><div class="k">${k}</div><div class="big">尚無資料</div><div class="row">週一開盤後出現</div></div>`;
+ const h=hist[k];h.push(m.equity);if(h.length>300)h.shift();
+ const pos=m.positions.length?m.positions.map(p=>`<tr><td>${p.ticker}</td><td>${f(p.qty)}</td><td>${f(p.mark,2)}</td><td>${f(p.value)}</td></tr>`).join(""):`<tr><td colspan=4 style="color:var(--mu)">目前空手</td></tr>`;
+ return `<div class="card"><div class="k">${k==="US"?"美股 US":"台股 TW"} · 起始 ${f(m.start_cash)}</div>
+ <div class="big">${f(m.equity)}</div><div class="${cls(m.pnl)}">${m.pnl>=0?"+":""}${f(m.pnl,2)} (${f(m.pnl_pct,2)}%)</div>
+ <div class="row" style="margin-top:8px"><span>現金 <b>${f(m.cash)}</b></span><span>已實現 <b>${f(m.realized_pnl,2)}</b></span><span>成交 <b>${m.fills_count}</b></span><span>被擋 <b>${m.rejects_count}</b></span></div>
+ <canvas id="c${k}" width="600" height="90"></canvas>
+ <table><tr><th>持倉</th><th>股數</th><th>現價</th><th>市值</th></tr>${pos}</table></div>`}
+function spark(k){const c=document.getElementById("c"+k);if(!c)return;const h=hist[k];if(h.length<2)return;const x=c.getContext("2d");x.clearRect(0,0,600,90);
+ const mn=Math.min(...h),mx=Math.max(...h),r=(mx-mn)||1;x.strokeStyle=h[h.length-1]>=h[0]?"#2fd38a":"#ff6b7a";x.lineWidth=2;x.beginPath();
+ h.forEach((v,i)=>{const px=i/(h.length-1)*600,py=85-(v-mn)/r*80;i?x.lineTo(px,py):x.moveTo(px,py)});x.stroke()}
+async function load(){
+ const d=await (await fetch("/api/paper/live")).json();
+ const fl=d.fills.length?d.fills.map(r=>`<tr><td>${(r.timestamp||"").slice(5,19).replace("T"," ")}</td><td>${r.market}</td><td>${r.ticker}</td><td class="${r.side==="BUY"?"up":"dn"}">${r.side}</td><td>${f(r.size)}</td><td>${f(r.fill_price,2)}</td><td>${f((r.fee||0)+(r.tax||0),2)}</td><td style="text-align:left;color:var(--mu)">${r.thesis||""}</td></tr>`).join(""):`<tr><td colspan=8 style="color:var(--mu)">尚無成交</td></tr>`;
+ const l=d.feed.last;
+ document.getElementById("m").innerHTML=card("US",d.markets.US)+card("TW",d.markets.TW)+
+ `<div class="card wide"><div class="k">最新成交（含手續費/稅）</div><table><tr><th>時間 UTC</th><th>市場</th><th>標的</th><th>方向</th><th>股數</th><th>價格</th><th>成本</th><th style="text-align:left">理由</th></tr>${fl}</table>
+ <div class="row" style="margin-top:10px"><span>行情延遲樣本 <b>${d.feed.samples}</b></span><span>最近一筆 <b>${l?JSON.stringify(l).slice(0,140):"—"}</b></span></div></div>`;
+ spark("US");spark("TW")}
+load();setInterval(load,15000);
+</script></body></html>
