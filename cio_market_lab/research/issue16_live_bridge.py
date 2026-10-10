@@ -320,7 +320,9 @@ class OriginalResearchCallbackBridge:
         coordinator: Optional[FreeSourceCoordinator] = None,
         max_serialized_bytes: int = 250_000,
         market_snapshot: Optional[Mapping[str, Any]] = None,
+        challenge_judgment_drafts: bool = False,
     ) -> None:
+        self.challenge_judgment_drafts = challenge_judgment_drafts
         self.routes = dict(routes)
         self.market_snapshot = dict(market_snapshot) if market_snapshot is not None else None
         self.coordinator = coordinator or FreeSourceCoordinator()
@@ -642,6 +644,8 @@ class OriginalResearchCallbackBridge:
                 "live_acceptance_claimed": False,
             }
         output = dict(result)
+        if output.get("status") == "READY_FOR_CIO":
+            output["main_cio_approval"] = "PENDING"
         output.setdefault("live_acceptance_claimed", False)
         output.setdefault("owner", "MAIN_CIO")
         output["callback_evidence"] = list(self.callback_evidence)
@@ -1051,8 +1055,12 @@ class OriginalResearchCallbackBridge:
                                 raw["reason"] = "PENDING_MAIN_CIO_REVIEW"
                                 raw["judgment_status"] = "DRAFT_FOR_MAIN_CIO"
                                 raw["judgment_draft"] = draft
-                        for key in HOST_UNDERWRITING_JUDGMENT_FIELDS:
-                            raw[key] = None
+                                if self.challenge_judgment_drafts:
+                                    raw["status"] = "PASS"
+                                    raw["reason"] = "JUDGMENT_DRAFT_FORWARDED_TO_CHALLENGE"
+                        if raw["status"] != "PASS":
+                            for key in HOST_UNDERWRITING_JUDGMENT_FIELDS:
+                                raw[key] = None
                         validated_model = OriginalHostUnderwritingOutput.model_validate(raw)
                     contract = payload.get("underwriting_contract")
                     allowed_source_urls = (
@@ -1199,6 +1207,16 @@ class OriginalResearchCallbackBridge:
             if not identity:
                 raise RuntimeError("HOST_UNDERWRITING_MODEL_IDENTITY_REQUIRED")
             normalized = self._host_stage_payload("challenge", payload, symbol=symbol)
+            underwriting = normalized.get("underwriting")
+            if self.challenge_judgment_drafts and isinstance(underwriting, Mapping) and underwriting.get("judgment_status") == "DRAFT_FOR_MAIN_CIO":
+                normalized["judgment_draft"] = underwriting.get("judgment_draft") or {
+                    key: underwriting.get(key) for key in HOST_UNDERWRITING_JUDGMENT_FIELDS
+                }
+                normalized["challenge_instructions"] = (
+                    "Independently attack the draft valuation_scenarios, buy_zone and "
+                    "invalidation_conditions; return substantive objections as a list. "
+                    "Do not approve trades or treat the draft as Main CIO approval."
+                )
             result = self._record_callback_evidence(
                 self._infer_host_route(
                     "challenge",
