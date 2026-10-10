@@ -792,6 +792,11 @@ class OriginalResearchCallbackBridge:
                 "allowed_source_urls": allowed,
             }
             if "market_snapshot" in normalized:
+                normalized["underwriting_contract"]["four_sentences_shape"] = {
+                    "rule": "four_sentences must be a JSON array of EXACTLY 4 separate strings; one sentence per element. Never pack multiple sentences into one string or one array element.",
+                    "example_label": "EXAMPLE_ONLY; shape illustration, not actual analysis",
+                    "example": ["S1.", "S2.", "S3.", "S4."],
+                }
                 normalized["underwriting_contract"]["judgment_output_format"] = {
                     "judgment_status": "DRAFT_FOR_MAIN_CIO (literal string)",
                     "reflexivity_score": "JSON number 0..1",
