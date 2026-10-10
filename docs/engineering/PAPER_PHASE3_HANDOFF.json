@@ -1,0 +1,47 @@
+{
+  "schema_version": 2,
+  "repository": "tony19930204UCL/project-money",
+  "pr_number": 43,
+  "branch": "feat/paper-trading-phase3",
+  "task_id": "paper-phase3-20261010",
+  "instruction_id": "Q3-r1",
+  "source_head_sha": "f6436aef2a13f6a69f142152a2b5f44637166b71",
+  "status": "WAITING_CI",
+  "summary": "Implemented PAPER-only market scheduler and 12 offline tests. pytest has not been executed; Main CIO owns acceptance.",
+  "changed_files": [
+    "cio_market_lab/engine/paper_scheduler.py",
+    "tests/test_paper_scheduler.py",
+    "docs/engineering/PAPER_PHASE3_HANDOFF.json"
+  ],
+  "tests": [
+    {
+      "command": "GitHub create_file cio_market_lab/engine/paper_scheduler.py",
+      "result": "SUCCESS",
+      "evidence": "c999fc0f8d90b5dab3170050877053d4bfe0394d"
+    },
+    {
+      "command": "GitHub create_file tests/test_paper_scheduler.py",
+      "result": "SUCCESS",
+      "evidence": "f6436aef2a13f6a69f142152a2b5f44637166b71"
+    },
+    {
+      "command": "pytest -q tests/test_paper_scheduler.py",
+      "result": "NOT_RUN",
+      "evidence": "GitHub connector does not execute pytest"
+    }
+  ],
+  "remaining_work": [
+    {
+      "item": "Run pytest and verify scheduler behavior and allowlist independently",
+      "status": "ACTIONABLE_NOW",
+      "owner": "Main CIO"
+    }
+  ],
+  "next_step_reminder": {
+    "to": "Main CIO",
+    "verify_now": "Run pytest -q tests/test_paper_scheduler.py and review diff",
+    "if_pass": "Independently accept PR #43 after checks",
+    "if_fail": "Return failure evidence for scoped revision",
+    "blockers": []
+  }
+}
