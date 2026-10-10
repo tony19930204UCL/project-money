@@ -1,0 +1,40 @@
+{
+  "schema_version": 2,
+  "repository": "tony19930204UCL/project-money",
+  "pr_number": 39,
+  "branch": "feat/paper-trading-phase1",
+  "task_id": "paper-phase1-20261010",
+  "instruction_id": "W2-r1",
+  "source_head_sha": "59b622ea4c1efd690038d7240219239e9955ad57",
+  "status": "READY_FOR_REVIEW",
+  "summary": "W2-r1 mailbox-only contract correction. Taiwan single-stock futures implementation unchanged. Main CIO independently reports acceptance PASS at source HEAD 59b622ea4c1efd690038d7240219239e9955ad57: 31 passed, exit code 0, no failures. PAPER ONLY; no merge/deploy/trade.",
+  "changed_files": [
+    "docs/engineering/PAPER_PHASE1_HANDOFF.json"
+  ],
+  "tests": [
+    {
+      "command": "python3 -m pytest -q tests/test_tw_stock_futures.py tests/test_paper_derivatives.py",
+      "result": "PASS (MAIN_CIO_REPORTED; NOT_RUN_BY_WORKER)",
+      "evidence": "Main CIO supplied independent acceptance at HEAD 59b622ea4c1efd690038d7240219239e9955ad57: passed=31, rc=0, failures=no; worker did not execute pytest."
+    },
+    {
+      "command": "GitHub connector get_pr_info PR #39 and fetch_file docs/engineering/PAPER_PHASE1_HANDOFF.json",
+      "result": "SUCCESS",
+      "evidence": "Verified pre-mailbox branch HEAD 59b622ea4c1efd690038d7240219239e9955ad57 and existing mailbox blob 13f41109fcdfee4840f3fef73767937617f4ce01"
+    }
+  ],
+  "remaining_work": [
+    {
+      "item": "Main CIO verify W2-r1 mailbox schema/status/IDs and mailbox-only diff against pre-mailbox HEAD",
+      "status": "ACTIONABLE_NOW",
+      "owner": "Main CIO"
+    }
+  ],
+  "next_step_reminder": {
+    "to": "Main CIO",
+    "verify_now": "Confirm schema_version=2, W2-r1, READY_FOR_REVIEW, source_head_sha 59b622ea4c1efd690038d7240219239e9955ad57, reported 31-pass acceptance and mailbox-only change",
+    "if_pass": "Accept W2-r1 handback for PAPER ONLY; do not merge/deploy/trade",
+    "if_fail": "Return exact mailbox contract validation error and tested HEAD",
+    "blockers": []
+  }
+}
