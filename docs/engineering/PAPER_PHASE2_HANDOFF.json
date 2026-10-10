@@ -4,43 +4,43 @@
   "pr_number": 41,
   "branch": "feat/paper-trading-phase2",
   "task_id": "paper-phase2-20261010",
-  "instruction_id": "P1-r1",
-  "source_head_sha": "77eeb5d796153e500f8d55712f6a130be0128ad9",
-  "status": "READY_FOR_REVIEW",
-  "summary": "Corrected test_closed_market_gate fixture: previous NOW was Friday 10:00 America/New_York (open); regression now uses Saturday and verifies no fetch occurs while closed. Production feed unchanged. Main previously observed 15 passed, 1 failed at c67d236; revised tests not rerun.",
+  "instruction_id": "P2-r0",
+  "source_head_sha": "6ee02f0ad32ee5e19df4cba7283f07530076d7cd",
+  "status": "BLOCKED",
+  "summary": "Added initial paper-only loop scaffold. Derivatives lifecycle, actual order submission, and >=15 offline tests remain incomplete; not acceptance-ready.",
   "changed_files": [
-    "tests/test_intraday_feed.py",
+    "cio_market_lab/engine/paper_trading_loop.py",
     "docs/engineering/PAPER_PHASE2_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "Main: pytest tests/test_intraday_feed.py (HEAD c67d236292299ddeba953982d775623285d76ecb)",
-      "result": "FAILED (15 passed, 1 failed)",
-      "evidence": "User-provided Main acceptance log: test_closed_market_gate DID NOT RAISE FeedUnavailable; 1 failed, 15 passed in 0.15s"
-    },
-    {
-      "command": "GitHub update_file tests/test_intraday_feed.py",
+      "command": "GitHub create_file cio_market_lab/engine/paper_trading_loop.py",
       "result": "SUCCESS",
-      "evidence": "commit 77eeb5d796153e500f8d55712f6a130be0128ad9"
+      "evidence": "commit 6ee02f0ad32ee5e19df4cba7283f07530076d7cd"
     },
     {
-      "command": "pytest tests/test_intraday_feed.py (P1-r1)",
+      "command": "pytest tests/test_paper_trading_loop.py",
       "result": "NOT_RUN",
-      "evidence": "No local pytest execution; Main owns independent acceptance"
+      "evidence": "No test file or pytest execution performed"
     }
   ],
   "remaining_work": [
     {
-      "item": "Main independently run pytest tests/test_intraday_feed.py on exact new PR HEAD and verify >=12 tests, zero failures and allowlist-only diff",
-      "owner": "Main CIO",
+      "item": "Implement derivative margin/expiry and integrate actual existing paper order execution",
+      "owner": "Implementation",
+      "status": "ACTIONABLE_NOW"
+    },
+    {
+      "item": "Create >=15 offline tests and run pytest tests/test_paper_trading_loop.py",
+      "owner": "Implementation",
       "status": "ACTIONABLE_NOW"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Check PR #41 exact HEAD and diff, then run pytest tests/test_intraday_feed.py",
-    "if_pass": "Accept P1-r1 only after independent green acceptance",
-    "if_fail": "Return failing test output and exact HEAD for bounded follow-up",
+    "verify_now": "Inspect exact HEAD and allowlist diff; do not accept incomplete P2-r0",
+    "if_pass": "Require completed implementation and independent pytest acceptance before approval",
+    "if_fail": "Return bounded follow-up for missing lifecycle and tests",
     "blockers": []
   }
 }
