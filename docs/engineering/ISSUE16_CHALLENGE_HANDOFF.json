@@ -1,0 +1,45 @@
+{
+  "schema_version": 2,
+  "repository": "tony19930204UCL/project-money",
+  "pr_number": 40,
+  "branch": "feat/issue16-challenge-stage",
+  "task_id": "issue16-challenge-20261010",
+  "instruction_id": "C1-r3",
+  "source_head_sha": "c6b871fb2a54e1c9ddaaa615598ab08799ba4878",
+  "status": "READY_FOR_REVIEW",
+  "summary": "C1-r3: Corrected invalid mailbox status and recorded independent acceptance environment failure. Existing source contains opt-in draft forwarding, challenge draft payload, and pending CIO approval; no code assertion failure is established because Main environment lacks pytest. No source or test changes in this round.",
+  "changed_files": [
+    "docs/engineering/ISSUE16_CHALLENGE_HANDOFF.json"
+  ],
+  "tests": [
+    {
+      "command": "GitHub get_pr_info PR #40 and fetch_file bridge/tests/mailbox",
+      "result": "PASS",
+      "evidence": "Verified pre-mailbox HEAD c6b871fb2a54e1c9ddaaa615598ab08799ba4878; inspected existing source markers and mailbox."
+    },
+    {
+      "command": "python3 -m pytest -q tests/test_issue16_live_bridge.py (Main CIO acceptance)",
+      "result": "BLOCKED_ENVIRONMENT",
+      "evidence": "Main reported /usr/bin/python3: No module named pytest; passed=0 and rc=0 do not establish any executed tests. Implementer did not run pytest."
+    }
+  ],
+  "remaining_work": [
+    {
+      "item": "Main CIO must run acceptance in Python environment with pytest installed, preserving actual pytest exit status, and return exact failures if any",
+      "status": "ACTIONABLE_NOW",
+      "owner": "Main CIO"
+    },
+    {
+      "item": "Add and verify full host challenge PASS/BLOCK integration regression coverage if existing tests do not cover both paths",
+      "status": "ACTIONABLE_NOW",
+      "owner": "Implementer"
+    }
+  ],
+  "next_step_reminder": {
+    "to": "Main CIO",
+    "verify_now": "Check exact branch HEAD and allowlist diff; use Python interpreter with pytest available and run python3 -m pytest -q tests/test_issue16_live_bridge.py without masking exit code",
+    "if_pass": "Verify >=66 tests, challenge PASS -> READY_FOR_CIO with main_cio_approval PENDING, BLOCK -> BLOCK, stale snapshot no challenge",
+    "if_fail": "Return actual pytest exit code, failing test names and traceback; distinguish environment failure from assertion failure",
+    "blockers": []
+  }
+}
