@@ -2111,3 +2111,22 @@ def test_judgment_prompt_example_cannot_validate_as_real_draft():
     example = normalized["underwriting_contract"]["judgment_output_format"]["worked_example"]
     assert example["label"].startswith("EXAMPLE_ONLY")
     assert live_bridge._validate_judgment_draft(example, 535.07, NOW) is not None
+
+
+def test_constructor_snapshot_injection_ships_judgment_format_to_model():
+    captured = {}
+    real = HermesLocalInference.infer
+
+    def spy(self, stage, payload, schema):
+        captured["contract"] = payload.get("underwriting_contract")
+        captured["snapshot"] = payload.get("market_snapshot")
+        return real(self, stage, payload, schema)
+
+    HermesLocalInference.infer = spy
+    try:
+        _snapshot_injection_run(_judgment_snapshot())
+    finally:
+        HermesLocalInference.infer = real
+    assert captured["snapshot"]["price"] == 100.0
+    fmt = captured["contract"]["judgment_output_format"]
+    assert "reflexivity_score" in fmt and "buy_zone" in fmt and "review_by" in fmt
