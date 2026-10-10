@@ -1342,6 +1342,12 @@ def create_app(
         report = get_derivative_capabilities_report()
         return report.model_dump(mode="json")
 
+    @app.get("/api/paper/live", tags=["Paper Trade"])
+    def get_paper_live() -> Dict[str, Any]:
+        """Read-only equity/positions/fills of the autonomous paper runner."""
+        from cio_market_lab.api.live_view import build_live
+        return build_live(app.state.app_state.workspace_root / "data" / "paper_runtime")
+
     @app.get("/api/paper/derivative-quotes", tags=["CIO Paper Desk"])
     def get_derivative_quotes() -> Dict[str, Any]:
         """Read-only exact-target exchange intake; never execution approval."""
