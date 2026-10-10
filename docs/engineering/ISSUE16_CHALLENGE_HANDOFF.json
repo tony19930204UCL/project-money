@@ -4,40 +4,51 @@
   "pr_number": 40,
   "branch": "feat/issue16-challenge-stage",
   "task_id": "issue16-challenge-20261010",
-  "instruction_id": "C1-r0",
-  "source_head_sha": "84157cb808f61af93498497843050ce657ea9041",
+  "instruction_id": "C1-r1",
+  "source_head_sha": "ecba276036d6be30efca7b04761696c5d2e22ab5",
   "status": "BLOCKED",
-  "summary": "Implemented opt-in judgment draft forwarding and challenge instructions; acceptance pending tests and independent Main CIO verification.",
+  "summary": "Verified existing opt-in challenge forwarding code. Main's reported acceptance command did not execute pytest because /usr/bin/python3 has no pytest; pipe to tail masked the Python exit status. Acceptance remains unverified; >=4 new regression tests still required. No source changes in this round.",
   "changed_files": [
-    "cio_market_lab/research/issue16_live_bridge.py",
     "docs/engineering/ISSUE16_CHALLENGE_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "python3 -m pytest -q tests/test_issue16_live_bridge.py",
-      "result": "NOT_RUN",
-      "evidence": "No local checkout or pytest execution was performed; >=66-test acceptance not verified."
+      "command": "python3 -m pytest --version",
+      "result": "PASS",
+      "evidence": "In isolated working container: pytest 9.0.2; this is not the Main host Python."
+    },
+    {
+      "command": "git clone --depth 1 --branch feat/issue16-challenge-stage https://github.com/tony19930204UCL/project-money.git /tmp/project-money",
+      "result": "BLOCKED",
+      "evidence": "fatal: Could not resolve host github.com; repository checkout unavailable for local test execution."
+    },
+    {
+      "command": "python3 -m pytest -q tests/test_issue16_live_bridge.py 2>&1 | tail -15",
+      "result": "MAIN_REPORTED_ENVIRONMENT_FAILURE",
+      "evidence": "At HEAD ecba276036d6be30efca7b04761696c5d2e22ab5: /usr/bin/python3: No module named pytest; pipeline rc=0 is tail status, not pytest success."
     }
   ],
   "remaining_work": [
     {
-      "item": "Add at least four challenge-stage regression tests and run >=66 tests",
+      "item": "Add at least four regression tests for flag-off, challenge PASS, challenge BLOCK and stale snapshot; run >=66 tests with pipefail on an environment with pytest and repository checkout",
       "status": "ACTIONABLE_NOW",
       "owner": "Implementer"
     },
     {
-      "item": "Independently verify host READY_FOR_CIO/BLOCK and exact HEAD",
+      "item": "Independently verify exact HEAD and host challenge behavior",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Review PR #40 source diff and request regression test evidence",
-    "if_pass": "Accept only after >=66 tests pass and independent challenge behavior is verified",
-    "if_fail": "Return to implementer for corrections",
+    "verify_now": "Check mailbox-only diff and correct Python pytest environment; do not interpret pipeline rc=0 as pytest PASS",
+    "if_pass": "Accept only after >=66 actual pytest tests pass and independent challenge PASS/BLOCK/stale paths are verified",
+    "if_fail": "Return C1-r1 for implementation and environment correction",
     "blockers": [
-      "Regression tests not added or run"
+      "At least four required new tests absent",
+      "Local checkout unavailable due to DNS failure",
+      "Main /usr/bin/python3 lacks pytest"
     ]
   }
 }
