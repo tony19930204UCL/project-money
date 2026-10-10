@@ -1,1 +1,51 @@
-{"status":"PENDING","task":"issue16-four-sentences"}
+{
+  "schema_version": 2,
+  "repository": "tony19930204UCL/project-money",
+  "pr_number": 36,
+  "branch": "feat/issue16-four-sentences-contract",
+  "task_id": "issue16-foursent-20261010",
+  "instruction_id": "J3-r0",
+  "status": "READY_FOR_REVIEW",
+  "source_head_sha": "9684288abf31bf5d8c5328f6f625986b383a9a19",
+  "summary": "Snapshot-only four_sentences_shape prompt contract added; legacy prompt keys and text unchanged. Main CIO independent acceptance pending.",
+  "changed_files": [
+    "cio_market_lab/research/issue16_live_bridge.py",
+    "tests/test_issue16_live_bridge.py",
+    "docs/engineering/ISSUE16_FOURSENT_HANDOFF.json"
+  ],
+  "tests": [
+    {
+      "command": "GitHub update_file: cio_market_lab/research/issue16_live_bridge.py",
+      "result": "COMPLETED",
+      "evidence": "e7ecfb822c79a9aabdb8961146c58dd3a0d00323"
+    },
+    {
+      "command": "GitHub update_file: tests/test_issue16_live_bridge.py",
+      "result": "COMPLETED",
+      "evidence": "9684288abf31bf5d8c5328f6f625986b383a9a19"
+    },
+    {
+      "command": "pytest tests/test_issue16_live_bridge.py",
+      "result": "NOT_RUN",
+      "evidence": "Pytest execution unavailable in this environment; no pass claim."
+    }
+  ],
+  "remaining_work": [
+    {
+      "item": "Main CIO independently run regression and full relevant tests, inspect contract and PR diff.",
+      "status": "ACTIONABLE_NOW",
+      "owner": "Main CIO"
+    }
+  ],
+  "next_step_reminder": {
+    "to": "Main CIO",
+    "verify_now": "Verify exact source HEAD, snapshot-only shape, four-element example, legacy compatibility and tests.",
+    "if_pass": "Accept PR #36 after independent CI and host validation.",
+    "if_fail": "Return precise failing test/evidence for revision on same branch.",
+    "blockers": []
+  },
+  "historical_reference": {
+    "status": "PENDING",
+    "task": "issue16-four-sentences"
+  }
+}
