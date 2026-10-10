@@ -4,44 +4,44 @@
   "pr_number": 41,
   "branch": "feat/paper-trading-phase2",
   "task_id": "paper-phase2-20261010",
-  "instruction_id": "P2-r1",
-  "source_head_sha": "669e1be0858f2bd264185694aa176cf4222e845a",
+  "instruction_id": "P3-r0",
+  "source_head_sha": "b4d7ea6f16c567ef38d80f9efd64b1ff4aa86a9f",
   "status": "READY_FOR_REVIEW",
-  "summary": "Added 23 offline tests and connected stock/ETF paper submissions to existing PaperOrderService. Derivative entry remains fail-closed pending accepted lifecycle integration; independent acceptance required.",
+  "summary": "Implemented paper-only deterministic PnL attribution, strategy/instrument/horizon metrics, observational learning feedback and Markdown summary; added 15 offline pytest cases. Independent execution/acceptance pending.",
   "changed_files": [
-    "cio_market_lab/engine/paper_trading_loop.py",
-    "tests/test_paper_trading_loop.py",
+    "cio_market_lab/engine/pnl_attribution.py",
+    "tests/test_pnl_attribution.py",
     "docs/engineering/PAPER_PHASE2_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "GitHub update_file cio_market_lab/engine/paper_trading_loop.py",
+      "command": "GitHub create_file cio_market_lab/engine/pnl_attribution.py",
       "result": "SUCCESS",
-      "evidence": "commit 8e83890aa9c16eb99ffe3913dcf8d8927a8fa600"
+      "evidence": "commit 6e358472872e0e2542e91d37ac253fd38f3a0cb7"
     },
     {
-      "command": "GitHub create_file tests/test_paper_trading_loop.py",
+      "command": "GitHub create_file tests/test_pnl_attribution.py",
       "result": "SUCCESS",
-      "evidence": "commit 669e1be0858f2bd264185694aa176cf4222e845a; 23 test functions/cases including parameterized derivative checks"
+      "evidence": "commit b4d7ea6f16c567ef38d80f9efd64b1ff4aa86a9f; 15 offline test functions"
     },
     {
-      "command": "pytest tests/test_paper_trading_loop.py",
+      "command": "pytest tests/test_pnl_attribution.py",
       "result": "NOT_RUN",
-      "evidence": "Main owns independent acceptance; no pytest execution in this session"
+      "evidence": "No repository execution environment available through GitHub connector; Main must execute pytest independently"
     }
   ],
   "remaining_work": [
     {
-      "item": "Main run pytest and inspect integration; derivative margin/MTM/expiry execution remains unimplemented",
+      "item": "Main run pytest tests/test_pnl_attribution.py and validate semantics and existing decision_learning integration on exact HEAD",
       "owner": "Main CIO",
       "status": "ACTIONABLE_NOW"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Run pytest tests/test_paper_trading_loop.py on exact HEAD; inspect allowlist and paper order service integration",
-    "if_pass": "Review derivative lifecycle gaps before acceptance",
-    "if_fail": "Return failure traceback and exact HEAD for bounded repair",
+    "verify_now": "Run pytest tests/test_pnl_attribution.py on exact HEAD; review attribution and learning feedback compatibility",
+    "if_pass": "Accept P3 subject to independent integration review",
+    "if_fail": "Return exact HEAD and traceback for bounded repair",
     "blockers": []
   }
 }
