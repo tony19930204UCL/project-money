@@ -4,44 +4,37 @@
   "pr_number": 39,
   "branch": "feat/paper-trading-phase1",
   "task_id": "paper-phase1-20261010",
-  "instruction_id": "W1-r0",
-  "source_head_sha": "979c5b3be4749ed5820622fbba23f98ba2ca4010",
-  "status": "IMPLEMENTED_UNTESTED",
-  "summary": "PAPER ONLY: implemented Taiwan warrant Black-Scholes pricing, implied volatility, Greeks, issuer tick quotes, daily model marks, expiry settlement and tests. No execution, merge or deployment.",
+  "instruction_id": "W1-r1",
+  "source_head_sha": "2fbbe64caeeb4db07df51bbda44c5eb8270d408a",
+  "status": "READY_FOR_REVIEW",
+  "summary": "PAPER ONLY: W1-r1 corrects mailbox status contract only; warrant implementation unchanged. Main CIO independently confirmed acceptance at 2fbbe64caeeb4db07df51bbda44c5eb8270d408a: 27 passed, rc=0, no failures.",
   "changed_files": [
-    "cio_market_lab/engine/tw_warrant_sim.py",
-    "tests/test_tw_warrant_sim.py",
     "docs/engineering/PAPER_PHASE1_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "GitHub connector create_file cio_market_lab/engine/tw_warrant_sim.py",
-      "result": "SUCCESS",
-      "evidence": "commit 448672ca9673ac63b80c8b59ecea7003705424a5"
-    },
-    {
-      "command": "GitHub connector create_file tests/test_tw_warrant_sim.py",
-      "result": "SUCCESS",
-      "evidence": "commit 979c5b3be4749ed5820622fbba23f98ba2ca4010"
-    },
-    {
       "command": "python3 -m pytest -q tests/test_tw_warrant_sim.py tests/test_leveraged_etf_sim.py",
-      "result": "NOT_RUN",
-      "evidence": "Explicit instruction: no sandbox execution; Main CIO independently runs acceptance."
+      "result": "PASS (Main CIO independently executed; not rerun by worker)",
+      "evidence": "Main CIO reported HEAD 2fbbe64caeeb4db07df51bbda44c5eb8270d408a; passed=27; rc=0; failures=no"
+    },
+    {
+      "command": "GitHub connector fetch_file docs/engineering/PAPER_PHASE1_HANDOFF.json",
+      "result": "SUCCESS",
+      "evidence": "Read existing mailbox blob bab2c0abe4b4f58995a0f28be0e517c20652f36a"
     }
   ],
   "remaining_work": [
     {
-      "item": "Main CIO independently run acceptance pytest and report exact failures",
+      "item": "Main CIO verify W1-r1 mailbox schema/status, exact pre-mailbox SHA and mailbox-only diff",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Verify exact branch HEAD, allowlist-only diff and run python3 -m pytest -q tests/test_tw_warrant_sim.py tests/test_leveraged_etf_sim.py (>=10 total, >=8 warrant tests).",
-    "if_pass": "Accept W1-r0 paper warrant implementation after independent validation.",
-    "if_fail": "Return exact failing test names, tracebacks and HEAD for bounded correction.",
+    "verify_now": "Verify schema_version=2, W1-r1 IDs, READY_FOR_REVIEW, source_head_sha=2fbbe64caeeb4db07df51bbda44c5eb8270d408a and mailbox-only commit; acceptance already passed 27 tests.",
+    "if_pass": "Accept W1-r1 handback for PAPER ONLY; no merge/deploy/trade authorized.",
+    "if_fail": "Return exact contract validation failure and commit SHA.",
     "blockers": []
   }
 }
