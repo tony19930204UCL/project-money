@@ -2242,3 +2242,14 @@ def test_challenge_payload_includes_draft_and_adversarial_instructions():
     assert bridge.challenge_judgment_drafts is True
     result = _snapshot_injection_run(_judgment_snapshot(), challenge_judgment_drafts=True)
     assert result["output"]["judgment_draft"]["buy_zone"] == {"low": 90.0, "high": 105.0}
+
+
+def test_public_boundary_allows_accounting_terms_but_blocks_private_accounts():
+    from cio_market_lab.research.issue16_acceptance import _reject_private_content
+    _reject_private_content({"balance_sheet": {"accounts_receivable": 1, "accounts_payable": 2}})
+    for bad in ("account_number", "brokerage_account", "holdings", "order_id"):
+        try:
+            _reject_private_content({bad: 1})
+        except ValueError:
+            continue
+        raise AssertionError(bad)

@@ -60,11 +60,18 @@ _FORBIDDEN_FIELD_PARTS=(
 )
 
 
+# Public financial-statement line items; these are not private account data.
+_ACCOUNTING_TERMS=("accounts_receivable","accounts_payable","accounts receivable","accounts payable","accountsreceivable","accountspayable")
+
+
 def _reject_private_content(value: Any, path: str="payload") -> None:
     if isinstance(value, Mapping):
         for key, child in value.items():
             low=str(key).lower()
-            if any(part in low for part in _FORBIDDEN_FIELD_PARTS):
+            check=low
+            for ok in _ACCOUNTING_TERMS:
+                check=check.replace(ok,"")
+            if any(part in check for part in _FORBIDDEN_FIELD_PARTS):
                 raise ValueError(f"PUBLIC_OUTBOUND_FIELD_REJECTED:{path}.{key}")
             _reject_private_content(child,f"{path}.{key}")
     elif isinstance(value,(list,tuple)):
