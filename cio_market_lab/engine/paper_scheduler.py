@@ -15,6 +15,16 @@ MARKETS = {"TW": ("Asia/Taipei", time(9), time(13, 30)),
            "US": ("America/New_York", time(9, 30), time(16))}
 
 
+def _clear_stale_lock(lock, max_age):
+    """A killed run leaves its lock behind; a lock older than max_age is dead."""
+    import time as _t
+    try:
+        if _t.time() - Path(lock).stat().st_mtime > max_age:
+            Path(lock).unlink(missing_ok=True)
+    except FileNotFoundError:
+        pass
+
+
 def run_daily(now, config):
     """Run configured sessions and process each market's close exactly once.
 
@@ -27,6 +37,7 @@ def run_daily(now, config):
     root = Path(config.get("report_dir", "data/paper_reports"))
     root.mkdir(parents=True, exist_ok=True)
     lock = Path(config.get("lock_path", root / ".paper_scheduler.lock"))
+    _clear_stale_lock(lock, config.get("lock_max_age_seconds", 9 * 3600))
     try:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
