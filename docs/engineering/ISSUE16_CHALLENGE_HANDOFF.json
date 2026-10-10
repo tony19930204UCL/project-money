@@ -4,48 +4,42 @@
   "pr_number": 40,
   "branch": "feat/issue16-challenge-stage",
   "task_id": "issue16-challenge-20261010",
-  "instruction_id": "C1-r2",
-  "source_head_sha": "9ef53dd796763128663bf3cc312b0cc4dbaa528c",
-  "status": "IMPLEMENTED_UNTESTED",
-  "summary": "Existing bridge already implements opt-in draft forwarding, challenge draft/instructions, heterogeneous model check and PENDING CIO approval. Added five regression tests for flag-off, valid forwarding, stale snapshot, invalid draft and draft payload. Full host challenge PASS/BLOCK integration tests still need implementation and independent acceptance.",
+  "instruction_id": "C1-r3",
+  "source_head_sha": "c6b871fb2a54e1c9ddaaa615598ab08799ba4878",
+  "status": "READY_FOR_REVIEW",
+  "summary": "C1-r3: Corrected invalid mailbox status and recorded independent acceptance environment failure. Existing source contains opt-in draft forwarding, challenge draft payload, and pending CIO approval; no code assertion failure is established because Main environment lacks pytest. No source or test changes in this round.",
   "changed_files": [
-    "tests/test_issue16_live_bridge.py",
     "docs/engineering/ISSUE16_CHALLENGE_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "GitHub fetch_file tests/test_issue16_live_bridge.py",
+      "command": "GitHub get_pr_info PR #40 and fetch_file bridge/tests/mailbox",
       "result": "PASS",
-      "evidence": "Read existing tests from feat/issue16-challenge-stage; initial blob c041a59f2867f44ed6123c875134a5a718925c5f."
+      "evidence": "Verified pre-mailbox HEAD c6b871fb2a54e1c9ddaaa615598ab08799ba4878; inspected existing source markers and mailbox."
     },
     {
-      "command": "GitHub update_file tests/test_issue16_live_bridge.py",
-      "result": "PASS",
-      "evidence": "Commit 9ef53dd796763128663bf3cc312b0cc4dbaa528c; added five tests and optional helper argument."
-    },
-    {
-      "command": "python3 -m pytest -q tests/test_issue16_live_bridge.py",
-      "result": "NOT_RUN",
-      "evidence": "Not executed by implementer as instructed; Main CIO owns independent acceptance. Prior Main output 'passed=0, rc=0' does not establish pytest success."
+      "command": "python3 -m pytest -q tests/test_issue16_live_bridge.py (Main CIO acceptance)",
+      "result": "BLOCKED_ENVIRONMENT",
+      "evidence": "Main reported /usr/bin/python3: No module named pytest; passed=0 and rc=0 do not establish any executed tests. Implementer did not run pytest."
     }
   ],
   "remaining_work": [
     {
-      "item": "Add end-to-end challenge PASS -> READY_FOR_CIO and challenge BLOCK -> BLOCK integration tests with challenge callback assertions",
-      "status": "ACTIONABLE_NOW",
-      "owner": "Implementer"
-    },
-    {
-      "item": "Run independent >=66-test acceptance and return exact failures",
+      "item": "Main CIO must run acceptance in Python environment with pytest installed, preserving actual pytest exit status, and return exact failures if any",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
+    },
+    {
+      "item": "Add and verify full host challenge PASS/BLOCK integration regression coverage if existing tests do not cover both paths",
+      "status": "ACTIONABLE_NOW",
+      "owner": "Implementer"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Inspect exact branch HEAD, allowlist diff and execute python3 -m pytest -q tests/test_issue16_live_bridge.py without masking pytest exit status",
-    "if_pass": "Confirm READY_FOR_CIO retains main_cio_approval=PENDING, BLOCK remains BLOCK and challenge model-family separation",
-    "if_fail": "Return exact failure trace and failing test names for targeted correction",
+    "verify_now": "Check exact branch HEAD and allowlist diff; use Python interpreter with pytest available and run python3 -m pytest -q tests/test_issue16_live_bridge.py without masking exit code",
+    "if_pass": "Verify >=66 tests, challenge PASS -> READY_FOR_CIO with main_cio_approval PENDING, BLOCK -> BLOCK, stale snapshot no challenge",
+    "if_fail": "Return actual pytest exit code, failing test names and traceback; distinguish environment failure from assertion failure",
     "blockers": []
   }
 }
