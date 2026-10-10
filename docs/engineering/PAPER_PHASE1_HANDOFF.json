@@ -1,1 +1,47 @@
-{"status":"PENDING","task":"paper-trading-phase1"}
+{
+  "schema_version": 2,
+  "repository": "tony19930204UCL/project-money",
+  "pr_number": 39,
+  "branch": "feat/paper-trading-phase1",
+  "task_id": "paper-phase1-20261010",
+  "instruction_id": "W1-r0",
+  "source_head_sha": "979c5b3be4749ed5820622fbba23f98ba2ca4010",
+  "status": "IMPLEMENTED_UNTESTED",
+  "summary": "PAPER ONLY: implemented Taiwan warrant Black-Scholes pricing, implied volatility, Greeks, issuer tick quotes, daily model marks, expiry settlement and tests. No execution, merge or deployment.",
+  "changed_files": [
+    "cio_market_lab/engine/tw_warrant_sim.py",
+    "tests/test_tw_warrant_sim.py",
+    "docs/engineering/PAPER_PHASE1_HANDOFF.json"
+  ],
+  "tests": [
+    {
+      "command": "GitHub connector create_file cio_market_lab/engine/tw_warrant_sim.py",
+      "result": "SUCCESS",
+      "evidence": "commit 448672ca9673ac63b80c8b59ecea7003705424a5"
+    },
+    {
+      "command": "GitHub connector create_file tests/test_tw_warrant_sim.py",
+      "result": "SUCCESS",
+      "evidence": "commit 979c5b3be4749ed5820622fbba23f98ba2ca4010"
+    },
+    {
+      "command": "python3 -m pytest -q tests/test_tw_warrant_sim.py tests/test_leveraged_etf_sim.py",
+      "result": "NOT_RUN",
+      "evidence": "Explicit instruction: no sandbox execution; Main CIO independently runs acceptance."
+    }
+  ],
+  "remaining_work": [
+    {
+      "item": "Main CIO independently run acceptance pytest and report exact failures",
+      "status": "ACTIONABLE_NOW",
+      "owner": "Main CIO"
+    }
+  ],
+  "next_step_reminder": {
+    "to": "Main CIO",
+    "verify_now": "Verify exact branch HEAD, allowlist-only diff and run python3 -m pytest -q tests/test_tw_warrant_sim.py tests/test_leveraged_etf_sim.py (>=10 total, >=8 warrant tests).",
+    "if_pass": "Accept W1-r0 paper warrant implementation after independent validation.",
+    "if_fail": "Return exact failing test names, tracebacks and HEAD for bounded correction.",
+    "blockers": []
+  }
+}
