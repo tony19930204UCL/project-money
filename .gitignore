@@ -30,3 +30,4 @@ htmlcov/
 .gitcredentials
 .DS_Store
 # Unit-test JSON fixtures under application source are deliberate source files.
+data/paper_runtime/
