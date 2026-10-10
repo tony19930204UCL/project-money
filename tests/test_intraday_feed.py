@@ -102,8 +102,13 @@ def test_all_sources_fail():
 
 
 def test_closed_market_gate():
+    # NOW is Friday 10:00 ET (open); use Saturday to test the closed gate.
+    closed = datetime(2026, 10, 10, 14, 0, tzinfo=timezone.utc)
+    def no_fetch(url):
+        pytest.fail("closed-market gate must reject before fetching")
+    f = IntradayFeed(fetch=no_fetch, clock=lambda: closed)
     with pytest.raises(FeedUnavailable, match="market closed"):
-        feed(yahoo()).latest("AAPL", require_open=True)
+        f.latest("AAPL", require_open=True)
 
 
 def test_market_hours():
