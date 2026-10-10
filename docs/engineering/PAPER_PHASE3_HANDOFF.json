@@ -4,43 +4,44 @@
   "pr_number": 43,
   "branch": "feat/paper-trading-phase3",
   "task_id": "paper-phase3-20261010",
-  "instruction_id": "Q2-r1",
-  "source_head_sha": "f12f6262279e8a1a61e83833b7cbe2565a9d359e",
-  "status": "READY_FOR_REVIEW",
-  "summary": "Corrected KeyError in optional pending validation for PAPER-only strategy feedback; existing 20 offline tests retained. Main reported 18 failures at prior HEAD; independent rerun required. No real orders, merge or deploy.",
+  "instruction_id": "Q3-r1",
+  "source_head_sha": "f6436aef2a13f6a69f142152a2b5f44637166b71",
+  "status": "WAITING_CI",
+  "summary": "Implemented PAPER-only market scheduler and 12 offline tests. pytest has not been executed; Main CIO owns acceptance.",
   "changed_files": [
-    "cio_market_lab/engine/strategy_feedback.py",
+    "cio_market_lab/engine/paper_scheduler.py",
+    "tests/test_paper_scheduler.py",
     "docs/engineering/PAPER_PHASE3_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "GitHub fetch_file strategy_feedback.py and tests/test_strategy_feedback.py",
+      "command": "GitHub create_file cio_market_lab/engine/paper_scheduler.py",
       "result": "SUCCESS",
-      "evidence": "Inspected branch c2d17291126cbd23b5819fd0f63b9cf1b4c1ab22; existing test file defines 20 test cases"
+      "evidence": "c999fc0f8d90b5dab3170050877053d4bfe0394d"
     },
     {
-      "command": "GitHub update_file cio_market_lab/engine/strategy_feedback.py",
+      "command": "GitHub create_file tests/test_paper_scheduler.py",
       "result": "SUCCESS",
-      "evidence": "commit f12f6262279e8a1a61e83833b7cbe2565a9d359e; pending validation now uses get default"
+      "evidence": "f6436aef2a13f6a69f142152a2b5f44637166b71"
     },
     {
-      "command": "pytest -q tests/test_strategy_feedback.py",
+      "command": "pytest -q tests/test_paper_scheduler.py",
       "result": "NOT_RUN",
-      "evidence": "No pytest runner invoked; Main's previous run at c2d17291126cbd23b5819fd0f63b9cf1b4c1ab22 reported 18 failed, 2 passed"
+      "evidence": "GitHub connector does not execute pytest"
     }
   ],
   "remaining_work": [
     {
-      "item": "Main independently rerun 20 strategy feedback tests and verify exact HEAD and allowlist",
+      "item": "Run pytest and verify scheduler behavior and allowlist independently",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Run pytest -q tests/test_strategy_feedback.py at latest PR #43 HEAD and review allowlisted diff",
-    "if_pass": "Accept Q2-r1 after independent review",
-    "if_fail": "Return exact failing test output for bounded revision",
+    "verify_now": "Run pytest -q tests/test_paper_scheduler.py and review diff",
+    "if_pass": "Independently accept PR #43 after checks",
+    "if_fail": "Return failure evidence for scoped revision",
     "blockers": []
   }
 }
