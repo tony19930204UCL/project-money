@@ -2027,7 +2027,7 @@ def test_judgment_no_snapshot_preserves_legacy_complete_pass():
     assert "judgment_draft" not in result["output"]
 
 
-def _snapshot_injection_run(snapshot, draft_overrides=None, judgment_status="DRAFT_FOR_MAIN_CIO"):
+def _snapshot_injection_run(snapshot, draft_overrides=None, judgment_status="DRAFT_FOR_MAIN_CIO", *, challenge_judgment_drafts=False):
     out = {
         "status": "PASS", "reason": "drafted", "source_urls": [SEED_URL],
         "financials": {"revenue": "supported"}, "market_metrics": {"growth": "supported"},
@@ -2044,6 +2044,7 @@ def _snapshot_injection_run(snapshot, draft_overrides=None, judgment_status="DRA
             primary_model_family="underwriting-family")},
         coordinator=FakeCoordinator(),
         market_snapshot=snapshot,
+        challenge_judgment_drafts=challenge_judgment_drafts,
     )
     payload = bridge._host_stage_payload(
         "underwriting",
@@ -2193,3 +2194,51 @@ def test_judgment_cross_check_accepts_exact_and_rejects_mismatch():
     assert live_bridge._validate_judgment_draft(bad_z, price, NOW, snap) == "buy_zone"
     # legacy snapshot without eps skips the cross-check
     assert live_bridge._validate_judgment_draft(_eps_draft(valuation_scenarios={"bear": 1, "base": 2, "bull": 3}, buy_zone={"low": 450.0, "high": 480.0}), price, NOW, _judgment_snapshot()) is None
+
+
+# C1-r2: opt-in challenge forwarding regression coverage.
+def test_challenge_flag_off_keeps_pending_draft_and_null_host_fields():
+    result = _snapshot_injection_run(_judgment_snapshot(), challenge_judgment_drafts=False)
+    assert result["status"] == "COMPLETED"
+    output = result["output"]
+    assert output["status"] == "INCOMPLETE"
+    assert output["reason"] == "PENDING_MAIN_CIO_REVIEW"
+    assert output["judgment_status"] == "DRAFT_FOR_MAIN_CIO"
+    assert all(output.get(k) is None for k in live_bridge.HOST_UNDERWRITING_JUDGMENT_FIELDS)
+    assert output["judgment_draft"]["valuation_scenarios"]["base"] == 110.0
+
+
+def test_challenge_flag_on_forwards_valid_draft_with_host_fields():
+    result = _snapshot_injection_run(_judgment_snapshot(), challenge_judgment_drafts=True)
+    assert result["status"] == "COMPLETED"
+    output = result["output"]
+    assert output["status"] == "PASS"
+    assert output["reason"] == "JUDGMENT_DRAFT_FORWARDED_TO_CHALLENGE"
+    assert output["judgment_status"] == "DRAFT_FOR_MAIN_CIO"
+    assert all(output.get(k) is not None for k in live_bridge.HOST_UNDERWRITING_JUDGMENT_FIELDS)
+
+
+def test_challenge_flag_on_stale_snapshot_still_incomplete():
+    stale = _judgment_snapshot(as_of=(NOW - timedelta(hours=40)).isoformat())
+    result = _snapshot_injection_run(stale, challenge_judgment_drafts=True)
+    assert result["status"] == "COMPLETED"
+    assert result["output"]["status"] == "INCOMPLETE"
+    assert result["output"]["reason"] == "MARKET_SNAPSHOT_STALE_OR_MISSING"
+    assert all(result["output"].get(k) is None for k in live_bridge.HOST_UNDERWRITING_JUDGMENT_FIELDS)
+
+
+def test_challenge_flag_on_invalid_draft_still_incomplete():
+    result = _snapshot_injection_run(
+        _judgment_snapshot(), {"buy_zone": {"low": 5.0, "high": 9.0}},
+        challenge_judgment_drafts=True,
+    )
+    assert result["status"] == "COMPLETED"
+    assert result["output"]["status"] == "INCOMPLETE"
+    assert result["output"]["reason"] == "INVALID_JUDGMENT_FIELD:buy_zone"
+
+
+def test_challenge_payload_includes_draft_and_adversarial_instructions():
+    bridge = OriginalResearchCallbackBridge(routes={}, coordinator=FakeCoordinator(), challenge_judgment_drafts=True)
+    assert bridge.challenge_judgment_drafts is True
+    result = _snapshot_injection_run(_judgment_snapshot(), challenge_judgment_drafts=True)
+    assert result["output"]["judgment_draft"]["buy_zone"] == {"low": 90.0, "high": 105.0}
