@@ -63,3 +63,17 @@ def test_real_session_sleeps_one_tick_interval(monkeypatch):
     pr._RealSleepSession.__new__(pr._RealSleepSession).run_session(2)
     captured["sleep"](1)
     assert slept == [pr.TICK_SECONDS] and pr.TICK_SECONDS == 60
+
+
+def test_stale_lock_is_cleared_fresh_lock_blocks(tmp_path):
+    import os, time
+    from datetime import datetime, timezone
+    from cio_market_lab.engine.paper_scheduler import run_daily
+    lock = tmp_path / ".l"
+    lock.write_text("x")
+    cfg = {"report_dir": str(tmp_path), "lock_path": str(lock), "markets": {}}
+    now = datetime.now(timezone.utc)
+    assert run_daily(now, cfg)["status"] == "LOCKED"
+    old = time.time() - 10 * 3600
+    os.utime(lock, (old, old))
+    assert run_daily(now, cfg)["status"] == "OK"
