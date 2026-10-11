@@ -1,1 +1,29 @@
-{"note":"relay timing test placeholder"}
+{
+  "schema_version": 2,
+  "repository": "tony19930204UCL/project-money",
+  "pr_number": 48,
+  "branch": "test/relay-timing-20261011",
+  "task_id": "relay-timing-20261011",
+  "instruction_id": "T1-r0",
+  "source_head_sha": "eef0c41b48469f68a902d32fde9a974f9dcacda8",
+  "status": "READY_FOR_REVIEW",
+  "summary": "timing test",
+  "changed_files": [
+    "docs/engineering/RELAY_TIMING_TEST.json"
+  ],
+  "tests": [
+    {
+      "command": "none",
+      "result": "n/a",
+      "evidence": "timing test"
+    }
+  ],
+  "remaining_work": [],
+  "next_step_reminder": {
+    "to": "Main CIO",
+    "verify_now": "Verify mailbox content and commit on PR #48 independently",
+    "if_pass": "Accept timing relay handoff",
+    "if_fail": "Return evidence and request correction",
+    "blockers": []
+  }
+}
