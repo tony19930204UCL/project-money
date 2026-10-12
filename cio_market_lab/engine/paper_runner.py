@@ -34,7 +34,7 @@ class _Base:
             self.entry = None
             return None
         if self.entry is None:
-            self.entry = price
+            return None  # position belongs to another strategy; its experiment would reject our SELL
         if price >= self.entry * (1 + self.take) or price <= self.entry * (1 - self.stop_pct):
             return [Signal(self.ticker, "stock", "SELL", qty, None, None,
                            "exit take-profit/stop", "realize", "n/a")]
@@ -84,6 +84,26 @@ class _RealSleepSession(PaperSession):
         return super().run_session(max_ticks, sleep or (lambda _s: time.sleep(TICK_SECONDS)))
 
 
+def _restore_entries(strategies, loop_path, acct_path):
+    """After a restart, give each open position back to the strategy that bought it."""
+    try:
+        held = json.loads(Path(acct_path).read_text()).get("positions", {})
+        rows = [json.loads(l) for l in Path(loop_path).read_text().splitlines() if l.strip()]
+    except (OSError, ValueError):
+        return
+    owner = {}
+    for r in rows:
+        if r.get("status") == "SIMULATED" and r.get("side") == "BUY":
+            owner[r.get("ticker")] = (r.get("thesis", ""), r.get("fill_price"))
+        elif r.get("status") == "SIMULATED" and r.get("side") == "SELL":
+            owner.pop(r.get("ticker"), None)
+    for st in strategies:
+        thesis, px = owner.get(st.ticker, ("", None))
+        kind = "Momentum" if "momentum" in thesis else "MeanRev" if "mean" in thesis else None
+        if px and held.get(st.ticker, 0) > 0 and type(st).__name__ == kind:
+            st.entry = px
+
+
 def _seed(path, cash):
     path = Path(path)
     if path.exists():
@@ -115,6 +135,7 @@ def build_config(root, feed=None, order_service=None, ticks=None, sleep_free=Fal
             strategies = []
             for t, n in spec["tickers"].items():
                 strategies += [Momentum(t, n, market=mkt), MeanRev(t, n, market=mkt)]
+            _restore_entries(strategies, root / (mkt + "_loop.jsonl"), acct)
             strategies = apply_weights(strategies, load_table(wt))
             loop = PaperTradingLoop(orders, root / (mkt + "_loop.jsonl"), max_position_pct=0.2)
             cls = PaperSession if sleep_free else _RealSleepSession
