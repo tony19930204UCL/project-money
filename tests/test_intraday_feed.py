@@ -121,3 +121,13 @@ def test_bad_cboe_spread():
     p["data"]["options"][0]["ask"] = 1
     with pytest.raises(FeedUnavailable):
         feed(p).cboe("AAPL")
+
+
+def test_twse_dash_last_trade_falls_back_to_book_midpoint():
+    from datetime import datetime, timezone
+    from cio_market_lab.data.intraday_feed import IntradayFeed
+    row = {"tlong": "1791786600000", "z": "-", "pz": "-", "b": "2535.0_2530.0",
+           "a": "2540.0_2545.0", "o": "2510", "h": "2550", "l": "2510", "v": "100"}
+    feed = IntradayFeed(fetch=lambda u: {"msgArray": [row]},
+                        clock=lambda: datetime.fromtimestamp(1791786605, timezone.utc))
+    assert feed.twse("2330.TW").c == 2537.5

@@ -147,7 +147,24 @@ class IntradayFeed:
         row = self._load(url)["msgArray"][0]
         ts = _utc(int(row["tlong"]) / 1000)
         fetched, age = self._age(ts)
-        close = _number(row["z"])
+        close = None
+        for key in ("z", "pz"):
+            try:
+                close = _number(row[key])
+                break
+            except (ValueError, TypeError, KeyError):
+                continue
+        if close is None:
+            # No last trade yet ("-"): use the best bid/ask midpoint if both sides exist.
+            try:
+                bid = _number(row["b"].split("_")[0])
+                ask = _number(row["a"].split("_")[0])
+                if bid > 0 and ask >= bid:
+                    close = (bid + ask) / 2
+            except (ValueError, TypeError, KeyError, IndexError, AttributeError):
+                pass
+        if close is None:
+            raise ValueError("no TWSE last trade or two-sided book")
         opening = _number(row.get("o", close))
         high = _number(row.get("h", close))
         low = _number(row.get("l", close))

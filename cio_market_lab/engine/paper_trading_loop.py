@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import json
 import math
+from cio_market_lab.data.intraday_feed import FeedUnavailable
 
 from cio_market_lab.engine.paper_orders import PaperOrderRequest, PaperDataContext
 from cio_market_lab.domain.models import Market, DecisionScope, OrderSide, OrderType, OrderOrigin
@@ -92,7 +93,16 @@ class PaperTradingLoop:
 
     def run_once(self, feed, account, strategies):
         symbols = sorted({s.ticker for s in strategies} | set(account.positions))
-        quotes = {symbol: feed.latest(symbol) for symbol in symbols}
+        quotes = {}
+        skipped = []
+        for symbol in symbols:
+            try:
+                quotes[symbol] = feed.latest(symbol)
+            except (FeedUnavailable, ValueError):
+                if symbol in account.positions:
+                    raise  # never mark a held position blind
+                skipped.append(symbol)
+        strategies = [s for s in strategies if s.ticker not in skipped]
         if any(q is None or not math.isfinite(q.c) or q.c <= 0
                or q.staleness_seconds > 300 or q.staleness_seconds < 0
                for q in quotes.values()):
