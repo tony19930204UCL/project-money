@@ -192,3 +192,21 @@ def test_mean_reversion():
     s = MeanReversion("AAA")
     s.signals({"AAA": SimpleNamespace(c=100)}, None)
     assert len(s.signals({"AAA": SimpleNamespace(c=90)}, None)) == 1
+
+
+def test_sell_with_real_service_after_fresh_ledger(tmp_path):
+    """Regression: service ledger is rebuilt empty each run; SELL of a held
+    position must not be rejected INSUFFICIENT_PAPER_POSITION."""
+    from cio_market_lab.engine.paper_runner import _default_orders, _configure, UNIVERSE
+    orders = _default_orders(tmp_path)
+    spec = UNIVERSE["US"]
+    _configure(orders, "US", spec)
+    t = list(spec["tickers"])[0]
+
+    class S(Strategy):
+        ticker = t
+    loop = PaperTradingLoop(orders, tmp_path / "j.jsonl", max_position_pct=1)
+    account = PaperAccount(1000, {t: 2})
+    res = loop.run_once(Feed({t: 10}), account, [S("SELL", 2)])
+    ev = res["events"][0]
+    assert "INSUFFICIENT_PAPER_POSITION" not in str(ev["reason"]), ev

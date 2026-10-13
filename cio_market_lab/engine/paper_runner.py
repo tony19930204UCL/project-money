@@ -12,11 +12,16 @@ from cio_market_lab.data.intraday_feed import IntradayFeed
 from cio_market_lab.engine.paper_scheduler import run_daily
 from cio_market_lab.engine.paper_session import PaperSession
 from cio_market_lab.engine.paper_trading_loop import PaperTradingLoop, Signal
+from cio_market_lab.engine.paper_strategy_policy import ExitPolicy, SizingPolicy
 from cio_market_lab.engine.strategy_feedback import apply_weights, save_table
 
 UNIVERSE = {
-    "US": {"cash": 30000.0, "tickers": {"NVDA": 5, "AMD": 5, "PLTR": 20, "RKLB": 30, "TSLA": 3}, "ticks": 385},
-    "TW": {"cash": 1000000.0, "tickers": {"2330.TW": 100, "2317.TW": 500, "2454.TW": 100, "2308.TW": 200}, "ticks": 265},
+    # The integer values are retained only as legacy fallbacks. New entries are
+    # sized from current marked equity by SizingPolicy, never copied as shares.
+    "US": {"cash": 30000.0, "tickers": {"NVDA": 5, "AMD": 5, "PLTR": 20, "RKLB": 30, "TSLA": 3}, "ticks": 385,
+           "target_pct": 0.10, "max_position_pct": 0.20, "day_trade": False},
+    "TW": {"cash": 1000000.0, "tickers": {"2330.TW": 100, "2317.TW": 500, "2454.TW": 100, "2308.TW": 200}, "ticks": 265,
+           "target_pct": 0.10, "max_position_pct": 0.20, "day_trade": True},
 }
 TICK_SECONDS = 60
 
@@ -24,26 +29,44 @@ TICK_SECONDS = 60
 class _Base:
     take, stop_pct = 0.012, 0.008
 
-    def __init__(self, ticker, size, market="US"):
+    def __init__(self, ticker, size=None, market="US", target_pct=0.10,
+                 max_position_pct=0.20, day_trade=False, max_hold_ticks=30):
         self.ticker, self.size, self.entry = ticker, size, None
         self.strategy_id = type(self).__name__ + "_" + market
+        self.sizing = SizingPolicy(target_pct=target_pct, max_pct=max_position_pct)
+        self.exit_policy = ExitPolicy(max_hold_ticks=max_hold_ticks,
+                                      force_flat_at_session_end=day_trade)
+        self.peak = None
+        self.held_ticks = 0
 
     def _exit(self, price, account):
         qty = account.positions.get(self.ticker, 0)
         if qty <= 0:
-            self.entry = None
+            self.entry = self.peak = None
+            self.held_ticks = 0
             return None
         if self.entry is None:
             return None  # position belongs to another strategy; its experiment would reject our SELL
-        if price >= self.entry * (1 + self.take) or price <= self.entry * (1 - self.stop_pct):
+        self.peak = max(self.peak or self.entry, price)
+        self.held_ticks += 1
+        reason = self.exit_policy.reason(self.entry, price, self.peak,
+                                         self.held_ticks,
+                                         getattr(account, "session_end", False))
+        if reason:
             return [Signal(self.ticker, "stock", "SELL", qty, None, None,
-                           "exit take-profit/stop", "realize", "n/a")]
+                           "exit:" + reason, "realize", reason)]
         return None
+
+    def _size(self, price, account):
+        equity = account.cash + sum(
+            qty * account.marks.get(symbol, price if symbol == self.ticker else 0.0)
+            for symbol, qty in account.positions.items())
+        return self.sizing.quantity(equity, price, account.positions.get(self.ticker, 0))
 
 
 class Momentum(_Base):
-    def __init__(self, ticker, size, market="US"):
-        super().__init__(ticker, size, market)
+    def __init__(self, ticker, size=None, market="US", **policy):
+        super().__init__(ticker, size, market, **policy)
         self.prev = None
 
     def signals(self, quotes, account):
@@ -55,14 +78,18 @@ class Momentum(_Base):
         if prior is None or p <= prior * 1.001 or account.positions.get(self.ticker, 0) > 0:
             return []
         self.entry = p
-        return [Signal(self.ticker, "stock", "BUY", self.size, p * (1 - self.stop_pct),
+        size = self.size or self._size(p, account)
+        if size <= 0:
+            return []
+        self.peak, self.held_ticks = p, 0
+        return [Signal(self.ticker, "stock", "BUY", size, p * (1 - self.stop_pct),
                        p * (1 + self.take), "1m momentum continuation",
                        "+1.2% swing", "-0.8% stop")]
 
 
 class MeanRev(_Base):
-    def __init__(self, ticker, size, lookback=20, market="US"):
-        super().__init__(ticker, size, market)
+    def __init__(self, ticker, size=None, lookback=20, market="US", **policy):
+        super().__init__(ticker, size, market, **policy)
         self.hist, self.lookback = [], lookback
 
     def signals(self, quotes, account):
@@ -75,7 +102,11 @@ class MeanRev(_Base):
         if len(self.hist) < 5 or p >= mean * 0.997 or account.positions.get(self.ticker, 0) > 0:
             return []
         self.entry = p
-        return [Signal(self.ticker, "stock", "BUY", self.size, p * (1 - self.stop_pct),
+        size = self.size or self._size(p, account)
+        if size <= 0:
+            return []
+        self.peak, self.held_ticks = p, 0
+        return [Signal(self.ticker, "stock", "BUY", size, p * (1 - self.stop_pct),
                        mean, "dip below 20-tick mean", "revert to mean", "-0.8% stop")]
 
 
@@ -133,11 +164,15 @@ def build_config(root, feed=None, order_service=None, ticks=None, sleep_free=Fal
             orders = order_service or _default_orders(root)
             _configure(orders, mkt, spec)
             strategies = []
-            for t, n in spec["tickers"].items():
-                strategies += [Momentum(t, n, market=mkt), MeanRev(t, n, market=mkt)]
+            policy = {"target_pct": spec["target_pct"],
+                      "max_position_pct": spec["max_position_pct"],
+                      "day_trade": spec["day_trade"]}
+            for t in spec["tickers"]:
+                strategies += [Momentum(t, market=mkt, **policy), MeanRev(t, market=mkt, **policy)]
             _restore_entries(strategies, root / (mkt + "_loop.jsonl"), acct)
             strategies = apply_weights(strategies, load_table(wt))
-            loop = PaperTradingLoop(orders, root / (mkt + "_loop.jsonl"), max_position_pct=0.2)
+            loop = PaperTradingLoop(orders, root / (mkt + "_loop.jsonl"),
+                                    max_position_pct=spec["max_position_pct"])
             cls = PaperSession if sleep_free else _RealSleepSession
             return cls(feed, loop, strategies, acct, jr, list(spec["tickers"]))
 

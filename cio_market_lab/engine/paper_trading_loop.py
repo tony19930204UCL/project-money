@@ -168,6 +168,14 @@ class PaperTradingLoop:
                                                       age_seconds=quote.staleness_seconds,
                                                       last_price=quote.c),
                                 instrument_type="ETF" if kind == "etf" else "EQUITY")
+                            # The loop account is the position source of truth; the order
+                            # service ledger is rebuilt empty each run, so sync it first.
+                            if side == "SELL":
+                                try:
+                                    led = self.orders.portfolio_manager.get_ledger(request.bucket, request.strategy_id)
+                                    led.get_position(signal.ticker).quantity = old_qty
+                                except Exception:
+                                    pass
                             decision = self.orders._risk_decision(request)
                             if not decision.allowed:
                                 reason = "PAPER_ORDER_REJECTED:" + ",".join(decision.reasons)
@@ -182,6 +190,7 @@ class PaperTradingLoop:
                                     account.marks[signal.ticker] = quote.c
                                     fill = price
                 record = dict(sequence=self.sequence, ticker=signal.ticker,
+                              strategy_id=getattr(strategy, "strategy_id", None),
                               instrument_type=kind, side=side, size=signal.size,
                               thesis=signal.thesis, expected_outcome=signal.expected_outcome,
                               invalidation=signal.invalidation, stop=signal.stop,

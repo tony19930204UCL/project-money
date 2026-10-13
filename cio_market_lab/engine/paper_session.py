@@ -64,6 +64,9 @@ class PaperSession:
             raise ValueError("max_ticks must be a nonnegative integer")
         events = []
         for tick in range(max_ticks):
+            # Strategies may use this explicit simulation boundary for rules
+            # that are venue-specific, notably TW day-trade flat-at-close.
+            setattr(self.account, "session_end", tick + 1 == max_ticks)
             now = self.feed.clock() if callable(getattr(self.feed, "clock", None)) else datetime.now(timezone.utc)
             opened = [symbol for symbol in self.symbols if market_open(
                 "TW" if symbol.upper().endswith((".TW", ".TWO")) else "US", now)]
