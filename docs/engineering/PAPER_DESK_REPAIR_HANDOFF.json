@@ -4,42 +4,42 @@
   "pr_number": 50,
   "branch": "feat/paper-desk-repair-20261014",
   "task_id": "paper-desk-repair-20261014",
-  "instruction_id": "desk_complete_010-r4",
-  "source_head_sha": "2dbad64be72b4851d884b65e6651b843fa6eb056",
+  "instruction_id": "desk_complete_010-r5",
+  "source_head_sha": "a637d975d6be85988f5174a57d4005fe817bf98f",
   "status": "READY_FOR_REVIEW",
-  "summary": "Corrected asynchronous Node DOM harness flush to await a full event-loop turn before asserting renderer output, addressing Main's /ZZZ/ empty innerHTML failure at d843c22. Actual renderer, paper accounting, strategy ownership and UI remain unchanged. No tests executed in this session; independent Main acceptance pending.",
+  "summary": "Corrected executable Node DOM harness ticker sort expectations: renderer starts ascending, first click toggles descending, second click returns ascending. All three orders are asserted. Renderer and engine unchanged; Main exact-HEAD acceptance pending.",
   "changed_files": [
     "tests/test_paper_desk_ui.py",
     "docs/engineering/PAPER_DESK_REPAIR_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "GitHub fetch_file + update_file tests/test_paper_desk_ui.py",
+      "command": "GitHub fetch_file/update_file tests/test_paper_desk_ui.py",
       "result": "PASS",
-      "evidence": "GitHub commit 2dbad64be72b4851d884b65e6651b843fa6eb056; replaced microtask-only flush with setImmediate event-loop flush."
+      "evidence": "GitHub write commit a637d975d6be85988f5174a57d4005fe817bf98f; verified original assertion before replacing it with ascending/descending/ascending behavioral assertions."
     },
     {
       "command": "pytest -q tests/test_paper_desk_ui.py tests/test_paper_runner.py tests/test_paper_trading_loop.py tests/test_paper_strategy_policy.py tests/test_strategy_feedback.py tests/test_paper_position_read_model.py tests/test_api_and_integrations.py",
       "result": "NOT_RUN",
-      "evidence": "No runnable checkout in this session. Main reported prior exact HEAD d843c22 failure: empty results.innerHTML did not match /ZZZ/. New HEAD unverified."
+      "evidence": "No executable checkout used in this session. Main previous exact-HEAD 4e8f4fa16d46b468d64989a98b8481553cc6e7bf failed ticker sort assertion; new revision awaits Main verification."
     }
   ],
   "remaining_work": [
     {
-      "item": "Main run behavioral DOM harness and existing 61 targeted regression tests at exact HEAD",
+      "item": "Main independently run executable DOM behavioral test and existing 61 targeted regressions at exact HEAD",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     },
     {
-      "item": "Main verify backend/browser/frontend CI and renderer behavior at exact HEAD",
+      "item": "Main verify exact-HEAD backend/browser/frontend CI and paper desk renderer behavior",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Run exact-HEAD behavioral Node DOM test and 61 regression tests; verify live renderer fetch/render, filters, sort, failure handling and reconciliation/null PnL.",
-    "if_pass": "Accept only after all required exact-HEAD checks pass.",
+    "verify_now": "Run exact-HEAD DOM harness and 61 regressions; verify ascending/descending/ascending ticker sort, fetch/render, filters, failure handling, reconciliation and null/partial realized PnL.",
+    "if_pass": "Accept only after required exact-HEAD checks pass.",
     "if_fail": "Return exact HEAD, command, traceback and failing assertion.",
     "blockers": []
   }
