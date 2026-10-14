@@ -153,6 +153,14 @@ def build_position_read_model(fills, *, marks=None, feed=None, accounts=None):
                 "status": ("JOURNAL_ACCOUNT_CONFLICT" if raw_derived > expected + 1e-9 else
                            "MATCHED" if abs(remainder) < 1e-9 else "INCOMPLETE_HISTORY"),
             }
+        for p in opened:
+            if p["market"] == market and p["ticker"] not in canonical:
+                key = f"{market}:{p['ticker']}"
+                rec = reconciliation.setdefault(key, {"account_qty": 0.0, "journal_matched_open_qty": 0.0, "journal_reconstructed_open_qty": 0.0, "journal_account_delta_qty": 0.0, "quarantined_journal_qty": 0.0, "unknown_basis_qty": 0.0, "status": "JOURNAL_ACCOUNT_CONFLICT", "quarantine_reason": "orphan_ledger_position", "discrepancies": []})
+                rec["journal_reconstructed_open_qty"] += p["qty"]
+                rec["journal_account_delta_qty"] += p["qty"]
+                rec["quarantined_journal_qty"] += p["qty"]
+                rec["discrepancies"].append({"type": "orphan_ledger_position", "ticker": p["ticker"], "strategy": p["strategy_id"], "raw_ledger_qty": p["qty"], "canonical_qty": 0.0, "reconciled_qty": 0.0})
         opened[:] = [p for p in opened if p["market"] != market or p["ticker"] in canonical]
     realized = {}
     completeness = {}
