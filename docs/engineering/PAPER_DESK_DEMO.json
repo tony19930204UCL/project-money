@@ -1,7 +1,9 @@
 {
   "synthetic": true,
   "paper_only": true,
-  "description": "Public fictional test data, not a runtime snapshot",
+  "schema_version": 2,
+  "description": "Deterministic fictional fills for replay; no customer/runtime data",
+  "scenario": "strategy ownership, partial close, orphan ledger, unknown costs",
   "fills": [
     {
       "status": "SIMULATED",
@@ -9,13 +11,14 @@
       "currency": "USD",
       "ticker": "DEMO",
       "strategy_id": "swing_alpha",
+      "horizon": "swing",
       "side": "BUY",
       "size": 10,
       "fill_price": 100,
-      "fee": 1,
+      "fee": 2,
       "tax": 0,
       "timestamp": "2026-10-01T14:00:00Z",
-      "thesis": "Synthetic breakout"
+      "thesis": "fictional breakout"
     },
     {
       "status": "SIMULATED",
@@ -23,13 +26,107 @@
       "currency": "USD",
       "ticker": "DEMO",
       "strategy_id": "swing_alpha",
+      "horizon": "swing",
       "side": "SELL",
       "size": 4,
       "fill_price": 110,
       "fee": 1,
       "tax": 0,
       "timestamp": "2026-10-02T14:00:00Z",
-      "thesis": "Synthetic partial profit"
+      "thesis": "fictional partial exit"
+    },
+    {
+      "status": "SIMULATED",
+      "market": "US",
+      "currency": "USD",
+      "ticker": "OTHER",
+      "strategy_id": "day_beta",
+      "horizon": "day",
+      "side": "BUY",
+      "size": 2,
+      "fill_price": 50,
+      "fee": 1,
+      "tax": 0,
+      "timestamp": "2026-10-01T14:01:00Z"
+    },
+    {
+      "status": "SIMULATED",
+      "market": "US",
+      "currency": "USD",
+      "ticker": "OTHER",
+      "strategy_id": "day_beta",
+      "horizon": "day",
+      "side": "SELL",
+      "size": 2,
+      "fill_price": 51,
+      "fee": 1,
+      "tax": 0,
+      "timestamp": "2026-10-01T19:00:00Z"
+    },
+    {
+      "status": "SIMULATED",
+      "market": "US",
+      "currency": "USD",
+      "ticker": "UNKNOWN",
+      "strategy_id": "swing_gamma",
+      "horizon": "swing",
+      "side": "BUY",
+      "size": 1,
+      "fill_price": 20,
+      "tax": 0,
+      "timestamp": "2026-10-01T14:02:00Z"
+    },
+    {
+      "status": "SIMULATED",
+      "market": "US",
+      "currency": "USD",
+      "ticker": "UNKNOWN",
+      "strategy_id": "swing_gamma",
+      "horizon": "swing",
+      "side": "SELL",
+      "size": 1,
+      "fill_price": 25,
+      "fee": 0,
+      "tax": 0,
+      "timestamp": "2026-10-03T14:00:00Z"
+    },
+    {
+      "status": "SIMULATED",
+      "market": "US",
+      "currency": "USD",
+      "ticker": "ORPHAN",
+      "strategy_id": "swing_alpha",
+      "side": "BUY",
+      "size": 3,
+      "fill_price": 10,
+      "fee": 0,
+      "tax": 0,
+      "timestamp": "2026-10-01T14:03:00Z"
     }
-  ]
+  ],
+  "accounts": {
+    "US": {
+      "state": "OK",
+      "positions": [
+        {
+          "ticker": "DEMO",
+          "qty": 6,
+          "mark": 108
+        }
+      ]
+    }
+  },
+  "expected": {
+    "open_by_strategy": {
+      "swing_alpha": 6
+    },
+    "closed_qty_by_strategy": {
+      "swing_alpha": 4,
+      "day_beta": 2,
+      "swing_gamma": 1
+    },
+    "partial_realized_USD": true,
+    "orphan_ticker": "ORPHAN",
+    "verified_subtotal_USD": 38.2
+  }
 }
