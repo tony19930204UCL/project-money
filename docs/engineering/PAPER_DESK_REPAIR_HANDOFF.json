@@ -4,46 +4,55 @@
   "pr_number": 50,
   "branch": "feat/paper-desk-repair-20261014",
   "task_id": "paper-desk-repair-20261014",
-  "instruction_id": "desk-complete-004",
-  "source_head_sha": "155d2145e3fa020e358215efedaca5ba787be767",
+  "instruction_id": "desk-reconcile-005-newchat",
+  "source_head_sha": "0142657e063fc551d74e3907472bd78f5b028259",
   "status": "READY_FOR_REVIEW",
-  "summary": "Bounded read-model/API stage committed with FIFO partial closes, conservative unknown costs, separate currencies and synthetic regression fixtures. Full UI integration and acceptance remain incomplete; this status refers only to submitted stage.",
+  "summary": "Partial reconciliation repair: canonical account quantity preserved with unknown-history remainder; realized totals expose unknown costs; API wiring and four regression tests added. Full UI/API integration acceptance not complete.",
   "changed_files": [
     "cio_market_lab/engine/paper_position_read_model.py",
     "cio_market_lab/api/app.py",
     "tests/test_paper_position_read_model.py",
-    "docs/engineering/PAPER_DESK_DEMO.json",
     "docs/engineering/PAPER_DESK_REPAIR_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "pytest tests/test_paper_position_read_model.py tests/test_paper_desk_ui.py tests/test_api_and_integrations.py",
+      "command": "GitHub fetch_file/update_file",
+      "result": "PASS",
+      "evidence": "GitHub commits bfcc5860cc3c9b3e8646b57c13893fd17c902113, 55ab0ac7eba466862ed1207b5b64ded3c4e3e94e, 0142657e063fc551d74e3907472bd78f5b028259"
+    },
+    {
+      "command": "PYTHONPATH=.:tests pytest tests/test_paper_position_read_model.py tests/test_api_and_integrations.py tests/test_paper_desk_ui.py",
       "result": "NOT_RUN",
-      "evidence": "No test runner executed; GitHub file writes are not functional tests."
+      "evidence": "No test runner executed in this task; no claim of passing tests."
     }
   ],
   "remaining_work": [
     {
-      "item": "Complete UI integration, legacy reconciliation and UI/API tests",
+      "item": "Complete and execute comprehensive API/UI integration tests including test_paper_desk_ui.py and asset/refresh/error states",
       "status": "ACTIONABLE_NOW",
       "owner": "ChatGPT"
     },
     {
-      "item": "Independently run accounting, ownership and browser regressions",
+      "item": "Audit journal truncation, mixed-owner inventory and account realized reconciliation under incomplete history",
+      "status": "ACTIONABLE_NOW",
+      "owner": "ChatGPT"
+    },
+    {
+      "item": "Independently run Main accounting/engine/API/browser acceptance at exact SHA",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     },
     {
-      "item": "Visual acceptance after functioning preview",
+      "item": "Client visual acceptance after functional preview",
       "status": "FUTURE_EVENT",
       "owner": "Client"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Run read-model and API regressions at exact source SHA; verify partial closes, missing history, multi-currency, API backward compatibility and previous ownership stage.",
-    "if_pass": "Accept only bounded stage, retain UI integration and system acceptance as pending.",
-    "if_fail": "Return exact failing assertions for same-branch repair.",
+    "verify_now": "Check canonical 7-share position with empty journal and partial BUY 2; check unknown fee yields null realized and run read-model/API/UI regressions.",
+    "if_pass": "Accept only bounded reconciliation stage, not PR50 overall.",
+    "if_fail": "Return exact assertions and SHA for same-branch repair.",
     "blockers": []
   }
 }
