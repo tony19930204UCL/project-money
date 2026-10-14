@@ -1,0 +1,35 @@
+{
+  "synthetic": true,
+  "paper_only": true,
+  "description": "Public fictional test data, not a runtime snapshot",
+  "fills": [
+    {
+      "status": "SIMULATED",
+      "market": "US",
+      "currency": "USD",
+      "ticker": "DEMO",
+      "strategy_id": "swing_alpha",
+      "side": "BUY",
+      "size": 10,
+      "fill_price": 100,
+      "fee": 1,
+      "tax": 0,
+      "timestamp": "2026-10-01T14:00:00Z",
+      "thesis": "Synthetic breakout"
+    },
+    {
+      "status": "SIMULATED",
+      "market": "US",
+      "currency": "USD",
+      "ticker": "DEMO",
+      "strategy_id": "swing_alpha",
+      "side": "SELL",
+      "size": 4,
+      "fill_price": 110,
+      "fee": 1,
+      "tax": 0,
+      "timestamp": "2026-10-02T14:00:00Z",
+      "thesis": "Synthetic partial profit"
+    }
+  ]
+}
