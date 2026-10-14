@@ -129,6 +129,7 @@ class WeightedStrategy:
         if self.multiplier == 0:
             return []
         return [replace(signal, size=signal.size * self.multiplier)
+                if signal.side.upper() == "BUY" else signal
                 for signal in self._strategy.signals(quotes, account)]
 
 
