@@ -1346,7 +1346,25 @@ def create_app(
     def get_paper_live() -> Dict[str, Any]:
         """Read-only equity/positions/fills of the autonomous paper runner."""
         from cio_market_lab.api.live_view import build_live
-        return build_live(app.state.app_state.workspace_root / "data" / "paper_runtime")
+        snapshot = build_live(app.state.app_state.workspace_root / "data" / "paper_runtime")
+        from cio_market_lab.engine.paper_position_read_model import build_position_read_model
+        from cio_market_lab.api.live_view import _jsonl
+        runtime = app.state.app_state.workspace_root / "data" / "paper_runtime"
+        journal = []
+        marks = {}
+        for market, book in snapshot["markets"].items():
+            journal.extend({**row, "market": market} for row in _jsonl(runtime / f"{market}_journal.jsonl", 2000)
+                           if row.get("status") == "SIMULATED")
+            marks[market] = {p["ticker"]: p.get("mark") for p in book.get("positions", [])}
+        read_model = build_position_read_model(journal, marks=marks, feed=snapshot.get("feed"))
+        snapshot["closed_trades"] = read_model["closed_trades"]
+        snapshot["fills"] = read_model["fills"]
+        snapshot["read_model"] = {"schema_version": 2, "realized_by_currency": read_model["realized_by_currency"],
+                                  "feed_freshness": read_model["feed_freshness"],
+                                  "account_realized_reconciliation": "NOT_VERIFIED"}
+        for market, book in snapshot["markets"].items():
+            book["positions"] = [p for p in read_model["open_positions"] if p["market"] == market]
+        return snapshot
 
     @app.get("/api/paper/derivative-quotes", tags=["CIO Paper Desk"])
     def get_derivative_quotes() -> Dict[str, Any]:
