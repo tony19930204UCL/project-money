@@ -62,3 +62,34 @@ def test_unmatched_sell_quantity_reported():
     r = build_position_read_model([fill("BUY", 2, 100), fill("SELL", 5, 110)])
     assert r["unmatched_exits"][0]["qty"] == 3
     assert r["realized_completeness"]["USD"]["complete"] is False
+
+
+def test_synthetic_demo_replay_strategy_quantities_partial_and_orphan():
+    """Replay the public fictional fixture against the real FIFO read model."""
+    import json
+    from pathlib import Path
+    fixture = Path(__file__).resolve().parents[1] / "docs/engineering/PAPER_DESK_DEMO.json"
+    demo = json.loads(fixture.read_text(encoding="utf-8"))
+    assert demo["synthetic"] is True and demo["paper_only"] is True
+    result = build_position_read_model(demo["fills"], accounts=demo["accounts"])
+    expected = demo["expected"]
+    assert {(p["ticker"], p["strategy_id"]): p["qty"] for p in result["open_positions"]} == {("DEMO", "swing_alpha"): 6}
+    closed = {}
+    for trade in result["closed_trades"]:
+        owner = trade["strategy_id"]
+        closed[owner] = closed.get(owner, 0) + trade["closed_qty"]
+    assert closed == expected["closed_qty_by_strategy"]
+    assert result["position_reconciliation"]["US:ORPHAN"]["quarantine_reason"] == "orphan_ledger_position"
+    assert result["realized_by_currency"]["USD"] is None
+    assert result["realized_completeness"]["USD"]["complete"] is False
+    assert result["realized_completeness"]["USD"]["unknown_cost_trades"] == 1
+    assert abs(result["realized_completeness"]["USD"]["verified_subtotal"] - expected["verified_subtotal_USD"]) < 1e-9
+
+
+def test_synthetic_demo_flat_strategy_has_no_ghost_position():
+    import json
+    from pathlib import Path
+    demo = json.loads((Path(__file__).resolve().parents[1] / "docs/engineering/PAPER_DESK_DEMO.json").read_text())
+    result = build_position_read_model(demo["fills"], accounts=demo["accounts"])
+    assert not any(p["strategy_id"] == "day_beta" for p in result["open_positions"])
+    assert any(t["strategy_id"] == "day_beta" and t["closed_qty"] == 2 for t in result["closed_trades"])
