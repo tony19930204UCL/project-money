@@ -1369,6 +1369,11 @@ def create_app(
             book["positions"] = [p for p in read_model["open_positions"] if p["market"] == market]
         return snapshot
 
+    @app.get("/api/paper/desk", tags=["Paper Trade"])
+    def get_paper_desk() -> Dict[str, Any]:
+        """Read-only paper desk; shares the reconciled live read model."""
+        return get_paper_live()
+
     @app.get("/api/paper/derivative-quotes", tags=["CIO Paper Desk"])
     def get_derivative_quotes() -> Dict[str, Any]:
         """Read-only exact-target exchange intake; never execution approval."""
