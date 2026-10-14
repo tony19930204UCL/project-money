@@ -4,65 +4,46 @@
   "pr_number": 50,
   "branch": "feat/paper-desk-repair-20261014",
   "task_id": "paper-desk-repair-20261014",
-  "instruction_id": "desk-design-autonomy-003",
-  "source_head_sha": "af34b8fa70e06b2f88231591be0f0351b8515215",
-  "status": "BLOCKED",
-  "summary": "Read-only responsive UI implemented and committed in three files. Full requested UI/read-model stage remains incomplete: canonical matched-lot closed trades, partial close accounting, verified owner/basis, synthetic demo and tests not implemented. Prior owner stage remains UNACCEPTED. No trading policy changed.",
+  "instruction_id": "desk-complete-004",
+  "source_head_sha": "155d2145e3fa020e358215efedaca5ba787be767",
+  "status": "READY_FOR_REVIEW",
+  "summary": "Bounded read-model/API stage committed with FIFO partial closes, conservative unknown costs, separate currencies and synthetic regression fixtures. Full UI integration and acceptance remain incomplete; this status refers only to submitted stage.",
   "changed_files": [
-    "plugin/ui/live.html",
-    "plugin/ui/paper-desk.css",
-    "plugin/ui/paper-desk.js",
+    "cio_market_lab/engine/paper_position_read_model.py",
+    "cio_market_lab/api/app.py",
+    "tests/test_paper_position_read_model.py",
+    "docs/engineering/PAPER_DESK_DEMO.json",
     "docs/engineering/PAPER_DESK_REPAIR_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "GitHub update_file plugin/ui/live.html",
-      "result": "PASS",
-      "evidence": "commit 89e3765eb374529cf059afe561f99e287803c1a0"
-    },
-    {
-      "command": "GitHub create_file plugin/ui/paper-desk.css",
-      "result": "PASS",
-      "evidence": "commit 19bbf1075d280b7836e89be18ecd4ac506394152"
-    },
-    {
-      "command": "GitHub create_file plugin/ui/paper-desk.js",
-      "result": "PASS",
-      "evidence": "commit af34b8fa70e06b2f88231591be0f0351b8515215"
-    },
-    {
       "command": "pytest tests/test_paper_position_read_model.py tests/test_paper_desk_ui.py tests/test_api_and_integrations.py",
       "result": "NOT_RUN",
-      "evidence": "No runnable checkout used; no test execution claimed."
+      "evidence": "No test runner executed; GitHub file writes are not functional tests."
     }
   ],
   "remaining_work": [
     {
-      "item": "Implement verified matched-lot read model and backward-compatible API, including partial closes and native-currency cost accounting",
+      "item": "Complete UI integration, legacy reconciliation and UI/API tests",
       "status": "ACTIONABLE_NOW",
       "owner": "ChatGPT"
     },
     {
-      "item": "Create synthetic demo and browser/read-model regression tests",
-      "status": "ACTIONABLE_NOW",
-      "owner": "ChatGPT"
-    },
-    {
-      "item": "Independently validate previous owner stage, accounting, API and browser behavior",
+      "item": "Independently run accounting, ownership and browser regressions",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     },
     {
-      "item": "Client visual acceptance",
-      "status": "ACTIONABLE_NOW",
+      "item": "Visual acceptance after functioning preview",
+      "status": "FUTURE_EVENT",
       "owner": "Client"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Review partial UI source at exact SHA, independently execute accounting/browser and ownership regressions; do not accept incomplete read model.",
-    "if_pass": "Accept only the completed frontend subset; keep full issue open.",
-    "if_fail": "Return exact failing cases for correction on same branch.",
+    "verify_now": "Run read-model and API regressions at exact source SHA; verify partial closes, missing history, multi-currency, API backward compatibility and previous ownership stage.",
+    "if_pass": "Accept only bounded stage, retain UI integration and system acceptance as pending.",
+    "if_fail": "Return exact failing assertions for same-branch repair.",
     "blockers": []
   }
 }
