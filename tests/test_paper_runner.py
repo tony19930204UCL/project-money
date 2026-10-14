@@ -81,21 +81,34 @@ def test_stale_lock_is_cleared_fresh_lock_blocks(tmp_path):
 def test_runner_momentum_exit_then_meanrev_entry_no_foreign_sell(tmp_path):
     from cio_market_lab.engine.paper_runner import Momentum, MeanRev
     from cio_market_lab.engine.paper_trading_loop import PaperTradingLoop, PaperAccount
-    from test_paper_trading_loop import Orders, Feed
+    class Orders:
+        def _risk_decision(self, request):
+            return SimpleNamespace(allowed=True, reasons=[])
+
+        def submit(self, request):
+            return SimpleNamespace(order_id="synthetic-paper-order")
+
+    class QuoteFeed:
+        def __init__(self, prices):
+            self.prices = prices
+
+        def latest(self, symbol):
+            return SimpleNamespace(c=self.prices[symbol], ts=OPEN, source="fixture", staleness_seconds=0)
+
     orders = Orders()
     loop = PaperTradingLoop(orders, tmp_path / "owner.jsonl", max_position_pct=1)
     acc = PaperAccount(10000)
     momentum = Momentum("AAA", 2)
     meanrev = MeanRev("AAA", 2)
     momentum.prev = 99
-    loop.run_once(Feed({"AAA": 100}), acc, [momentum])
+    loop.run_once(QuoteFeed({"AAA": 100}), acc, [momentum])
     assert loop.ownership["AAA"]["owner"] == momentum.strategy_id
-    loop.run_once(Feed({"AAA": 103}), acc, [momentum])
+    loop.run_once(QuoteFeed({"AAA": 103}), acc, [momentum])
     assert "AAA" not in loop.ownership
     meanrev.hist = [110] * 5
-    loop.run_once(Feed({"AAA": 100}), acc, [meanrev])
+    loop.run_once(QuoteFeed({"AAA": 100}), acc, [meanrev])
     assert loop.ownership["AAA"]["owner"] == meanrev.strategy_id
-    result = loop.run_once(Feed({"AAA": 103}), acc, [momentum])
+    result = loop.run_once(QuoteFeed({"AAA": 103}), acc, [momentum])
     assert not any(e["side"] == "SELL" for e in result["events"])
     assert loop.ownership["AAA"]["owner"] == meanrev.strategy_id
     assert momentum.entry is None
