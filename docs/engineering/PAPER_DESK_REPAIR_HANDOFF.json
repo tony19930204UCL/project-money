@@ -4,49 +4,43 @@
   "pr_number": 50,
   "branch": "feat/paper-desk-repair-20261014",
   "task_id": "paper-desk-repair-20261014",
-  "instruction_id": "desk_complete_010-r3",
-  "source_head_sha": "eba34bed5f8a864f2c74070b3e8f67b73872fdbb",
+  "instruction_id": "desk_complete_010-r4",
+  "source_head_sha": "2dbad64be72b4851d884b65e6651b843fa6eb056",
   "status": "READY_FOR_REVIEW",
-  "summary": "Repaired executable DOM harness to retain stable sort-button objects and attached click listeners; updated static-index integration assertion to accept supported legacy HTML fallback while preserving checks. Existing paper desk renderer and engine invariants unchanged. Main's exact-HEAD acceptance at 6fccb0a failed on these two tests; this revision has NOT_RUN tests and is not accepted yet.",
+  "summary": "Corrected asynchronous Node DOM harness flush to await a full event-loop turn before asserting renderer output, addressing Main's /ZZZ/ empty innerHTML failure at d843c22. Actual renderer, paper accounting, strategy ownership and UI remain unchanged. No tests executed in this session; independent Main acceptance pending.",
   "changed_files": [
     "tests/test_paper_desk_ui.py",
-    "tests/test_api_and_integrations.py",
     "docs/engineering/PAPER_DESK_REPAIR_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "GitHub fetch_file and update_file tests/test_paper_desk_ui.py",
+      "command": "GitHub fetch_file + update_file tests/test_paper_desk_ui.py",
       "result": "PASS",
-      "evidence": "commit e3d24f312e8a211376266377a359a19b92435f74"
-    },
-    {
-      "command": "GitHub fetch_file and update_file tests/test_api_and_integrations.py",
-      "result": "PASS",
-      "evidence": "commit eba34bed5f8a864f2c74070b3e8f67b73872fdbb"
+      "evidence": "GitHub commit 2dbad64be72b4851d884b65e6651b843fa6eb056; replaced microtask-only flush with setImmediate event-loop flush."
     },
     {
       "command": "pytest -q tests/test_paper_desk_ui.py tests/test_paper_runner.py tests/test_paper_trading_loop.py tests/test_paper_strategy_policy.py tests/test_strategy_feedback.py tests/test_paper_position_read_model.py tests/test_api_and_integrations.py",
       "result": "NOT_RUN",
-      "evidence": "No executable GitHub checkout in this session. Main prior run at 6fccb0a failed test_paper_desk_fetch_render_interactions_and_failure and test_api_ui_static_index; no PASS asserted for revised HEAD."
+      "evidence": "No runnable checkout in this session. Main reported prior exact HEAD d843c22 failure: empty results.innerHTML did not match /ZZZ/. New HEAD unverified."
     }
   ],
   "remaining_work": [
     {
-      "item": "Main run exact-HEAD acceptance of behavioral Node DOM harness plus existing 61 regression tests",
+      "item": "Main run behavioral DOM harness and existing 61 targeted regression tests at exact HEAD",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     },
     {
-      "item": "Main independently inspect renderer behavior, reconciliation/null PnL, filters and CI backend/browser/frontend at exact HEAD",
+      "item": "Main verify backend/browser/frontend CI and renderer behavior at exact HEAD",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Run exact HEAD pytest acceptance and browser/frontend/backend CI; inspect actual DOM behavior including fetch, sorting, filters, errors and partial accounting.",
-    "if_pass": "Accept only after all required tests and renderer behavior pass on exact HEAD.",
-    "if_fail": "Return exact HEAD, command, exit code, traceback and failing behavioral assertion.",
+    "verify_now": "Run exact-HEAD behavioral Node DOM test and 61 regression tests; verify live renderer fetch/render, filters, sort, failure handling and reconciliation/null PnL.",
+    "if_pass": "Accept only after all required exact-HEAD checks pass.",
+    "if_fail": "Return exact HEAD, command, traceback and failing assertion.",
     "blockers": []
   }
 }
