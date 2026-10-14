@@ -4,46 +4,44 @@
   "pr_number": 50,
   "branch": "feat/paper-desk-repair-20261014",
   "task_id": "paper-desk-repair-20261014",
-  "instruction_id": "desk_complete_010-r7",
-  "source_head_sha": "d0bead89cb191933302b5af59ef2c60e6e09a264",
+  "instruction_id": "desk_zero_weight_exit_012-r0",
+  "source_head_sha": "5175c73581eb68927b82257954141bd406086f84",
   "status": "READY_FOR_REVIEW",
-  "summary": "r7 fixed strategy filter assertion using executable Node DOM row regex with valid closing-tag delimiter; retained positive and negative row assertions. Renderer, synthetic demo and existing ownership/time-stop logic unchanged. Independent exact-HEAD acceptance pending.",
+  "summary": "Source-only zero-entry-weight correction: WeightedStrategy still evaluates underlying signals, suppresses BUY at multiplier zero, and preserves unchanged SELL quantity for PaperTradingLoop ownership/risk validation. Added real run_once synthetic owned partial SELL, zero-weight BUY suppression, restart, foreign-owner refusal and rejected-fill regression. Scheduled accounting remains outside this instruction.",
   "changed_files": [
-    "tests/test_paper_desk_ui.py",
+    "cio_market_lab/engine/strategy_feedback.py",
+    "tests/test_strategy_feedback.py",
     "docs/engineering/PAPER_DESK_REPAIR_HANDOFF.json"
   ],
   "tests": [
     {
-      "name": "test_paper_desk_fetch_render_interactions_and_failure",
-      "command": "pytest -q tests/test_paper_desk_ui.py",
+      "command": "pytest -q tests/test_strategy_feedback.py",
       "result": "NOT_RUN",
-      "evidence": "Executable Node DOM harness assertion updated; no checkout test execution in this session."
+      "evidence": "No runnable checkout/test execution available in this GitHub connector session; test added but not claimed passing."
     },
     {
-      "name": "existing_61_targeted_regressions",
-      "command": "Main exact-HEAD targeted 61-test acceptance command (not supplied verbatim)",
+      "command": "pytest -q tests/test_paper_trading_loop.py tests/test_paper_runner.py tests/test_paper_strategy_policy.py tests/test_strategy_feedback.py tests/test_paper_position_read_model.py tests/test_paper_desk_ui.py tests/test_api_and_integrations.py",
       "result": "NOT_RUN",
-      "evidence": "User reports prior 61 passed at earlier HEAD; not evidence of this HEAD."
-    },
-    {
-      "name": "synthetic_and_ownership_regressions",
-      "command": "pytest -q tests/test_paper_position_read_model.py tests/test_paper_trading_loop.py tests/test_paper_runner.py tests/test_paper_strategy_policy.py tests/test_strategy_feedback.py tests/test_api_and_integrations.py",
-      "result": "NOT_RUN",
-      "evidence": "Main must execute at exact HEAD; no PASS inferred."
+      "evidence": "Main previously reported 88 passing at b9f41701a044621d564777dffaf53298d4e0e6dc, not at this changed HEAD."
     }
   ],
   "remaining_work": [
     {
-      "item": "Main independently execute Node DOM behavioral harness and existing 61 targeted regressions at exact PR HEAD; inspect CI backend/browser/frontend and verify no skipped harness.",
+      "item": "Main independently run existing 88 affected tests plus added executable zero-weight run_once regression on exact PR HEAD; confirm CI and unchanged owner/risk guards.",
       "status": "ACTIONABLE_NOW",
+      "owner": "Main CIO"
+    },
+    {
+      "item": "Scheduled accounting producer defect remains: cio_market_lab/engine/paper_scheduler.py and cio_market_lab/engine/pnl_attribution.py are outside write_allowlist. Synthetic run_daily persisted realized_pnl=0 and closed_trades=0 rather than net 9 and one matched close; separate authorization required.",
+      "status": "BLOCKED_OUT_OF_SCOPE",
       "owner": "Main CIO"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Run pytest -q tests/test_paper_desk_ui.py plus exact-HEAD 61 regression suite and CI; confirm strategy filtering, fetch failure, reconciliation, partial realized PnL, orphan diagnostics and per-strategy time-stop.",
-    "if_pass": "Accept only after independent exact-HEAD results and CI verification.",
-    "if_fail": "Return exact HEAD, traceback and failing test names; do not merge.",
+    "verify_now": "At exact HEAD execute affected 88 regressions and test_zero_weight_real_run_once_owned_exit_and_entry_suppression; inspect SELL fill, BUY suppression, foreign-owner rejection, restart and rejected-fill invariants.",
+    "if_pass": "Accept only bounded source-only zero-weight exit fix; scheduled accounting and ABC remain unaccepted.",
+    "if_fail": "Return exact HEAD, test command, traceback and failing assertion for same-branch bounded revision.",
     "blockers": []
   }
 }
