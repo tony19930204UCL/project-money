@@ -4,56 +4,48 @@
   "pr_number": 50,
   "branch": "feat/paper-desk-repair-20261014",
   "task_id": "paper-desk-repair-20261014",
-  "instruction_id": "desk_complete_010-r0",
-  "source_head_sha": "1a9bfa6f0b746b65d3a982bf0dee7b7b290b4d47",
+  "instruction_id": "desk_complete_010-r1",
+  "source_head_sha": "abfdb1f6d1d8e4a3f5a3d8f880bae7881fea62de",
   "status": "READY_FOR_REVIEW",
-  "summary": "Implemented read-only /api/paper/desk renderer, accounting reconciliation and partial/unknown realized PnL, sortable/filterable views, loading/error/empty states, and executable Node DOM behavioral test. Main independent exact-HEAD acceptance pending; no runtime/account changes.",
+  "summary": "Restored missing executable tests/test_paper_strategy_policy.py that caused Main acceptance collection rc=4 (0 passed) at 9d332bc. Existing UI fetch/render DOM harness, read-only renderer and prior engine fixes retained unchanged. Independent exact-HEAD acceptance remains pending.",
   "changed_files": [
-    "plugin/ui/paper-desk.js",
-    "plugin/ui/paper-desk.css",
-    "cio_market_lab/api/app.py",
-    "tests/test_paper_desk_ui.py",
+    "tests/test_paper_strategy_policy.py",
     "docs/engineering/PAPER_DESK_REPAIR_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "GitHub get_pr_info PR50 and fetch_file source",
+      "command": "GitHub get_pr_info and fetch_file at PR50 branch",
       "result": "PASS",
-      "evidence": "Verified starting HEAD df20b06473c6cd454c6dde06aa64e8993db75850 and current pre-mailbox HEAD 1a9bfa6f0b746b65d3a982bf0dee7b7b290b4d47"
+      "evidence": "Verified initial HEAD 9d332bc33564ce85a5953ad76fd091913f88dc45; missing tests/test_paper_strategy_policy.py; existing paper-desk.js and behavioral DOM test present."
     },
     {
-      "command": "GitHub update_file/create_file UI/API/behavioral test",
+      "command": "GitHub create_file tests/test_paper_strategy_policy.py",
       "result": "PASS",
-      "evidence": "Source commits 36c4a5198f88fc1ca4d0ecab69233ce78648ad2f, 2bd320fb46bdf0014e69088e0ef353733eeff1a0, 70b6acaf004c0231518e3b95ce70761f9b291e0b, 1a9bfa6f0b746b65d3a982bf0dee7b7b290b4d47"
+      "evidence": "Commit abfdb1f6d1d8e4a3f5a3d8f880bae7881fea62de"
     },
     {
-      "command": "pytest -q tests/test_paper_desk_ui.py",
+      "command": "pytest -q tests/test_paper_strategy_policy.py tests/test_paper_desk_ui.py",
       "result": "NOT_RUN",
-      "evidence": "No executable checkout used; test authored for Node.js runtime."
+      "evidence": "No runnable repository checkout; Main to execute at exact HEAD."
     },
     {
-      "command": "Main targeted 61 / backend / browser / frontend at new exact HEAD",
+      "command": "Main targeted 61 regressions and backend/browser/frontend CI at updated exact HEAD",
       "result": "NOT_RUN",
-      "evidence": "Previous baseline PASS is user-reported; not rerun on these commits."
+      "evidence": "Previous reported CI PASS applies to older HEAD; latest reported acceptance rc=4, passed=0, missing test file."
     }
   ],
   "remaining_work": [
     {
-      "item": "Main independently run Node DOM UI test and existing 61 regressions at exact HEAD; review reconciliation and partial PnL",
-      "status": "ACTIONABLE_NOW",
-      "owner": "Main CIO"
-    },
-    {
-      "item": "Run backend/browser/frontend CI at updated exact HEAD and return failing assertions if any",
+      "item": "Main run exact-HEAD targeted suite (>=62), executable Node DOM renderer behavioral test and backend/browser/frontend CI; report any failures",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Run pytest -q tests/test_paper_desk_ui.py and the 61 targeted regressions at exact PR50 HEAD, plus backend/browser/frontend CI.",
-    "if_pass": "Independently review paper desk behavior and approve only after exact HEAD checks pass.",
-    "if_fail": "Return exact failure, command and HEAD for bounded repair; do not merge.",
+    "verify_now": "At PR50 exact HEAD run acceptance suite including tests/test_paper_strategy_policy.py and tests/test_paper_desk_ui.py, confirm >=62 passed and renderer actually executes JS.",
+    "if_pass": "Review exact HEAD and independently accept only if all required checks pass.",
+    "if_fail": "Return exact HEAD, command, rc and failing traceback for bounded revision; do not merge.",
     "blockers": []
   }
 }
