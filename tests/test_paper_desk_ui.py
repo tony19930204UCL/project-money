@@ -37,7 +37,7 @@ assert.match(ids.results.innerHTML,/ZZZ/);assert.match(ids.results.innerHTML,/Un
 assert.match(ids.accounting.innerHTML,/RECONCILIATION WARNING/);assert.match(ids.accounting.innerHTML,/verified subtotal/);assert.match(ids.accounting.innerHTML,/Unknown \/ incomplete/);assert.equal(ids.refresh.disabled,false);
 ids.market.value='TW';ids.market.change();assert.doesNotMatch(ids.results.innerHTML,/<td>ZZZ<\/td>/);
 ids.market.value='ALL';ids.market.change();
-ids.strategy.value='swing';ids.strategy.change();assert.match(ids.results.innerHTML,/ZZZ/);assert.doesNotMatch(ids.results.innerHTML,/<td>AAA<\\/td>/);ids.strategy.value='ALL';ids.strategy.change();
+ids.strategy.value='swing';ids.strategy.change();assert.match(ids.results.innerHTML,/ZZZ/);assert.doesNotMatch(ids.results.innerHTML,/AAA<\\/td>/);ids.strategy.value='ALL';ids.strategy.change();
 ids.product.value='future';ids.product.change();assert.match(ids.results.innerHTML,/No matching/);ids.product.value='ALL';ids.product.change();
 let sortButton=ids.results.querySelectorAll('[data-sort]').find(x=>x.dataset.sort==='ticker');assert(ids.results.innerHTML.indexOf('AAA')<ids.results.innerHTML.indexOf('ZZZ'));sortButton.click();assert(ids.results.innerHTML.indexOf('ZZZ')<ids.results.innerHTML.indexOf('AAA'));sortButton.click();assert(ids.results.innerHTML.indexOf('AAA')<ids.results.innerHTML.indexOf('ZZZ'));
 tabs[1].click();assert.match(ids.results.innerHTML,/CLOSED/);assert.match(ids.results.innerHTML,/UNKNOWN_COST/);
