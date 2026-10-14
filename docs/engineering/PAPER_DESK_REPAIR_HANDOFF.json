@@ -4,53 +4,68 @@
   "pr_number": 50,
   "branch": "feat/paper-desk-repair-20261014",
   "task_id": "paper-desk-repair-20261014",
-  "instruction_id": "desk-complete-007-auto-approval-control",
-  "source_head_sha": "3915d8d2fdde440417f7ba85b2ebcd1c39f3d38b",
+  "instruction_id": "desk-repair-008-manual-control",
+  "source_head_sha": "5c1fcd5ca1bae43870e94b4729550c71fa593371",
   "status": "PARTIAL",
-  "summary": "Orphan ledger diagnostic preserved while canonical empty inventory suppresses ghost holding; other requested fixes and full test execution remain incomplete.",
+  "summary": "Portable test fixture import dependency removed from test_paper_runner.py; paper desk renderer and behavioral UI tests remain unimplemented. No full suite verification or acceptance claimed.",
   "changed_files": [
-    "cio_market_lab/engine/paper_position_read_model.py",
+    "tests/test_paper_runner.py",
     "docs/engineering/PAPER_DESK_REPAIR_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "GitHub fetch_file/update_file",
+      "command": "GitHub fetch_file tests/test_paper_runner.py and tests/test_paper_trading_loop.py",
       "result": "PASS",
-      "evidence": "source commit 3915d8d2fdde440417f7ba85b2ebcd1c39f3d38b"
+      "evidence": "Inspected current branch test files; cross-module import was present."
     },
     {
-      "command": "PYTHONPATH=. pytest targeted suite",
-      "result": "NOT_RUN",
-      "evidence": "No runnable checkout/test execution completed"
+      "command": "GitHub update_file tests/test_paper_runner.py",
+      "result": "PASS",
+      "evidence": "Source commit 5c1fcd5ca1bae43870e94b4729550c71fa593371"
     },
     {
-      "command": "CI backend/frontend checks",
+      "command": "pytest targeted/backend",
       "result": "NOT_RUN",
-      "evidence": "Not executed or verified in this turn"
+      "evidence": "No runnable checkout used in this turn"
+    },
+    {
+      "command": "frontend/browser suites",
+      "result": "NOT_RUN",
+      "evidence": "No executable test run in this turn"
+    },
+    {
+      "command": "Main baseline comparison test_api_ui_static_index",
+      "result": "NOT_RUN",
+      "evidence": "Not verified against main"
     }
   ],
   "remaining_work": [
     {
-      "item": "Fix portable fixture imports and verify original CI command",
+      "item": "Implement /api/paper/desk renderer and behavioral tests/test_paper_desk_ui.py",
       "status": "ACTIONABLE_NOW",
       "owner": "ChatGPT"
     },
     {
-      "item": "Implement assets/paper_desk.js renderer, loading/empty/error, reconciliation, sorting/filtering and behavioral tests",
+      "item": "Run portable/backend/frontend/browser suites and confirm fixture import regression",
       "status": "ACTIONABLE_NOW",
       "owner": "ChatGPT"
     },
     {
-      "item": "Run targeted/backend/frontend suites and independently validate orphan diagnostic",
+      "item": "Compare test_api_ui_static_index against main baseline",
+      "status": "ACTIONABLE_NOW",
+      "owner": "Main CIO"
+    },
+    {
+      "item": "Independently verify reconciliation, unknown cost and realized PnL, strategy ownership and time-stop invariants",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Check canonical 7-share position with empty journal and partial BUY 2; check unknown fee yields null realized and run read-model/API/UI regressions.",
-    "if_pass": "Accept only bounded reconciliation stage, not PR50 overall.",
-    "if_fail": "Return exact assertions and SHA for same-branch repair.",
+    "verify_now": "Check source commit and independently run clean-checkout CI import-mode tests; PR50 is not accepted.",
+    "if_pass": "Continue UI implementation and full-suite verification before project acceptance.",
+    "if_fail": "Return exact failing assertion, command, and commit SHA for bounded repair.",
     "blockers": []
   }
 }
