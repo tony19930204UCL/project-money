@@ -36,3 +36,29 @@ def test_missing_entry_is_not_closed_trade():
 def test_mark_freshness_not_fabricated():
     r = build_position_read_model([fill("BUY", 1, 100)], marks={"US": {"ABC": 110}})
     assert r["open_positions"][0]["mark_freshness"] == "UNKNOWN"
+
+def test_account_only_legacy_position_survives():
+    account = {"US": {"state": "OK", "positions": [{"ticker": "ABC", "qty": 7, "mark": 123}]}}
+    r = build_position_read_model([], accounts=account)
+    p = r["open_positions"][0]
+    assert p["qty"] == 7 and p["entry_vwap"] is None and p["strategy_id"] is None
+    assert p["mark"] == 123 and p["unrealized_net"] is None
+
+def test_partial_journal_does_not_erase_canonical_inventory():
+    account = {"US": {"state": "OK", "positions": [{"ticker": "ABC", "qty": 7, "mark": 123}]}}
+    r = build_position_read_model([fill("BUY", 2, 100)], accounts=account)
+    assert sum(p["qty"] for p in r["open_positions"]) == 7
+    assert r["position_reconciliation"]["US:ABC"]["unknown_basis_qty"] == 5
+
+def test_unknown_realized_is_not_zero():
+    buy = fill("BUY", 1, 100)
+    buy.pop("fee")
+    r = build_position_read_model([buy, fill("SELL", 1, 110)])
+    assert r["realized_by_currency"]["USD"] is None
+    assert r["realized_completeness"]["USD"]["verified_subtotal"] == 0
+    assert r["realized_completeness"]["USD"]["unknown_cost_trades"] == 1
+
+def test_unmatched_sell_quantity_reported():
+    r = build_position_read_model([fill("BUY", 2, 100), fill("SELL", 5, 110)])
+    assert r["unmatched_exits"][0]["qty"] == 3
+    assert r["realized_completeness"]["USD"]["complete"] is False
