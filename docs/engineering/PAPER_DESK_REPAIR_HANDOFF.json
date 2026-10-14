@@ -4,56 +4,65 @@
   "pr_number": 50,
   "branch": "feat/paper-desk-repair-20261014",
   "task_id": "paper-desk-repair-20261014",
-  "instruction_id": "desk-owner-002",
-  "status": "READY_FOR_REVIEW",
-  "source_head_sha": "265bfd94cf5127b57845316c348fc934db320c19",
-  "summary": "Bounded ownership stage committed: accepted-fill strategy ledger with journal restart replay, foreign SELL prevention, partial-exit preservation, runner stale entry reset and regression tests. Full issue #49 not accepted.",
+  "instruction_id": "desk-design-autonomy-003",
+  "source_head_sha": "af34b8fa70e06b2f88231591be0f0351b8515215",
+  "status": "BLOCKED",
+  "summary": "Read-only responsive UI implemented and committed in three files. Full requested UI/read-model stage remains incomplete: canonical matched-lot closed trades, partial close accounting, verified owner/basis, synthetic demo and tests not implemented. Prior owner stage remains UNACCEPTED. No trading policy changed.",
   "changed_files": [
-    "cio_market_lab/engine/paper_trading_loop.py",
-    "cio_market_lab/engine/paper_runner.py",
-    "tests/test_paper_trading_loop.py",
-    "tests/test_paper_runner.py",
+    "plugin/ui/live.html",
+    "plugin/ui/paper-desk.css",
+    "plugin/ui/paper-desk.js",
     "docs/engineering/PAPER_DESK_REPAIR_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "GitHub update_file source and test files",
+      "command": "GitHub update_file plugin/ui/live.html",
       "result": "PASS",
-      "evidence": "commits fb52c0014379771b1df1e5ad6a95f2351615ac6c, cf6d541d69e46448d816d76ee8a4b159b8e8a302, 9ff636eb32827f3e59085b8a42ff8758c8b8800a, 265bfd94cf5127b57845316c348fc934db320c19"
+      "evidence": "commit 89e3765eb374529cf059afe561f99e287803c1a0"
     },
     {
-      "command": "pytest tests/test_paper_runner.py tests/test_paper_trading_loop.py",
+      "command": "GitHub create_file plugin/ui/paper-desk.css",
+      "result": "PASS",
+      "evidence": "commit 19bbf1075d280b7836e89be18ecd4ac506394152"
+    },
+    {
+      "command": "GitHub create_file plugin/ui/paper-desk.js",
+      "result": "PASS",
+      "evidence": "commit af34b8fa70e06b2f88231591be0f0351b8515215"
+    },
+    {
+      "command": "pytest tests/test_paper_position_read_model.py tests/test_paper_desk_ui.py tests/test_api_and_integrations.py",
       "result": "NOT_RUN",
-      "evidence": "No runnable checkout in current environment; Main must execute."
+      "evidence": "No runnable checkout used; no test execution claimed."
     }
   ],
   "remaining_work": [
     {
-      "item": "Main independent review and execution of ownership regression tests, reconcile legacy unowned holdings and session restart behavior",
+      "item": "Implement verified matched-lot read model and backward-compatible API, including partial closes and native-currency cost accounting",
+      "status": "ACTIONABLE_NOW",
+      "owner": "ChatGPT"
+    },
+    {
+      "item": "Create synthetic demo and browser/read-model regression tests",
+      "status": "ACTIONABLE_NOW",
+      "owner": "ChatGPT"
+    },
+    {
+      "item": "Independently validate previous owner stage, accounting, API and browser behavior",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     },
     {
-      "item": "Time-stop policy redesign and deterministic comparisons",
+      "item": "Client visual acceptance",
       "status": "ACTIONABLE_NOW",
-      "owner": "ChatGPT"
-    },
-    {
-      "item": "Position read model, accounting, UI tabs/filters, synthetic demo and browser tests",
-      "status": "ACTIONABLE_NOW",
-      "owner": "ChatGPT"
-    },
-    {
-      "item": "Client visual acceptance and Main final accounting/function acceptance",
-      "status": "ACTIONABLE_NOW",
-      "owner": "Main CIO / client"
+      "owner": "Client"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Review exact source HEAD and run ownership regression tests, including Momentum exit -> MeanRev entry -> Momentum evaluation, partial exits, rejected fills and restart.",
-    "if_pass": "Accept bounded stage only; authorize next stage, not merge/deploy.",
-    "if_fail": "Return precise failing assertions for same-branch correction.",
+    "verify_now": "Review partial UI source at exact SHA, independently execute accounting/browser and ownership regressions; do not accept incomplete read model.",
+    "if_pass": "Accept only the completed frontend subset; keep full issue open.",
+    "if_fail": "Return exact failing cases for correction on same branch.",
     "blockers": []
   }
 }
