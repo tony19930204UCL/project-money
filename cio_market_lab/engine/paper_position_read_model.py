@@ -18,7 +18,7 @@ def _number(value):
         return None
 
 
-def build_position_read_model(fills, *, marks=None, feed=None):
+def build_position_read_model(fills, *, marks=None, feed=None, accounts=None):
     """Return verified open lots, matched closes and diagnostic fills.
 
     Matching is partitioned by market, instrument and explicit owner. Legacy
@@ -28,6 +28,7 @@ def build_position_read_model(fills, *, marks=None, feed=None):
     lots = defaultdict(list)
     closed = []
     diagnostics = []
+    unmatched_exits = defaultdict(float)
     marks = marks or {}
     for index, original in enumerate(fills):
         row = dict(original)
@@ -90,6 +91,9 @@ def build_position_read_model(fills, *, marks=None, feed=None):
             if entry_tax is not None:
                 lot["tax_remaining"] -= entry_tax
             remaining -= take
+        if remaining > 1e-9:
+            unmatched_exits[(market, currency, ticker)] += remaining
+            diagnostics[-1]["unmatched_exit_qty"] = remaining
         lots[key] = [l for l in lots[key] if l["remaining"] > 1e-9]
     opened = []
     for (market, currency, ticker, owner), entries in lots.items():
@@ -112,7 +116,55 @@ def build_position_read_model(fills, *, marks=None, feed=None):
             "unrealized_net": gross - open_cost if gross is not None and open_cost is not None else None,
             "mark_freshness": "UNKNOWN" if timestamp is None else "TIMESTAMP_AVAILABLE_AGE_UNVERIFIED",
         })
+    reconciliation = {}
+    for market, account in (accounts or {}).items():
+        if account.get("state") != "OK":
+            continue
+        currency = {"US": "USD", "TW": "TWD"}.get(market)
+        canonical = {p["ticker"]: float(p["qty"]) for p in account.get("positions", [])}
+        for ticker, expected in canonical.items():
+            candidates = [p for p in opened if p["market"] == market and p["ticker"] == ticker]
+            derived = sum(p["qty"] for p in candidates)
+            if derived > expected + 1e-9:
+                for p in candidates:
+                    opened.remove(p)
+                derived = 0.0
+            remainder = expected - derived
+            if remainder > 1e-9:
+                source = next(p for p in account["positions"] if p["ticker"] == ticker)
+                mark = _number(source.get("mark"))
+                opened.append({
+                    "ticker": ticker, "market": market, "currency": currency,
+                    "strategy_id": None, "horizon": None, "product": "spot",
+                    "qty": remainder, "entry_vwap": None, "entry_reason": None,
+                    "mark": mark, "mark_timestamp": None, "mark_freshness": "UNKNOWN",
+                    "value": remainder * mark if mark is not None else None,
+                    "unrealized_gross": None, "unrealized_net": None,
+                    "basis_status": "UNKNOWN_HISTORY",
+                })
+            reconciliation[f"{market}:{ticker}"] = {
+                "account_qty": expected, "journal_matched_open_qty": derived,
+                "unknown_basis_qty": max(0.0, remainder),
+                "status": "MATCHED" if abs(remainder) < 1e-9 else "INCOMPLETE_HISTORY",
+            }
+        opened[:] = [p for p in opened if p["market"] != market or p["ticker"] in canonical]
+    realized = {}
+    completeness = {}
+    for currency in {r["currency"] for r in closed}:
+        subset = [r for r in closed if r["currency"] == currency]
+        unknown = [r for r in subset if r["net_pnl"] is None]
+        subtotal = sum(r["net_pnl"] for r in subset if r["net_pnl"] is not None)
+        realized[currency] = subtotal if not unknown else None
+        completeness[currency] = {
+            "verified_subtotal": subtotal,
+            "unknown_cost_trades": len(unknown),
+            "unknown_cost_qty": sum(r["closed_qty"] for r in unknown),
+            "complete": not unknown and not any(k[1] == currency for k in unmatched_exits),
+            "account_reconciliation": "NOT_VERIFIED",
+        }
     return {"open_positions": opened, "closed_trades": closed, "fills": diagnostics,
-            "realized_by_currency": {ccy: sum(r["net_pnl"] for r in closed if r["currency"] == ccy and r["net_pnl"] is not None)
-                                     for ccy in {r["currency"] for r in closed}},
+            "realized_by_currency": realized, "realized_completeness": completeness,
+            "position_reconciliation": reconciliation,
+            "unmatched_exits": [{"market": k[0], "currency": k[1], "ticker": k[2], "qty": v}
+                                for k, v in unmatched_exits.items()],
             "feed_freshness": "UNKNOWN" if not feed else "UNVERIFIED"}
