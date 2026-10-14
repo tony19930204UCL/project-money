@@ -4,10 +4,10 @@
   "pr_number": 50,
   "branch": "feat/paper-desk-repair-20261014",
   "task_id": "paper-desk-repair-20261014",
-  "instruction_id": "desk_complete_010-r5",
-  "source_head_sha": "a637d975d6be85988f5174a57d4005fe817bf98f",
+  "instruction_id": "desk_complete_010-r6",
+  "source_head_sha": "b301cfc8e625fa813e3e0e314ae002bb48c6f37f",
   "status": "READY_FOR_REVIEW",
-  "summary": "Corrected executable Node DOM harness ticker sort expectations: renderer starts ascending, first click toggles descending, second click returns ascending. All three orders are asserted. Renderer and engine unchanged; Main exact-HEAD acceptance pending.",
+  "summary": "Existing paper desk renderer, CSS, live.html wiring and Node executable DOM harness inspected. Strengthened behavioral regression for strategy/product filters, incomplete realized PnL and refresh state. Previous Main output has rc=0 and 61 dot markers but summary parser reports passed=0; no independent acceptance claimed.",
   "changed_files": [
     "tests/test_paper_desk_ui.py",
     "docs/engineering/PAPER_DESK_REPAIR_HANDOFF.json"
@@ -16,31 +16,31 @@
     {
       "command": "GitHub fetch_file/update_file tests/test_paper_desk_ui.py",
       "result": "PASS",
-      "evidence": "GitHub write commit a637d975d6be85988f5174a57d4005fe817bf98f; verified original assertion before replacing it with ascending/descending/ascending behavioral assertions."
+      "evidence": "Source update commit b301cfc8e625fa813e3e0e314ae002bb48c6f37f"
     },
     {
       "command": "pytest -q tests/test_paper_desk_ui.py tests/test_paper_runner.py tests/test_paper_trading_loop.py tests/test_paper_strategy_policy.py tests/test_strategy_feedback.py tests/test_paper_position_read_model.py tests/test_api_and_integrations.py",
       "result": "NOT_RUN",
-      "evidence": "No executable checkout used in this session. Main previous exact-HEAD 4e8f4fa16d46b468d64989a98b8481553cc6e7bf failed ticker sort assertion; new revision awaits Main verification."
+      "evidence": "No local execution. Main reported prior HEAD 3d2a55d8f16bc35b7a2bbf26f74f3ca1b27b0dd6 output rc=0, 61 dot markers, passed=0 from acceptance parser; not evidence of >=62 accepted tests."
     }
   ],
   "remaining_work": [
     {
-      "item": "Main independently run executable DOM behavioral test and existing 61 targeted regressions at exact HEAD",
+      "item": "Main run exact-HEAD executable DOM and 61 targeted regressions, confirm >=62 collected/passed and distinguish pytest -q dot output from parser count",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     },
     {
-      "item": "Main verify exact-HEAD backend/browser/frontend CI and paper desk renderer behavior",
+      "item": "Main inspect exact-HEAD CI backend/browser/frontend and renderer behavior",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Run exact-HEAD DOM harness and 61 regressions; verify ascending/descending/ascending ticker sort, fetch/render, filters, failure handling, reconciliation and null/partial realized PnL.",
-    "if_pass": "Accept only after required exact-HEAD checks pass.",
-    "if_fail": "Return exact HEAD, command, traceback and failing assertion.",
+    "verify_now": "Run exact-HEAD pytest with summary enabled to confirm >=62 passed, verify Node DOM harness actually executed (not skipped), API fetch, loading, empty, error, reconciliation, null/partial PnL, sort and filters.",
+    "if_pass": "Accept after independent checks and CI pass.",
+    "if_fail": "Return exact HEAD, test command, full pytest summary and failing traceback.",
     "blockers": []
   }
 }
