@@ -35,7 +35,7 @@ assert.equal(calls[0],'/api/paper/desk');assert.match(ids.notice.textContent,/Lo
 pending.shift().resolve({ok:true,json:async()=>payload});await flush();
 assert.match(ids.results.innerHTML,/ZZZ/);assert.match(ids.results.innerHTML,/Unknown/);
 assert.match(ids.accounting.innerHTML,/RECONCILIATION WARNING/);assert.match(ids.accounting.innerHTML,/verified subtotal/);assert.match(ids.accounting.innerHTML,/Unknown \/ incomplete/);assert.equal(ids.refresh.disabled,false);
-ids.market.value='TW';ids.market.change();assert.doesNotMatch(ids.results.innerHTML,/<td>ZZZ<\/td>/);
+ids.market.value='TW';ids.market.change();assert.equal(ids.results.innerHTML.includes('ZZZ'),false);
 ids.market.value='ALL';ids.market.change();
 ids.strategy.value='swing';ids.strategy.change();assert.match(ids.results.innerHTML,/ZZZ/);assert.equal(ids.results.innerHTML.includes('AAA'),false);ids.strategy.value='ALL';ids.strategy.change();
 ids.product.value='future';ids.product.change();assert.match(ids.results.innerHTML,/No matching/);ids.product.value='ALL';ids.product.change();
