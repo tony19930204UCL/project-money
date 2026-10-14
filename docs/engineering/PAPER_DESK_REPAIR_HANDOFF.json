@@ -4,48 +4,43 @@
   "pr_number": 50,
   "branch": "feat/paper-desk-repair-20261014",
   "task_id": "paper-desk-repair-20261014",
-  "instruction_id": "desk_complete_010-r1",
-  "source_head_sha": "abfdb1f6d1d8e4a3f5a3d8f880bae7881fea62de",
+  "instruction_id": "desk_complete_010-r2",
+  "source_head_sha": "24c7618132b0e48270fc6a00d617323ee055322b",
   "status": "READY_FOR_REVIEW",
-  "summary": "Restored missing executable tests/test_paper_strategy_policy.py that caused Main acceptance collection rc=4 (0 passed) at 9d332bc. Existing UI fetch/render DOM harness, read-only renderer and prior engine fixes retained unchanged. Independent exact-HEAD acceptance remains pending.",
+  "summary": "Bounded renderer hardening: reject malformed markets payload and guard interval scheduling. Existing JS DOM harness and UI remain. Main acceptance at bddba52 failed during collection because fastapi is absent in review environment; no test result is claimed for this source HEAD.",
   "changed_files": [
-    "tests/test_paper_strategy_policy.py",
+    "plugin/ui/paper-desk.js",
     "docs/engineering/PAPER_DESK_REPAIR_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "GitHub get_pr_info and fetch_file at PR50 branch",
+      "command": "GitHub fetch_file plugin/ui/paper-desk.js and update_file",
       "result": "PASS",
-      "evidence": "Verified initial HEAD 9d332bc33564ce85a5953ad76fd091913f88dc45; missing tests/test_paper_strategy_policy.py; existing paper-desk.js and behavioral DOM test present."
+      "evidence": "GitHub source commit 24c7618132b0e48270fc6a00d617323ee055322b"
     },
     {
-      "command": "GitHub create_file tests/test_paper_strategy_policy.py",
-      "result": "PASS",
-      "evidence": "Commit abfdb1f6d1d8e4a3f5a3d8f880bae7881fea62de"
-    },
-    {
-      "command": "pytest -q tests/test_paper_strategy_policy.py tests/test_paper_desk_ui.py",
+      "command": "pytest -q tests/test_paper_desk_ui.py tests/test_paper_runner.py tests/test_paper_trading_loop.py tests/test_paper_strategy_policy.py tests/test_strategy_feedback.py tests/test_paper_position_read_model.py tests/test_api_and_integrations.py",
       "result": "NOT_RUN",
-      "evidence": "No runnable repository checkout; Main to execute at exact HEAD."
-    },
-    {
-      "command": "Main targeted 61 regressions and backend/browser/frontend CI at updated exact HEAD",
-      "result": "NOT_RUN",
-      "evidence": "Previous reported CI PASS applies to older HEAD; latest reported acceptance rc=4, passed=0, missing test file."
+      "evidence": "No runnable checkout; Main's previous acceptance at bddba52 exited rc=2, 0 passed, collection error ModuleNotFoundError: fastapi. This is not a new exact-HEAD test result."
     }
   ],
   "remaining_work": [
     {
-      "item": "Main run exact-HEAD targeted suite (>=62), executable Node DOM renderer behavioral test and backend/browser/frontend CI; report any failures",
+      "item": "Main install project-declared dependencies in clean acceptance environment, run exact-HEAD suite and verify >=62 passing including executable JS DOM behavior",
+      "status": "ACTIONABLE_NOW",
+      "owner": "Main CIO"
+    },
+    {
+      "item": "Main independently verify UI renderer and CI backend/browser/frontend on exact HEAD",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "At PR50 exact HEAD run acceptance suite including tests/test_paper_strategy_policy.py and tests/test_paper_desk_ui.py, confirm >=62 passed and renderer actually executes JS.",
-    "if_pass": "Review exact HEAD and independently accept only if all required checks pass.",
-    "if_fail": "Return exact HEAD, command, rc and failing traceback for bounded revision; do not merge.",
+    "verify_now": "Install project-declared test dependencies including FastAPI; run exact HEAD acceptance and executable Node DOM harness; inspect actual rendered interactions and verify >=62 passing.",
+    "if_pass": "Independently accept exact HEAD only after required tests and UI checks pass.",
+    "if_fail": "Return exact HEAD, command, exit code and full failure traceback for bounded revision.",
     "blockers": []
   }
 }
