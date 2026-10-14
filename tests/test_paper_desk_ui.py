@@ -18,7 +18,7 @@ class Element {
  constructor(id){this.id=id;this.value='ALL';this.dataset={};this.listeners={};this.innerHTML='';this.textContent='';this.disabled=false;this.attrs={};this.classList={toggle:()=>{}};}
  addEventListener(n,f){this.listeners[n]=f}
  setAttribute(k,v){this.attrs[k]=v}
- querySelectorAll(q){if(q==='[data-sort]')return [...this.innerHTML.matchAll(/data-sort="([^"]+)"/g)].map(m=>{let e=new Element();e.dataset.sort=m[1];return e});return []}
+ querySelectorAll(q){if(q==='[data-sort]'){const keys=[...this.innerHTML.matchAll(/data-sort="([^"]+)"/g)].map(m=>m[1]);this.sortButtons=this.sortButtons||{};return keys.map(k=>{if(!this.sortButtons[k]){this.sortButtons[k]=new Element();this.sortButtons[k].dataset.sort=k}return this.sortButtons[k]})}return []}
  click(){this.listeners.click()}
  change(){this.listeners.change()}
 }
