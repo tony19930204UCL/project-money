@@ -29,12 +29,13 @@ class _Base:
         self.strategy_id = type(self).__name__ + "_" + market
 
     def _exit(self, price, account):
-        qty = account.positions.get(self.ticker, 0)
+        owned = getattr(account, "strategy_ownership", {}).get(self.ticker)
+        qty = owned["qty"] if owned and owned["owner"] == self.strategy_id else 0
         if qty <= 0:
             self.entry = None
             return None
         if self.entry is None:
-            self.entry = price
+            self.entry = owned.get("entry") or price
         if price >= self.entry * (1 + self.take) or price <= self.entry * (1 - self.stop_pct):
             return [Signal(self.ticker, "stock", "SELL", qty, None, None,
                            "exit take-profit/stop", "realize", "n/a")]
@@ -54,7 +55,6 @@ class Momentum(_Base):
             return out
         if prior is None or p <= prior * 1.001 or account.positions.get(self.ticker, 0) > 0:
             return []
-        self.entry = p
         return [Signal(self.ticker, "stock", "BUY", self.size, p * (1 - self.stop_pct),
                        p * (1 + self.take), "1m momentum continuation",
                        "+1.2% swing", "-0.8% stop")]
