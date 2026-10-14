@@ -125,6 +125,7 @@ def build_position_read_model(fills, *, marks=None, feed=None, accounts=None):
         for ticker, expected in canonical.items():
             candidates = [p for p in opened if p["market"] == market and p["ticker"] == ticker]
             derived = sum(p["qty"] for p in candidates)
+            raw_derived = derived
             if derived > expected + 1e-9:
                 for p in candidates:
                     opened.remove(p)
@@ -144,22 +145,31 @@ def build_position_read_model(fills, *, marks=None, feed=None, accounts=None):
                 })
             reconciliation[f"{market}:{ticker}"] = {
                 "account_qty": expected, "journal_matched_open_qty": derived,
+                "journal_reconstructed_open_qty": raw_derived,
+                "journal_account_delta_qty": raw_derived - expected,
+                "quarantined_journal_qty": raw_derived if raw_derived > expected + 1e-9 else 0.0,
+                "quarantine_reason": "JOURNAL_EXCEEDS_CANONICAL_ACCOUNT" if raw_derived > expected + 1e-9 else None,
                 "unknown_basis_qty": max(0.0, remainder),
-                "status": "MATCHED" if abs(remainder) < 1e-9 else "INCOMPLETE_HISTORY",
+                "status": ("JOURNAL_ACCOUNT_CONFLICT" if raw_derived > expected + 1e-9 else
+                           "MATCHED" if abs(remainder) < 1e-9 else "INCOMPLETE_HISTORY"),
             }
         opened[:] = [p for p in opened if p["market"] != market or p["ticker"] in canonical]
     realized = {}
     completeness = {}
-    for currency in {r["currency"] for r in closed}:
+    for currency in ({r["currency"] for r in closed} | {k[1] for k in unmatched_exits}):
         subset = [r for r in closed if r["currency"] == currency]
         unknown = [r for r in subset if r["net_pnl"] is None]
         subtotal = sum(r["net_pnl"] for r in subset if r["net_pnl"] is not None)
-        realized[currency] = subtotal if not unknown else None
+        incomplete_exit = any(k[1] == currency for k in unmatched_exits)
+        incomplete_account = any(k.startswith(("US:" if currency == "USD" else "TW:")) and v["status"] != "MATCHED" for k, v in reconciliation.items())
+        complete = not unknown and not incomplete_exit and not incomplete_account
+        realized[currency] = subtotal if complete else None
         completeness[currency] = {
             "verified_subtotal": subtotal,
             "unknown_cost_trades": len(unknown),
             "unknown_cost_qty": sum(r["closed_qty"] for r in unknown),
-            "complete": not unknown and not any(k[1] == currency for k in unmatched_exits),
+            "unmatched_exit_qty": sum(v for k, v in unmatched_exits.items() if k[1] == currency),
+            "complete": complete,
             "account_reconciliation": "NOT_VERIFIED",
         }
     return {"open_positions": opened, "closed_trades": closed, "fills": diagnostics,
