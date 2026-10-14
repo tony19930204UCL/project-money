@@ -126,11 +126,12 @@ class WeightedStrategy:
         self.strategy_id = getattr(strategy, "strategy_id", type(strategy).__name__)
 
     def signals(self, quotes, account):
-        if self.multiplier == 0:
-            return []
+        # Entry weight never disables existing-position exits. The loop still
+        # enforces strategy ownership, position limits and order risk checks.
         return [replace(signal, size=signal.size * self.multiplier)
                 if signal.side.upper() == "BUY" else signal
-                for signal in self._strategy.signals(quotes, account)]
+                for signal in self._strategy.signals(quotes, account)
+                if self.multiplier != 0 or signal.side.upper() != "BUY"]
 
 
 def apply_weights(strategies, table):
