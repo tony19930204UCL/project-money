@@ -4,68 +4,56 @@
   "pr_number": 50,
   "branch": "feat/paper-desk-repair-20261014",
   "task_id": "paper-desk-repair-20261014",
-  "instruction_id": "desk-repair-008-manual-control",
-  "source_head_sha": "5c1fcd5ca1bae43870e94b4729550c71fa593371",
-  "status": "PARTIAL",
-  "summary": "Portable test fixture import dependency removed from test_paper_runner.py; paper desk renderer and behavioral UI tests remain unimplemented. No full suite verification or acceptance claimed.",
+  "instruction_id": "desk_complete_010-r0",
+  "source_head_sha": "1a9bfa6f0b746b65d3a982bf0dee7b7b290b4d47",
+  "status": "READY_FOR_REVIEW",
+  "summary": "Implemented read-only /api/paper/desk renderer, accounting reconciliation and partial/unknown realized PnL, sortable/filterable views, loading/error/empty states, and executable Node DOM behavioral test. Main independent exact-HEAD acceptance pending; no runtime/account changes.",
   "changed_files": [
-    "tests/test_paper_runner.py",
+    "plugin/ui/paper-desk.js",
+    "plugin/ui/paper-desk.css",
+    "cio_market_lab/api/app.py",
+    "tests/test_paper_desk_ui.py",
     "docs/engineering/PAPER_DESK_REPAIR_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "GitHub fetch_file tests/test_paper_runner.py and tests/test_paper_trading_loop.py",
+      "command": "GitHub get_pr_info PR50 and fetch_file source",
       "result": "PASS",
-      "evidence": "Inspected current branch test files; cross-module import was present."
+      "evidence": "Verified starting HEAD df20b06473c6cd454c6dde06aa64e8993db75850 and current pre-mailbox HEAD 1a9bfa6f0b746b65d3a982bf0dee7b7b290b4d47"
     },
     {
-      "command": "GitHub update_file tests/test_paper_runner.py",
+      "command": "GitHub update_file/create_file UI/API/behavioral test",
       "result": "PASS",
-      "evidence": "Source commit 5c1fcd5ca1bae43870e94b4729550c71fa593371"
+      "evidence": "Source commits 36c4a5198f88fc1ca4d0ecab69233ce78648ad2f, 2bd320fb46bdf0014e69088e0ef353733eeff1a0, 70b6acaf004c0231518e3b95ce70761f9b291e0b, 1a9bfa6f0b746b65d3a982bf0dee7b7b290b4d47"
     },
     {
-      "command": "pytest targeted/backend",
+      "command": "pytest -q tests/test_paper_desk_ui.py",
       "result": "NOT_RUN",
-      "evidence": "No runnable checkout used in this turn"
+      "evidence": "No executable checkout used; test authored for Node.js runtime."
     },
     {
-      "command": "frontend/browser suites",
+      "command": "Main targeted 61 / backend / browser / frontend at new exact HEAD",
       "result": "NOT_RUN",
-      "evidence": "No executable test run in this turn"
-    },
-    {
-      "command": "Main baseline comparison test_api_ui_static_index",
-      "result": "NOT_RUN",
-      "evidence": "Not verified against main"
+      "evidence": "Previous baseline PASS is user-reported; not rerun on these commits."
     }
   ],
   "remaining_work": [
     {
-      "item": "Implement /api/paper/desk renderer and behavioral tests/test_paper_desk_ui.py",
-      "status": "ACTIONABLE_NOW",
-      "owner": "ChatGPT"
-    },
-    {
-      "item": "Run portable/backend/frontend/browser suites and confirm fixture import regression",
-      "status": "ACTIONABLE_NOW",
-      "owner": "ChatGPT"
-    },
-    {
-      "item": "Compare test_api_ui_static_index against main baseline",
+      "item": "Main independently run Node DOM UI test and existing 61 regressions at exact HEAD; review reconciliation and partial PnL",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     },
     {
-      "item": "Independently verify reconciliation, unknown cost and realized PnL, strategy ownership and time-stop invariants",
+      "item": "Run backend/browser/frontend CI at updated exact HEAD and return failing assertions if any",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Check source commit and independently run clean-checkout CI import-mode tests; PR50 is not accepted.",
-    "if_pass": "Continue UI implementation and full-suite verification before project acceptance.",
-    "if_fail": "Return exact failing assertion, command, and commit SHA for bounded repair.",
+    "verify_now": "Run pytest -q tests/test_paper_desk_ui.py and the 61 targeted regressions at exact PR50 HEAD, plus backend/browser/frontend CI.",
+    "if_pass": "Independently review paper desk behavior and approve only after exact HEAD checks pass.",
+    "if_fail": "Return exact failure, command and HEAD for bounded repair; do not merge.",
     "blockers": []
   }
 }
