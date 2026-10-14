@@ -1,0 +1,54 @@
+{
+  "schema_version": 2,
+  "repository": "tony19930204UCL/project-money",
+  "pr_number": 50,
+  "branch": "feat/paper-desk-repair-20261014",
+  "task_id": "paper-desk-repair-20261014",
+  "instruction_id": "desk-initial-001",
+  "status": "BLOCKED",
+  "source_head_sha": "b02c1d12673a7608d830afe4a853939885c52554",
+  "summary": "Partial implementation: WeightedStrategy SELL exits no longer scaled by entry weights. Remaining issue #49 requirements unimplemented.",
+  "changed_files": [
+    "cio_market_lab/engine/strategy_feedback.py",
+    "docs/engineering/PAPER_DESK_REPAIR_HANDOFF.json"
+  ],
+  "tests": [
+    {
+      "command": "GitHub update_file strategy_feedback.py",
+      "result": "PASS",
+      "evidence": "commit b02c1d12673a7608d830afe4a853939885c52554"
+    },
+    {
+      "command": "pytest",
+      "result": "NOT_RUN",
+      "evidence": "No runnable checkout available"
+    },
+    {
+      "command": "browser tests",
+      "result": "NOT_RUN",
+      "evidence": "Not executed"
+    }
+  ],
+  "remaining_work": [
+    {
+      "item": "Per-position strategy ownership, restart/partial/rejected fills, time-stop redesign and regression tests",
+      "status": "ACTIONABLE_NOW",
+      "owner": "ChatGPT"
+    },
+    {
+      "item": "Position read model, accounting, responsive UI, synthetic demo and browser tests",
+      "status": "ACTIONABLE_NOW",
+      "owner": "ChatGPT"
+    }
+  ],
+  "next_step_reminder": {
+    "to": "Main CIO",
+    "verify_now": "Run independent engine/accounting tests and browser verification after full implementation; current scope incomplete.",
+    "if_pass": "Present visual preview for client acceptance; no merge/deploy",
+    "if_fail": "Repair exact failures on same branch",
+    "blockers": [
+      "Full implementation incomplete",
+      "Tests NOT_RUN"
+    ]
+  }
+}
