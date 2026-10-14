@@ -29,7 +29,7 @@ let pending=[],calls=[];
 const payload={markets:{US:{state:'OK',equity:1000,cash:800,positions:[{ticker:'ZZZ',market:'US',qty:2,horizon:'swing',product:'spot',strategy_id:'momentum',unrealized_net:null},{ticker:'AAA',market:'US',qty:1,horizon:'day',product:'spot',strategy_id:'meanrev',unrealized_net:5}]},TW:{state:'OK',positions:[]}},closed_trades:[{ticker:'CLOSED',market:'US',horizon:'swing',net_pnl:null,cost_status:'UNKNOWN_COST'}],fills:[{ticker:'FILL',market:'US',side:'BUY',size:1}],read_model:{position_reconciliation:{'US:ZZZ':{status:'JOURNAL_ACCOUNT_CONFLICT',account_qty:2,journal_reconstructed_open_qty:3,quarantine_reason:'orphan_ledger_position'}},realized_by_currency:{USD:null},realized_completeness:{USD:{verified_subtotal:12,complete:false,unknown_cost_trades:1}},feed_freshness:'UNKNOWN'}};
 const fetch=(url,opts)=>{calls.push(url);return new Promise((resolve,reject)=>pending.push({resolve,reject}))};
 const ctx={document,fetch,setInterval:()=>{},Date,Number,String,Object,Array,Error};vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),ctx);
-async function flush(){await Promise.resolve();await Promise.resolve();await Promise.resolve();await Promise.resolve()}
+async function flush(){await new Promise(resolve=>setImmediate(resolve))}
 (async()=>{
 assert.equal(calls[0],'/api/paper/desk');assert.match(ids.notice.textContent,/Loading/);
 pending.shift().resolve({ok:true,json:async()=>payload});await flush();
