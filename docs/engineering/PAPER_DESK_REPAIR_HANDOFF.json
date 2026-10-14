@@ -4,13 +4,12 @@
   "pr_number": 50,
   "branch": "feat/paper-desk-repair-20261014",
   "task_id": "paper-desk-repair-20261014",
-  "instruction_id": "desk_synthetic_regression_011-r0",
-  "source_head_sha": "b9d8a94beb1a317db82607024b73e2a18eda0670",
+  "instruction_id": "desk_synthetic_regression_011-r1",
+  "source_head_sha": "5017460934f7124127e4a77c776426b9a2ffa6ce",
   "status": "READY_FOR_REVIEW",
-  "summary": "Expanded exclusively synthetic replay fixture and executable read-model regressions; pre-existing owner/time-stop/renderer regressions remain for independent Main exact-HEAD execution. No engine, UI, policy, account or runtime changes. No tests executed here.",
+  "summary": "Repaired invalid JavaScript regexp literals in executable Node DOM harness after Main failure at b3d5e69a8bda0f4419a2d6b6956d77c52eab4ec3. Existing synthetic demo and nine regression names retained. Tests NOT_RUN; Main exact-HEAD acceptance pending.",
   "changed_files": [
-    "docs/engineering/PAPER_DESK_DEMO.json",
-    "tests/test_paper_position_read_model.py",
+    "tests/test_paper_desk_ui.py",
     "docs/engineering/PAPER_DESK_REPAIR_HANDOFF.json"
   ],
   "tests": [
@@ -18,55 +17,55 @@
       "name": "test_synthetic_demo_replay_strategy_quantities_partial_and_orphan",
       "command": "pytest -q tests/test_paper_position_read_model.py tests/test_paper_trading_loop.py tests/test_paper_runner.py tests/test_paper_desk_ui.py -k test_synthetic_demo_replay_strategy_quantities_partial_and_orphan",
       "result": "NOT_RUN",
-      "evidence": "Test not executed in this environment; Main must verify at exact HEAD."
+      "evidence": "Not executed in this environment; Main exact-HEAD verification required."
     },
     {
       "name": "test_synthetic_demo_flat_strategy_has_no_ghost_position",
       "command": "pytest -q tests/test_paper_position_read_model.py tests/test_paper_trading_loop.py tests/test_paper_runner.py tests/test_paper_desk_ui.py -k test_synthetic_demo_flat_strategy_has_no_ghost_position",
       "result": "NOT_RUN",
-      "evidence": "Test not executed in this environment; Main must verify at exact HEAD."
+      "evidence": "Not executed in this environment; Main exact-HEAD verification required."
     },
     {
       "name": "test_foreign_sell_and_partial_exit",
       "command": "pytest -q tests/test_paper_position_read_model.py tests/test_paper_trading_loop.py tests/test_paper_runner.py tests/test_paper_desk_ui.py -k test_foreign_sell_and_partial_exit",
       "result": "NOT_RUN",
-      "evidence": "Test not executed in this environment; Main must verify at exact HEAD."
+      "evidence": "Not executed in this environment; Main exact-HEAD verification required."
     },
     {
       "name": "test_old_owner_cannot_clear_new_owner",
       "command": "pytest -q tests/test_paper_position_read_model.py tests/test_paper_trading_loop.py tests/test_paper_runner.py tests/test_paper_desk_ui.py -k test_old_owner_cannot_clear_new_owner",
       "result": "NOT_RUN",
-      "evidence": "Test not executed in this environment; Main must verify at exact HEAD."
+      "evidence": "Not executed in this environment; Main exact-HEAD verification required."
     },
     {
       "name": "test_rejected_exit_preserves_owner_and_restart",
       "command": "pytest -q tests/test_paper_position_read_model.py tests/test_paper_trading_loop.py tests/test_paper_runner.py tests/test_paper_desk_ui.py -k test_rejected_exit_preserves_owner_and_restart",
       "result": "NOT_RUN",
-      "evidence": "Test not executed in this environment; Main must verify at exact HEAD."
+      "evidence": "Not executed in this environment; Main exact-HEAD verification required."
     },
     {
       "name": "test_runner_momentum_exit_then_meanrev_entry_no_foreign_sell",
       "command": "pytest -q tests/test_paper_position_read_model.py tests/test_paper_trading_loop.py tests/test_paper_runner.py tests/test_paper_desk_ui.py -k test_runner_momentum_exit_then_meanrev_entry_no_foreign_sell",
       "result": "NOT_RUN",
-      "evidence": "Test not executed in this environment; Main must verify at exact HEAD."
+      "evidence": "Not executed in this environment; Main exact-HEAD verification required."
     },
     {
       "name": "test_unknown_realized_is_not_zero",
       "command": "pytest -q tests/test_paper_position_read_model.py tests/test_paper_trading_loop.py tests/test_paper_runner.py tests/test_paper_desk_ui.py -k test_unknown_realized_is_not_zero",
       "result": "NOT_RUN",
-      "evidence": "Test not executed in this environment; Main must verify at exact HEAD."
+      "evidence": "Not executed in this environment; Main exact-HEAD verification required."
     },
     {
       "name": "test_paper_desk_fetch_render_interactions_and_failure",
       "command": "pytest -q tests/test_paper_position_read_model.py tests/test_paper_trading_loop.py tests/test_paper_runner.py tests/test_paper_desk_ui.py -k test_paper_desk_fetch_render_interactions_and_failure",
       "result": "NOT_RUN",
-      "evidence": "Test not executed in this environment; Main must verify at exact HEAD."
+      "evidence": "Main previously FAILED at b3d5e69 due to Node SyntaxError: Unterminated regexp literal; harness assertions changed, not rerun."
     },
     {
       "name": "test_partial_fifo_and_costs",
       "command": "pytest -q tests/test_paper_position_read_model.py tests/test_paper_trading_loop.py tests/test_paper_runner.py tests/test_paper_desk_ui.py -k test_partial_fifo_and_costs",
       "result": "NOT_RUN",
-      "evidence": "Test not executed in this environment; Main must verify at exact HEAD."
+      "evidence": "Not executed in this environment; Main exact-HEAD verification required."
     }
   ],
   "remaining_work": [
@@ -83,7 +82,7 @@
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Run pytest with explicit summary and full targeted suite on exact PR HEAD; confirm fixture is fictional, FIFO subtotal 38.2 USD, orphan diagnostics, partial PnL and renderer behavior; independently check separate strategy time-stop.",
+    "verify_now": "Run all nine named tests and existing renderer/trading/ownership regression suites on exact PR HEAD, including Node DOM harness; confirm synthetic-only data, partial realized PnL, orphan diagnostics and strategy time-stop.",
     "if_pass": "Accept only after independent exact-HEAD functional and CI verification.",
     "if_fail": "Return exact HEAD, failed test names, traceback and evidence; do not merge.",
     "blockers": []
