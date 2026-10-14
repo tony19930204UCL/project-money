@@ -1356,12 +1356,15 @@ def create_app(
             journal.extend({**row, "market": market} for row in _jsonl(runtime / f"{market}_journal.jsonl", 2000)
                            if row.get("status") == "SIMULATED")
             marks[market] = {p["ticker"]: p.get("mark") for p in book.get("positions", [])}
-        read_model = build_position_read_model(journal, marks=marks, feed=snapshot.get("feed"))
+        read_model = build_position_read_model(journal, marks=marks, feed=snapshot.get("feed"), accounts=snapshot["markets"])
         snapshot["closed_trades"] = read_model["closed_trades"]
         snapshot["fills"] = read_model["fills"]
         snapshot["read_model"] = {"schema_version": 2, "realized_by_currency": read_model["realized_by_currency"],
                                   "feed_freshness": read_model["feed_freshness"],
-                                  "account_realized_reconciliation": "NOT_VERIFIED"}
+                                  "account_realized_reconciliation": "NOT_VERIFIED",
+                                  "realized_completeness": read_model["realized_completeness"],
+                                  "position_reconciliation": read_model["position_reconciliation"],
+                                  "unmatched_exits": read_model["unmatched_exits"]}
         for market, book in snapshot["markets"].items():
             book["positions"] = [p for p in read_model["open_positions"] if p["market"] == market]
         return snapshot
