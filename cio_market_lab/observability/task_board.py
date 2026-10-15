@@ -55,7 +55,7 @@ def health(kind, ref, start_token=None):
 def safe_text(value, limit=160):
     if not isinstance(value, (str, int, float)) or isinstance(value, bool): return None
     value = str(value)[:limit]
-    if re.search(r"(?i)(token|secret|password|credential|api[_-]?key|bearer|authorization)\\s*[:=]|/home/|/users/|/tmp/|https?://|[;&|$<>]", value): return "[REDACTED]"
+    if re.search(r"(?i)(token|secret|password|credential|api[_-]?key|bearer|authorization)\s*[:=]|/home/|/users/|/tmp/|https?://|[;&|$<>]", value): return "[REDACTED]"
     return value
 
 def clean(value):
