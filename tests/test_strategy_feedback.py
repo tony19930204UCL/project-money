@@ -91,3 +91,79 @@ def test_no_mutation():
     original = table()
     update_weights(pnl(), original, hysteresis=1)
     assert original == table()
+
+
+def test_zero_weight_real_run_once_owned_exit_and_entry_suppression(tmp_path):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from cio_market_lab.engine.paper_trading_loop import PaperAccount, PaperTradingLoop
+
+    class Orders:
+        def _risk_decision(self, request):
+            return SimpleNamespace(allowed=True, reasons=[])
+
+        def submit(self, request):
+            return SimpleNamespace(order_id="synthetic")
+
+    class Feed:
+        def latest(self, symbol):
+            return SimpleNamespace(c=100.0, staleness_seconds=0,
+                                   source="synthetic", ts=datetime(2026, 10, 12, tzinfo=timezone.utc))
+
+    class Strategy:
+        ticker = "MSFT"
+        strategy_id = "MomentumSwing"
+
+        def __init__(self, side, size):
+            self.side, self.size = side, size
+
+        def signals(self, quotes, account):
+            return [Signal("MSFT", "stock", self.side, self.size, None, None, "synthetic")]
+
+    journal = tmp_path / "paper.jsonl"
+    loop = PaperTradingLoop(Orders(), journal, max_position_pct=1)
+    account = PaperAccount(10000)
+    # Seed ownership through the real order path, not a fabricated journal.
+    opened = loop.run_once(Feed(), account, [Strategy("BUY", 4)])
+    assert opened["events"][0]["status"] == "SIMULATED"
+    assert loop.ownership["MSFT"]["qty"] == 4
+
+    zero_buy = apply_weights([Strategy("BUY", 3)], table(0))
+    assert loop.run_once(Feed(), account, zero_buy)["events"] == []
+    assert account.positions["MSFT"] == 4
+
+    zero_sell = apply_weights([Strategy("SELL", 2)], table(0))
+    closed = loop.run_once(Feed(), account, zero_sell)
+    assert len(closed["events"]) == 1
+    assert closed["events"][0]["side"] == "SELL"
+    assert closed["events"][0]["status"] == "SIMULATED"
+    assert closed["events"][0]["size"] == 2
+    assert account.positions["MSFT"] == 2
+    assert loop.ownership["MSFT"]["qty"] == 2
+
+    # Rehydrate from successful fills; foreign exit must still be refused.
+    restarted = PaperTradingLoop(Orders(), journal, max_position_pct=1)
+    assert restarted.ownership["MSFT"]["qty"] == 2
+    assert restarted.ownership["MSFT"]["owner"] == "MomentumSwing"
+    foreign = Strategy("SELL", 1)
+    foreign.strategy_id = "OtherStrategy"
+    foreign_zero = apply_weights([foreign], {
+        "schema_version": 1, "weights": {"OtherStrategy": {"weight": 0}}})
+    rejected = restarted.run_once(Feed(), account, foreign_zero)["events"]
+    assert len(rejected) == 1
+    assert rejected[0]["status"] == "REJECTED"
+    assert rejected[0]["reason"] == "FOREIGN_OR_UNOWNED_POSITION"
+    assert restarted.ownership["MSFT"]["qty"] == 2
+    assert account.positions["MSFT"] == 2
+
+    # A rejected owned exit must not mutate surviving ownership.
+    class RejectOrders(Orders):
+        def _risk_decision(self, request):
+            return SimpleNamespace(allowed=False, reasons=["synthetic_refusal"])
+
+    refused_loop = PaperTradingLoop(RejectOrders(), journal, max_position_pct=1)
+    refused = refused_loop.run_once(Feed(), account, zero_sell)["events"]
+    assert refused[0]["status"] == "REJECTED"
+    assert refused[0]["reason"] == "PAPER_ORDER_REJECTED:synthetic_refusal"
+    assert refused_loop.ownership["MSFT"]["qty"] == 2
+    assert account.positions["MSFT"] == 2

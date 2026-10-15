@@ -78,6 +78,25 @@ class PaperTradingLoop:
         self.sequence = 0
         self.derivatives = derivative_engine
         self.contracts = contracts or {}
+        self.ownership = {}
+        if self.journal_path.exists():
+            for line in self.journal_path.read_text(encoding="utf-8").splitlines():
+                try:
+                    event = json.loads(line)
+                    if event.get("status") != "SIMULATED" or not event.get("strategy_id"):
+                        continue
+                    ticker, owner = event["ticker"], event["strategy_id"]
+                    qty = float(event["size"])
+                    prior = self.ownership.get(ticker)
+                    if event["side"] == "BUY" and (prior is None or prior["owner"] == owner):
+                        self.ownership[ticker] = {"owner": owner, "qty": qty + (prior["qty"] if prior else 0),
+                                                  "entry": prior["entry"] if prior else event.get("fill_price")}
+                    elif event["side"] == "SELL" and prior and prior["owner"] == owner:
+                        prior["qty"] -= qty
+                        if prior["qty"] <= 1e-8:
+                            del self.ownership[ticker]
+                except (ValueError, KeyError, TypeError):
+                    continue
 
     def _journal(self, record):
         self.journal_path.parent.mkdir(parents=True, exist_ok=True)
@@ -103,6 +122,7 @@ class PaperTradingLoop:
         breaker = equity <= account.daily_start_equity * (1 - self.daily_loss_limit)
         results = []
         for strategy in strategies:
+            account.strategy_ownership = self.ownership
             for signal in strategy.signals(quotes, account):
                 self.sequence += 1
                 quote = quotes.get(signal.ticker)
@@ -115,6 +135,15 @@ class PaperTradingLoop:
                     reason = "INVALID_SIGNAL"
                 elif kind not in ("stock", "etf", "option", "warrant", "future"):
                     reason = "INVALID_INSTRUMENT"
+                elif side == "SELL" and getattr(strategy, "strategy_id", None) and (
+                    signal.ticker not in self.ownership or
+                    self.ownership[signal.ticker]["owner"] != strategy.strategy_id or
+                    signal.size > self.ownership[signal.ticker]["qty"] + 1e-8):
+                    reason = "FOREIGN_OR_UNOWNED_POSITION"
+                elif side == "BUY" and getattr(strategy, "strategy_id", None) and (
+                    signal.ticker in self.ownership and
+                    self.ownership[signal.ticker]["owner"] != strategy.strategy_id):
+                    reason = "POSITION_OWNED_BY_OTHER_STRATEGY"
                 elif breaker:
                     reason = "DAILY_LOSS_CIRCUIT_BREAKER"
                 elif kind in ("option", "warrant", "future"):
@@ -171,7 +200,20 @@ class PaperTradingLoop:
                                     account.positions[signal.ticker] = new_qty
                                     account.marks[signal.ticker] = quote.c
                                     fill = price
+                                    owner = getattr(strategy, "strategy_id", None)
+                                    if owner:
+                                        if side == "BUY":
+                                            prior = self.ownership.get(signal.ticker)
+                                            self.ownership[signal.ticker] = {
+                                                "owner": owner, "qty": signal.size + (prior["qty"] if prior else 0),
+                                                "entry": prior["entry"] if prior else price}
+                                        else:
+                                            owned = self.ownership[signal.ticker]
+                                            owned["qty"] -= signal.size
+                                            if owned["qty"] <= 1e-8:
+                                                del self.ownership[signal.ticker]
                 record = dict(sequence=self.sequence, ticker=signal.ticker,
+                              strategy_id=getattr(strategy, 'strategy_id', None),
                               instrument_type=kind, side=side, size=signal.size,
                               thesis=signal.thesis, expected_outcome=signal.expected_outcome,
                               invalidation=signal.invalidation, stop=signal.stop,

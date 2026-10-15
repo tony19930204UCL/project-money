@@ -86,3 +86,28 @@ def test_open_position_not_counted_as_closed():
 def test_cost_review_feedback():
     result = attribute_pnl(closed_trades=[trade(1, fee=4)])
     assert result["learning_feedback"]["suggested_parameter_changes"]["s"]["review_transaction_costs"] is True
+
+
+def test_synthetic_fifo_partial_and_replay():
+    def fill(side, size, price, sequence, fee=0, tax=0):
+        return dict(status="SIMULATED", strategy_id="alpha", ticker="AAA.TW",
+                    side=side, size=size, fill_price=price, fee=fee, tax=tax,
+                    sequence=sequence, quote_timestamp="2026-10-12T10:00:00+08:00")
+    buy = fill("BUY", 10, 100, 1, fee=10)
+    sell = fill("SELL", 4, 110, 2, fee=4, tax=2)
+    result = attribute_pnl([buy, dict(buy, timestamp="duplicate"), sell,
+                            dict(sell, timestamp="duplicate")])
+    assert result["overall"]["closed_trades"] == 1
+    assert result["overall"]["realized_pnl"] == pytest.approx(30)
+    assert result["overall"]["fee_drag"] == pytest.approx(10)
+    assert result["by_currency"]["TWD"]["realized_pnl"] == pytest.approx(30)
+    assert result["by_strategy"]["alpha"]["closed_trades"] == 1
+
+
+def test_unmatched_sell_is_incomplete_not_zero():
+    event = dict(status="SIMULATED", strategy_id="alpha", ticker="AAA.TW",
+                 side="SELL", size=2, fill_price=110, fee=1, tax=0)
+    result = attribute_pnl([event])
+    assert result["overall"]["accounting_status"] == "INCOMPLETE"
+    assert result["overall"]["realized_pnl"] is None
+    assert result["learning_feedback"]["what_worked"] == []

@@ -192,3 +192,40 @@ def test_mean_reversion():
     s = MeanReversion("AAA")
     s.signals({"AAA": SimpleNamespace(c=100)}, None)
     assert len(s.signals({"AAA": SimpleNamespace(c=90)}, None)) == 1
+
+class OwnedStrategy(Strategy):
+    def __init__(self, owner, side="BUY", size=1):
+        super().__init__(side, size)
+        self.strategy_id = owner
+
+
+def test_foreign_sell_and_partial_exit(tmp_path):
+    loop, acc, _ = setup(tmp_path)
+    loop.run_once(Feed({"AAA": 100}), acc, [OwnedStrategy("Momentum", size=3)])
+    result = loop.run_once(Feed({"AAA": 100}), acc, [OwnedStrategy("MeanRev", "SELL")])
+    assert result["events"][0]["reason"] == "FOREIGN_OR_UNOWNED_POSITION"
+    assert acc.positions["AAA"] == 3
+    loop.run_once(Feed({"AAA": 100}), acc, [OwnedStrategy("Momentum", "SELL", 1)])
+    assert loop.ownership["AAA"]["owner"] == "Momentum"
+    assert loop.ownership["AAA"]["qty"] == 2
+
+
+def test_rejected_exit_preserves_owner_and_restart(tmp_path):
+    loop, acc, orders = setup(tmp_path)
+    loop.run_once(Feed({"AAA": 100}), acc, [OwnedStrategy("Momentum", size=2)])
+    orders.allowed = False
+    rejected = loop.run_once(Feed({"AAA": 100}), acc, [OwnedStrategy("Momentum", "SELL", 2)])
+    assert rejected["events"][0]["status"] == "REJECTED"
+    restarted = PaperTradingLoop(orders, loop.journal_path)
+    assert restarted.ownership["AAA"]["owner"] == "Momentum"
+    assert restarted.ownership["AAA"]["qty"] == 2
+
+
+def test_old_owner_cannot_clear_new_owner(tmp_path):
+    loop, acc, _ = setup(tmp_path)
+    loop.run_once(Feed({"AAA": 100}), acc, [OwnedStrategy("Momentum")])
+    loop.run_once(Feed({"AAA": 100}), acc, [OwnedStrategy("Momentum", "SELL")])
+    loop.run_once(Feed({"AAA": 100}), acc, [OwnedStrategy("MeanRev")])
+    event = loop.run_once(Feed({"AAA": 100}), acc, [OwnedStrategy("Momentum", "SELL")])["events"][0]
+    assert event["status"] == "REJECTED"
+    assert loop.ownership["AAA"]["owner"] == "MeanRev"
