@@ -179,6 +179,31 @@ class ObservatoryTests(unittest.TestCase):
         data=json.loads(self.request()[1])
         self.assertEqual([t["id"] for t in data["tasks"]],["good"])
         self.assertTrue(any(d["status"]=="ERROR" for d in data["diagnostics"]))
+    def test_roadmap_null_task_ids_isolated_http(self):
+        roadmap=self.root/"roadmap.json"
+        roadmap.write_text(json.dumps({"projects":[{"id":"synthetic","stages":[{"id":"invalid","task_ids":None}]}]}))
+        self.config["roadmap"]=str(roadmap)
+        code,body,_=self.request()
+        self.assertEqual(code,200)
+        data=json.loads(body)
+        self.assertEqual(data["tasks"][0]["id"],"a")
+        self.assertTrue(any(d["source"]=="roadmap" and d["status"]=="ERROR" and d["message"]=="invalid stage task_ids" for d in data["diagnostics"]))
+    def test_roadmap_acceptance_conditions_list_http(self):
+        roadmap=self.root/"roadmap.json"
+        roadmap.write_text(json.dumps({"projects":[{"id":"synthetic","stages":[{"id":"stage","task_ids":["a"],"acceptance_conditions":["SYNTHETIC_ACCEPTANCE_CRITERION","SYNTHETIC_SECOND"]}]}]}))
+        self.config["roadmap"]=str(roadmap)
+        code,body,_=self.request()
+        self.assertEqual(code,200)
+        data=json.loads(body)
+        self.assertEqual(data["projects"][0]["stages"][0]["acceptance_conditions"],["SYNTHETIC_ACCEPTANCE_CRITERION","SYNTHETIC_SECOND"])
+    def test_roadmap_mixed_valid_invalid_stages(self):
+        roadmap=self.root/"roadmap.json"
+        roadmap.write_text(json.dumps({"projects":[{"id":"synthetic","stages":[{"id":"invalid","task_ids":None},{"id":"valid","task_ids":["a"],"acceptance_conditions":"SYNTHETIC_ACCEPT"}]}]}))
+        self.config["roadmap"]=str(roadmap)
+        data=json.loads(self.request()[1])
+        self.assertEqual([stage["id"] for stage in data["projects"][0]["stages"]],["valid"])
+        self.assertEqual(data["projects"][0]["stages"][0]["acceptance_conditions"],"SYNTHETIC_ACCEPT")
+        self.assertTrue(any(d["status"]=="ERROR" for d in data["diagnostics"]))
     def test_non_loopback_rejected(self):
         with self.assertRaises(ValueError): serve({},host="0.0.0.0",port=0)
     def test_iso_unix(self): self.assertEqual(timestamp(0),"1970-01-01T00:00:00+00:00")
