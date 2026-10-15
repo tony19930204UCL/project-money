@@ -3,6 +3,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 from pathlib import Path
 import socket
 import urllib.parse
@@ -51,6 +52,12 @@ def health(kind, ref, start_token=None):
     except OSError: return "UNKNOWN"
     return "PROCESS_EXISTS_UNVERIFIED"
 
+def safe_text(value, limit=160):
+    if not isinstance(value, (str, int, float)) or isinstance(value, bool): return None
+    value = str(value)[:limit]
+    if re.search(r"(?i)(token|secret|password|credential|api[_-]?key|bearer|authorization)\\s*[:=]|/home/|/users/|/tmp/|https?://|[;&|$<>]", value): return "[REDACTED]"
+    return value
+
 def clean(value):
     if isinstance(value, (str, int, float, bool)) or value is None: return value
     return None
@@ -72,24 +79,25 @@ def normalize(item, source):
     ref = handle.get("ref", item.get("executor_ref"))
     state = str(item.get("state") or item.get("status") or item.get("lifecycle") or "UNKNOWN").upper()
     record = {
-        "id": str(item.get("id") or item.get("obligation_id") or item.get("name") or "")[:160], "title": str(item.get("text") or item.get("title") or item.get("name") or item.get("obligation_id") or item.get("id") or "未命名")[:300],
-        "project": clean(item.get("project")), "stage": clean(item.get("stage")),
-        "lifecycle": state, "owner": clean(item.get("owner")), "priority": clean(item.get("priority")),
+        "id": safe_text(item.get("id") or item.get("obligation_id") or item.get("name") or ""), "title": safe_text(item.get("text") or item.get("title") or item.get("name") or item.get("obligation_id") or item.get("id") or "未命名", 300),
+        "project": safe_text(item.get("project")), "stage": safe_text(item.get("stage")),
+        "lifecycle": state, "owner": safe_text(item.get("owner")), "priority": safe_text(item.get("priority")),
         "due_at": timestamp(item.get("due", item.get("deadline", item.get("next_run_at", item.get("due_at"))))),
         "last_activity_at": timestamp(item.get("updated", item.get("updated_at", item.get("last_run_at", item.get("last_activity_at"))))),
-        "latest_result": clean(item.get("latest_result") or item.get("last_status") or item.get("result") or item.get("reason")),
-        "acceptance_scope": clean(item.get("acceptance_scope") or item.get("accept")),
+        "latest_result": safe_text(item.get("last_status") or item.get("result")),
+        "acceptance_scope": safe_text(item.get("acceptance_scope") or item.get("accept")),
         "dependencies": dependency_list(item.get("blocked_by", item.get("dependencies"))),
-        "blocker": clean(item.get("blocker") or item.get("reason") if state == "BLOCKED" else item.get("blocker")),
-        "executor_kind": kind, "executor_ref": str(ref)[:100] if ref is not None and kind != "cron" else None,
+        "blocker": safe_text(item.get("blocker")),
+        "executor_kind": kind, "executor_ref": None,
         "executor_health": health(kind, ref, handle.get("start_token") or handle.get("start_time") or handle.get("start_ticks")),
         "source_updated_at": timestamp(item.get("updated", item.get("updated_at", item.get("source_updated_at")))),
         "original_deadline": timestamp(item.get("original_deadline", item.get("deadline"))),
-        "original_terminal_failure": item.get("original_terminal_failure") if isinstance(item.get("original_terminal_failure"), str) else None,
-        "recovery_state": item.get("recovery_state") if isinstance(item.get("recovery_state"), str) else None,
+        "original_terminal_failure": safe_text(item.get("original_terminal_failure")),
+        "recovery_state": safe_text(item.get("recovery_state")),
         "source": source,
     }
-    record["stale"] = bool(record["source_updated_at"] and (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(record["source_updated_at"])).total_seconds() > 86400)
+    record["activity_freshness"] = "UNKNOWN" if not record["source_updated_at"] else ("STALE" if (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(record["source_updated_at"])).total_seconds() > 86400 else "FRESH")
+    record["stale"] = record["activity_freshness"] == "STALE"
     record["overdue"] = bool(record["due_at"] and dt.datetime.fromisoformat(record["due_at"]) < dt.datetime.now(dt.timezone.utc) and state not in ("DONE", "VERIFIED", "CANCELLED"))
     record["running"] = False  # PID existence alone never proves actual task execution
     record["scheduled"] = (kind == "cron" and item.get("enabled", True) is not False) or state == "SCHEDULED"
@@ -184,7 +192,7 @@ def project(config):
     roadmap = loaded.get("roadmap", {})
     if isinstance(roadmap, dict):
         for p in roadmap.get("projects", []):
-            if isinstance(p, dict):
+            if isinstance(p, dict) and isinstance(p.get("stages", []), list):
                 roadmaps.append({"id": clean(p.get("id")), "title": clean(p.get("title")),
                     "stages": [{"id": clean(s.get("id")), "title": clean(s.get("title")),
                                 "task_ids": [str(x) for x in s.get("task_ids", []) if isinstance(x, (str, int))],
@@ -192,6 +200,8 @@ def project(config):
                                 "acceptance_scope": clean(s.get("acceptance_scope")),
                                 "acceptance_conditions": clean(s.get("acceptance_conditions"))}
                                for s in p.get("stages", []) if isinstance(s, dict)]})
+    if isinstance(roadmap, dict) and any(not isinstance(p, dict) or not isinstance(p.get("stages", []), list) for p in roadmap.get("projects", [])):
+        diagnostics.append({"source": "roadmap", "status": "ERROR", "message": "invalid project stages"})
     return {"tasks": tasks, "diagnostics": diagnostics, "projects": roadmaps, "freshness_threshold_seconds": threshold,
             "polled_at": dt.datetime.now(dt.timezone.utc).isoformat()}
 
