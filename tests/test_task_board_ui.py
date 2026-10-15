@@ -7,9 +7,10 @@ from pathlib import Path
 JS=Path(__file__).resolve().parents[1]/"cio_market_lab/observability/task-board.js"
 HARNESS=r"""
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
+class TextNode {constructor(value){this.value=value}get textContent(){return this.value}}
 class Node {
  constructor(tag='div'){this.tag=tag;this.children=[];this.value='';this.text='';this.listeners={};this.attributes={}}
- set textContent(v){this.text=String(v);this.children=[]}
+ set textContent(v){this.text='';this.children=[];if(String(v))this.children=[new TextNode(String(v))]}
  get textContent(){return this.text+this.children.map(c=>c.textContent).join('')}
  appendChild(n){this.children.push(n);return n}
  removeChild(n){this.children.splice(this.children.indexOf(n),1)}
