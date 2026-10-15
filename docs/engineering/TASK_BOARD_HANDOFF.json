@@ -4,36 +4,34 @@
   "pr_number": 51,
   "branch": "feat/task-observatory-20261015",
   "task_id": "task-observatory-20261015",
-  "instruction_id": "task_observatory_001-r3",
-  "source_head_sha": "2306edad5b7143730777fd698049909eca3ef728",
+  "instruction_id": "task_observatory_001-r4",
+  "source_head_sha": "21f3842756d779d923f310f41a9213d0dea4e60d",
   "status": "READY_FOR_REVIEW",
-  "summary": "R3 source fixes for Main's 3 reproduced failures: PID existence no longer genuine running; scalar dependencies atomic; linked failed obligation lifecycle and deadline retained. Additional audit hardening: relay root confinement, privacy redaction and conservative free-text omission, malformed row diagnostics, registry items compatibility, freshness threshold, UI schema validation, roadmap acceptance/unassigned, persistent refresh errors. Source-only; NOT_RUN.",
+  "summary": "R4: boolean blocked_by is invalid and rejected with row diagnostics; corrected privacy redaction regex for token=secret in allowlisted strings; distinguished explicitly supported legacy obligation_registry.items from malformed unknown schema, with separate positive legacy test. No deployment.",
   "changed_files": [
     "cio_market_lab/observability/task_board.py",
-    "cio_market_lab/observability/task-board.js",
     "tests/test_task_board.py",
-    "tests/test_task_board_ui.py",
     "docs/engineering/TASK_BOARD_HANDOFF.json"
   ],
   "tests": [
     {
       "command": "PYTHONPATH=. python -m pytest -o addopts= -q tests/test_task_board.py tests/test_task_board_ui.py",
       "result": "NOT_RUN",
-      "evidence": "Main prior exact HEAD 0fb0a9f02ced825dc85707e150aaa31304648bbb: 33 passed, 3 failed in external synthetic regression suite. R3 source edits via GitHub connector; no local execution."
+      "evidence": "Main previous exact HEAD cd7d7a5c9a6bd78c1613cc5ac25d21932f4860fd: 44 passed, 3 failed; R4 GitHub edits not locally executed."
     }
   ],
   "remaining_work": [
     {
-      "item": "Main run exact-HEAD tests including independent Issue52/audit synthetic regressions; inspect residual privacy, relay containment, and source freshness concerns",
+      "item": "Main independently run exact-HEAD backend, Node UI, and Issue52 synthetic security/integration regressions",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Run full targeted pytest and independent synthetic regressions at exact PR HEAD; review read-only source security.",
-    "if_pass": "Source acceptance only; separately verify original host and client-visible deployment.",
-    "if_fail": "Return exact HEAD and traceback for bounded correction.",
+    "verify_now": "Run targeted pytest and independent synthetic audit regressions on exact PR HEAD; check legacy registry and unknown-schema behavior.",
+    "if_pass": "Source-only acceptance; original-host integration and deployment separately required.",
+    "if_fail": "Return exact HEAD and failing assertions for bounded repair.",
     "blockers": []
   }
 }
