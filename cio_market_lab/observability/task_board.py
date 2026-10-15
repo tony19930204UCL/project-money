@@ -71,14 +71,15 @@ def dependency_list(value):
     for entry in value:
         if isinstance(entry, dict): entry = entry.get("id", entry.get("obligation_id"))
         if isinstance(entry, bool) or not isinstance(entry, (str, int)): raise ValueError("invalid dependency")
-        result.append(str(entry)[:160])
+        result.append(safe_text(entry))
     return result[:30]
 
 def normalize(item, source):
     handle = item.get("handle") if isinstance(item.get("handle"), dict) else (item.get("execution_handle") if isinstance(item.get("execution_handle"), dict) else {})
-    kind = str(handle.get("kind") or item.get("executor_kind") or ("cron" if source == "cron_jobs" else "manual"))
+    kind = safe_text(handle.get("kind") or item.get("executor_kind") or ("cron" if source == "cron_jobs" else "manual")) or "manual"
     ref = handle.get("ref", item.get("executor_ref"))
-    state = str(item.get("state") or item.get("status") or item.get("lifecycle") or "UNKNOWN").upper()
+    state = safe_text(item.get("state") or item.get("status") or item.get("lifecycle") or "UNKNOWN") or "UNKNOWN"
+    state = state.upper() if state != "[REDACTED]" else "UNKNOWN"
     record = {
         "id": safe_text(item.get("id") or item.get("obligation_id") or item.get("name") or ""), "title": safe_text(item.get("text") or item.get("title") or item.get("name") or item.get("obligation_id") or item.get("id") or "未命名", 300),
         "project": safe_text(item.get("project")), "stage": safe_text(item.get("stage")),
@@ -193,7 +194,7 @@ def project(config):
     roadmap = loaded.get("roadmap", {})
     if isinstance(roadmap, dict):
         for project_index, p in enumerate(roadmap.get("projects", [])):
-            if not isinstance(p, dict) or not isinstance(p.get("stages", []), list):
+            if not isinstance(p, dict) or not isinstance(p.get("stages"), list):
                 diagnostics.append({"source": "roadmap", "status": "ERROR", "message": "invalid project stages", "index": project_index})
                 continue
             stages = []
