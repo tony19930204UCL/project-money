@@ -69,7 +69,7 @@ class ObservatoryTests(unittest.TestCase):
         self.assertTrue(json.loads(self.request()[1])["tasks"][0]["awaiting_acceptance"])
     def test_link_dedupe(self):
         registry=self.root/"registry.json"
-        registry.write_text(json.dumps({"items":[{"id":"ob1","state":"OPEN"}]}))
+        registry.write_text(json.dumps({"obligations":[{"obligation_id":"ob1","status":"OPEN"}]}))
         self.config["obligation_registry"]=str(registry)
         self.write({"items":[{"id":"c1","registry_link":{"obligation_id":"ob1"}}]})
         self.assertEqual(len(json.loads(self.request()[1])["tasks"]),1)
@@ -79,6 +79,58 @@ class ObservatoryTests(unittest.TestCase):
         self.config["roadmap"]=str(roadmap)
         self.write({"items":[{"id":"a","state":"DONE"}]})
         self.assertEqual(json.loads(self.request()[1])["projects"][0]["stages"][0]["observed_state"],"original_host_pending")
+    def test_real_obligation_schema_overdue(self):
+        p=self.root/"registry.json"
+        p.write_text(json.dumps({"obligations":[{"obligation_id":"ob7","title":"SYNTHETIC obligation","status":"OPEN","deadline":"2000-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}))
+        self.config["obligation_registry"]=str(p)
+        data=json.loads(self.request()[1])
+        task=next(t for t in data["tasks"] if t["id"]=="ob7")
+        self.assertEqual(task["title"],"SYNTHETIC obligation")
+        self.assertTrue(task["overdue"])
+    def test_registry_invalid_schema_visible(self):
+        p=self.root/"registry.json";p.write_text('{"items":[]}')
+        self.config["obligation_registry"]=str(p)
+        data=json.loads(self.request()[1])
+        self.assertTrue(any(d["source"]=="obligation_registry" and d["status"]=="ERROR" for d in data["diagnostics"]))
+    def test_dedupe_lifecycle_conflict(self):
+        p=self.root/"registry.json";p.write_text(json.dumps({"obligations":[{"obligation_id":"ob1","status":"DONE"}]}))
+        self.config["obligation_registry"]=str(p)
+        self.write({"items":[{"id":"c1","state":"PLANNED","registry_link":{"obligation_id":"ob1"}}]})
+        data=json.loads(self.request()[1])
+        self.assertEqual(len(data["tasks"]),1)
+        self.assertTrue(any(d["status"]=="CONFLICT" for d in data["diagnostics"]))
+    def test_cron_name_and_scheduled(self):
+        p=self.root/"cron.json";p.write_text(json.dumps({"jobs":[{"name":"SYNTHETIC nightly","enabled":True,"state":"IDLE","next_run_at":"2030-01-01T00:00:00Z","last_status":"DONE"}]}))
+        self.config["cron_jobs"]=str(p)
+        task=next(t for t in json.loads(self.request()[1])["tasks"] if t["source"]=="cron_jobs")
+        self.assertEqual(task["title"],"SYNTHETIC nightly")
+        self.assertEqual(task["executor_kind"],"cron")
+        self.assertTrue(task["scheduled"])
+        self.assertFalse(task["running"])
+    def test_relay_real_backlog_status(self):
+        state=self.root/"relaystate";state.mkdir()
+        (state/"backlog.json").write_text(json.dumps({"items":[{"id":"child","status":"DONE","title":"SYNTHETIC child"}]}))
+        (state/"executor_latest.json").write_text(json.dumps({"id":"executor","status":"PENDING","result":"waiting"}))
+        job=self.root/"job.json";job.write_text(json.dumps({"state_dir":str(state)}))
+        plan=self.root/"plan.json";plan.write_text(json.dumps({"jobs":[str(job)]}))
+        self.config["relay_plan"]=str(plan)
+        tasks=json.loads(self.request()[1])["tasks"]
+        self.assertEqual(next(t for t in tasks if t["id"]=="child")["lifecycle"],"DONE")
+        self.assertEqual(next(t for t in tasks if t["id"]=="executor")["lifecycle"],"PENDING")
+        self.assertFalse(next(t for t in tasks if t["id"]=="child")["running"])
+    def test_source_mtime_and_stale(self):
+        import os,time
+        os.utime(self.ledger,(time.time()-172800,time.time()-172800))
+        diagnostic=next(d for d in json.loads(self.request()[1])["diagnostics"] if d["source"]=="commitment_ledger")
+        self.assertTrue(diagnostic["stale"])
+        self.assertIsNotNone(diagnostic["source_mtime"])
+    def test_pid_start_token_mismatch(self):
+        import os
+        from unittest.mock import patch
+        from cio_market_lab.observability.task_board import health
+        if os.name!="posix": return
+        with patch("pathlib.Path.exists",return_value=True),patch("pathlib.Path.read_text",return_value="123 (synthetic) S "+" ".join(["0"]*19)+" 456 "+" ".join(["0"]*5)):
+            self.assertEqual(health("pid",123,"not-456"),"PID_REUSED")
     def test_non_loopback_rejected(self):
         with self.assertRaises(ValueError): serve({},host="0.0.0.0",port=0)
     def test_iso_unix(self): self.assertEqual(timestamp(0),"1970-01-01T00:00:00+00:00")
