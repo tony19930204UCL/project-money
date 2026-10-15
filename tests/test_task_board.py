@@ -204,6 +204,25 @@ class ObservatoryTests(unittest.TestCase):
         self.assertEqual([stage["id"] for stage in data["projects"][0]["stages"]],["valid"])
         self.assertEqual(data["projects"][0]["stages"][0]["acceptance_conditions"],"SYNTHETIC_ACCEPT")
         self.assertTrue(any(d["status"]=="ERROR" for d in data["diagnostics"]))
+    def test_sensitive_lifecycle_dependency_executor_http(self):
+        self.write({"items":[{"id":"SYNTHETIC","text":"safe","state":"token=SYNTHETIC_SECRET","blocked_by":["token=SYNTHETIC_SECRET"],"executor_kind":"token=SYNTHETIC_SECRET"}]})
+        code,body,_=self.request()
+        self.assertEqual(code,200)
+        self.assertNotIn("SYNTHETIC_SECRET",body.decode())
+        task=json.loads(body)["tasks"][0]
+        self.assertEqual(task["lifecycle"],"UNKNOWN")
+        self.assertEqual(task["dependencies"],["[REDACTED]"])
+        self.assertEqual(task["executor_kind"],"[REDACTED]")
+    def test_missing_roadmap_stages_preserves_ledger_http(self):
+        p=self.root/"roadmap.json"
+        p.write_text(json.dumps({"projects":[{"id":"SYNTHETIC_NO_STAGES"}]}))
+        self.config["roadmap"]=str(p)
+        code,body,_=self.request()
+        self.assertEqual(code,200)
+        data=json.loads(body)
+        self.assertEqual(data["tasks"][0]["id"],"a")
+        self.assertTrue(any(d["source"]=="roadmap" and d["status"]=="ERROR" for d in data["diagnostics"]))
+        self.assertEqual(data["projects"],[])
     def test_non_loopback_rejected(self):
         with self.assertRaises(ValueError): serve({},host="0.0.0.0",port=0)
     def test_iso_unix(self): self.assertEqual(timestamp(0),"1970-01-01T00:00:00+00:00")
