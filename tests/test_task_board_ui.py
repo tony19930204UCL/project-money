@@ -36,6 +36,10 @@ setImmediate(async()=>{
  assert(ids.content.textContent.includes('original_host_pending'));
  assert(ids.errors.textContent.includes('SYNTHETIC network offline'));
  assert(ids.updated.textContent===oldStamp);
+ ids.search.value='task1';ids.search.listeners.input();assert(ids.errors.textContent.includes('SYNTHETIC network offline'));
+ ids.search.value='';buttons[0].listeners.click();assert(ids.errors.textContent.includes('SYNTHETIC network offline'));
+ fail=false;await tick();assert(!ids.errors.textContent.includes('SYNTHETIC network offline'));
+ assert(ids.content.textContent.includes('來源已接受'));
  console.log('UI behavioral PASS');
 });
 """
