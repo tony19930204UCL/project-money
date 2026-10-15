@@ -88,10 +88,16 @@ class ObservatoryTests(unittest.TestCase):
         self.assertEqual(task["title"],"SYNTHETIC obligation")
         self.assertTrue(task["overdue"])
     def test_registry_invalid_schema_visible(self):
-        p=self.root/"registry.json";p.write_text('{"items":[]}')
+        p=self.root/"registry.json";p.write_text('{"unexpected":[]}')
         self.config["obligation_registry"]=str(p)
         data=json.loads(self.request()[1])
         self.assertTrue(any(d["source"]=="obligation_registry" and d["status"]=="ERROR" for d in data["diagnostics"]))
+    def test_registry_legacy_items_supported(self):
+        p=self.root/"registry.json";p.write_text('{"items":[{"id":"legacy","state":"OPEN"}]}')
+        self.config["obligation_registry"]=str(p)
+        data=json.loads(self.request()[1])
+        self.assertTrue(any(t["id"]=="legacy" for t in data["tasks"]))
+        self.assertFalse(any(d["source"]=="obligation_registry" and d["status"]=="ERROR" for d in data["diagnostics"]))
     def test_dedupe_lifecycle_conflict(self):
         p=self.root/"registry.json";p.write_text(json.dumps({"obligations":[{"obligation_id":"ob1","status":"DONE"}]}))
         self.config["obligation_registry"]=str(p)
