@@ -4,44 +4,39 @@
   "pr_number": 50,
   "branch": "feat/paper-desk-repair-20261014",
   "task_id": "paper-desk-repair-20261014",
-  "instruction_id": "desk_zero_weight_exit_012-r0",
-  "source_head_sha": "5175c73581eb68927b82257954141bd406086f84",
-  "status": "READY_FOR_REVIEW",
-  "summary": "Source-only zero-entry-weight correction: WeightedStrategy still evaluates underlying signals, suppresses BUY at multiplier zero, and preserves unchanged SELL quantity for PaperTradingLoop ownership/risk validation. Added real run_once synthetic owned partial SELL, zero-weight BUY suppression, restart, foreign-owner refusal and rejected-fill regression. Scheduled accounting remains outside this instruction.",
+  "instruction_id": "desk_scheduled_accounting_013-r0",
+  "source_head_sha": "b109519aee2c8f0f27b1df3b1a87732694c6e13a",
+  "status": "BLOCKED",
+  "summary": "Partial implementation only: FIFO matching of simulated fills, fee allocation, duplicate suppression, incomplete-event flag and attribution regressions committed. Full scheduled producer known-answer and currency/feedback acceptance not yet verified; do not treat as READY_FOR_REVIEW.",
   "changed_files": [
-    "cio_market_lab/engine/strategy_feedback.py",
-    "tests/test_strategy_feedback.py",
+    "cio_market_lab/engine/pnl_attribution.py",
+    "tests/test_pnl_attribution.py",
     "docs/engineering/PAPER_DESK_REPAIR_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "pytest -q tests/test_strategy_feedback.py",
+      "command": "pytest -q tests/test_pnl_attribution.py tests/test_paper_scheduler.py",
       "result": "NOT_RUN",
-      "evidence": "No runnable checkout/test execution available in this GitHub connector session; test added but not claimed passing."
+      "evidence": "No tests executed in this connector session."
     },
     {
       "command": "pytest -q tests/test_paper_trading_loop.py tests/test_paper_runner.py tests/test_paper_strategy_policy.py tests/test_strategy_feedback.py tests/test_paper_position_read_model.py tests/test_paper_desk_ui.py tests/test_api_and_integrations.py",
       "result": "NOT_RUN",
-      "evidence": "Main previously reported 88 passing at b9f41701a044621d564777dffaf53298d4e0e6dc, not at this changed HEAD."
+      "evidence": "Earlier Main 89-pass result applies to prior HEAD only."
     }
   ],
   "remaining_work": [
     {
-      "item": "Main independently run existing 88 affected tests plus added executable zero-weight run_once regression on exact PR HEAD; confirm CI and unchanged owner/risk guards.",
+      "item": "Complete scheduler producer synthetic end-to-end regression, currency-safe reporting, replay and feedback gating; independently execute full affected tests.",
       "status": "ACTIONABLE_NOW",
-      "owner": "Main CIO"
-    },
-    {
-      "item": "Scheduled accounting producer defect remains: cio_market_lab/engine/paper_scheduler.py and cio_market_lab/engine/pnl_attribution.py are outside write_allowlist. Synthetic run_daily persisted realized_pnl=0 and closed_trades=0 rather than net 9 and one matched close; separate authorization required.",
-      "status": "BLOCKED_OUT_OF_SCOPE",
-      "owner": "Main CIO"
+      "owner": "Main CIO / implementation"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "At exact HEAD execute affected 88 regressions and test_zero_weight_real_run_once_owned_exit_and_entry_suppression; inspect SELL fill, BUY suppression, foreign-owner rejection, restart and rejected-fill invariants.",
-    "if_pass": "Accept only bounded source-only zero-weight exit fix; scheduled accounting and ABC remain unaccepted.",
-    "if_fail": "Return exact HEAD, test command, traceback and failing assertion for same-branch bounded revision.",
+    "verify_now": "Review partial code at exact HEAD, run attribution and scheduler tests; verify actual synthetic producer report, currency safety and feedback before acceptance.",
+    "if_pass": "Continue bounded remaining scheduler and accounting contract work; do not deploy or claim learning improvement.",
+    "if_fail": "Return exact failing SHA and traceback for bounded correction.",
     "blockers": []
   }
 }
