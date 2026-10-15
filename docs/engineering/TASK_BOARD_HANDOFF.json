@@ -1,0 +1,37 @@
+{
+  "schema_version": 2,
+  "repository": "tony19930204UCL/project-money",
+  "pr_number": 51,
+  "branch": "feat/task-observatory-20261015",
+  "task_id": "task-observatory-20261015",
+  "instruction_id": "task_observatory_001-r6",
+  "source_head_sha": "53451e6026d36bacc1a383727b60929003f3be78",
+  "status": "READY_FOR_REVIEW",
+  "summary": "R6: redact privacy-sensitive lifecycle state, dependency values and executor kind before HTTP projection; fail-visible diagnostic for roadmap projects missing stages while preserving healthy sources. Added two real synthetic HTTP regressions. No deployment/runtime writes.",
+  "changed_files": [
+    "cio_market_lab/observability/task_board.py",
+    "tests/test_task_board.py",
+    "docs/engineering/TASK_BOARD_HANDOFF.json"
+  ],
+  "tests": [
+    {
+      "command": "PYTHONPATH=. python -m pytest -o addopts= -q tests/test_task_board.py tests/test_task_board_ui.py",
+      "result": "NOT_RUN",
+      "evidence": "Main isolated previous HEAD 47c389a611f36a6f0fc7446a865ed5602d797683: 53 passed, 2 failed. R6 commits written through GitHub connector; no tests executed in this session."
+    }
+  ],
+  "remaining_work": [
+    {
+      "item": "Main independently rerun exact-head suite, independent Issue52 synthetic HTTP/Node regressions, and audit security checks",
+      "status": "ACTIONABLE_NOW",
+      "owner": "Main CIO"
+    }
+  ],
+  "next_step_reminder": {
+    "to": "Main CIO",
+    "verify_now": "Run targeted pytest and independent synthetic HTTP regressions on exact PR HEAD, particularly sensitive lifecycle/dependency/executor and missing roadmap stages.",
+    "if_pass": "Accept source only, subject to separate original-host and deployment review.",
+    "if_fail": "Return exact HEAD, traceback and concrete counterexample for bounded repair.",
+    "blockers": []
+  }
+}

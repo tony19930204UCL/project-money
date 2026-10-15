@@ -1,0 +1,40 @@
+# Read-only Task Observatory — implementation contract v1
+
+## Product outcome
+A Traditional-Chinese dynamic webpage explaining what the assistant is doing, what is merely scheduled/planned, why something is blocked, the latest verifiable result, and where each project is on its roadmap. This is an observability surface, NOT another task scheduler or an optimistic progress report. No trading actions.
+
+## Separate scope
+New feature branch and PR from main; do not modify or depend on unrelated open repair PRs. Preserve existing app and trading behavior. Implement a portable, standalone localhost-only server with Python stdlib plus static HTML/CSS/JS. No framework installation, CDN, cloud service, paid API/model, or Hermes plugin/config edits. Do not merge, deploy, start a public server, or edit runtime ledgers. Main handles original-host integration after source acceptance.
+
+## Decided interface and files
+Allowed source files only:
+- cio_market_lab/observability/__init__.py
+- cio_market_lab/observability/task_board.py
+- cio_market_lab/observability/task-board.html
+- cio_market_lab/observability/task-board.js
+- cio_market_lab/observability/task-board.css
+- tests/test_task_board.py
+- tests/test_task_board_ui.py
+- docs/engineering/TASK_BOARD_SCOPE.md
+- docs/engineering/TASK_BOARD_HANDOFF.json
+- docs/engineering/TASK_BOARD_CONFIG.example.json
+
+Run contract: python -m cio_market_lab.observability.task_board --config FILE --host 127.0.0.1 --port 8781. Reject non-loopback binds. GET / serves page, /api/status produces projected live JSON. Only exact known static routes allowed. No mutation endpoints; reject POST/PUT/DELETE. No CORS wildcard. Response Cache-Control:no-store and safe MIME/nosniff. Bound file sizes and request paths; do not expose arbitrary file-reading or browse directories. Server receives explicit source paths via LOCAL config only. Never scan the user's home. No credentials in browser or frontend config. Each request re-reads configured data; polling 10 seconds with last successful timestamp and stale/error state, never fake ongoing refresh. Use textContent (not raw HTML) for all untrusted strings.
+
+## Data adapters (read-only, tolerant, explicit)
+Sources are optional paths in config: commitment_ledger, obligation_registry, relay_plan, cron_jobs, roadmap. Preserve raw lifecycle separately from derived execution_health and acceptance_scope. Return normalized tasks with id, title, project/stage mapping, lifecycle, owner, priority if supplied, due_at, last_activity_at, latest_result, acceptance_scope, dependencies, blocker, executor_kind, executor_ref, executor_health, source_updated_at, evidence metadata. Project only allowlisted fields; never serialize raw source documents, prompts, commands, environment, credentials, browser URLs, tokens, account values, positions, trade logs or arbitrary evidence file contents. Do not read files referenced by arbitrary evidence paths. Local evidence labels/paths may be projected as plain text, no file URLs or download endpoints. Sample data must be unmistakably SYNTHETIC and never used as live fallback.
+
+Commitment shape: {items:[{id,text,state,created,updated,due,handle:{kind,ref},blocked_by,defer,reason,accept,registry_link:{obligation_id,...},history:...}]}. Timestamps numeric UNIX or ISO supported. Handle kind pid: inspect real process conservatively, a zombie is not running, permission denied is UNKNOWN, missing PID is DEAD. A PID alone is not proof its intended job is healthy. Cron binding is SCHEDULED, never RUNNING simply because enabled. Explicit recent run evidence may show RUNNING separately. manual handle is UNVERIFIED, not active. VERIFIED means accepted at the stated scope; do not rewrite a terminal ledger state just because original worker exited. DISPATCHED with a dead PID is abnormal and visible. Overdue and freshness are orthogonal flags. Deferred and blocked are different. Registry links dedupe commitments/obligations by explicit ID, never by fuzzy title; preserve source disagreements. Unknown/malformed/missing sources show diagnostics and do not imply an empty successful system. Missing registry is not fatal if ledger is readable. Relay plan {jobs:[job.json paths]} may be read only when configured; job JSON derives state_dir; read exact known backlog.json/executor_latest.json/executor_terminal.json in that directory with same size limits. Do not expose transport_command or approval/auth files. Completed child backlog is not proof parent feature deployed. Show per-source freshness and source error; distinguish a freshly polled old artifact from fresh activity.
+
+## Roadmap truth contract
+Explicit read-only local roadmap JSON defines projects, ordered stages, task IDs, dependencies, acceptance conditions, observed state and evidence scope. UI must NOT infer project completion from average task percentages or all source tasks DONE. No invented ETA or progress %. An unverified stage remains awaiting verification; source_accepted, deployed, original_host_verified and client_received are different acceptance scopes. Parent stage may remain original-host pending even if all implementation children are complete. Roadmap stage labels: engineering correctness, live reconciliation, strategy validation, capability expansion (defaults are labels only, not assertions about current client state). Unmapped tasks appear in an unassigned group, not silently omitted. Planned work with no executor is clearly NOT STARTED, not running. Due dates are promised deadlines, not model-estimated ETAs.
+
+## UI decisions
+Top summary: genuinely running / scheduled / not started / blocked / awaiting acceptance / overdue. Default landing: What is happening now, needs attention, and current project stage. Then tabs or filters for task board, roadmap and recent changes. Task detail includes why, last evidence/result, executor health, deadline, dependency and acceptance boundary. Search by task ID/title, filter project/status, sort attention then deadline. History is based on supplied event timestamps, never fabricated events or internal chain-of-thought. Traditional Chinese, responsive mobile readable, sober dark UI, color plus labels, keyboard accessible, no external assets. Data error must remain visible with last valid update rather than flashing fabricated zero tasks. Read-only, no cancel/rerun buttons.
+
+## Acceptance and negative tests
+Implement at least 15 meaningful backend/UI tests, not token-count or mere source substring tests. Backend tests use temporary SYNTHETIC files and exercise real HTTP server on an ephemeral port, GET projection, disk mutation then refresh, method rejection, traversal, secret omission, missing/malformed sources, stale evidence, zombie/dead/manual/cron status, overdue, dedupe and roadmap source-vs-live mismatch. UI tests execute the real JavaScript via Node with a small DOM/fetch harness, asserting rendering of pending/running/blocked/accepted-source-not-deployed, filters, escaped hostile input, refresh and fetch-error/last-valid-data behavior. No pytest skip for missing behavior, no weakening tests. Keep the existing source main suite compatible.
+Acceptance command for Main (with the repository test environment): PYTHONPATH=. python -m pytest -o addopts= -q tests/test_task_board.py tests/test_task_board_ui.py
+
+## Handoff
+Implement the product, not just a plan/mockup. Commit coherent source on assigned feature branch using GitHub connector. If sandbox cannot run tests, honestly state NOT_RUN; Main executes independently. Do not request any private runtime data. Write schema-v2 TASK_BOARD_HANDOFF.json with exact assigned repo, PR, branch, task_id, instruction_id, real source_head_sha before mailbox commit, status READY_FOR_REVIEW/WAITING_CI/BLOCKED, changed_files, tests[{command,result,evidence}], remaining_work, next_step_reminder addressed to Main CIO. Finish with PR/head/status. A source test PASS is not host deployment. Stop and report actual platform safety denial; no rephrasing/account/tool bypass.
