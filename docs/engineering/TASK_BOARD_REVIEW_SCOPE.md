@@ -1,0 +1,3 @@
+# Independent read-only Task Board review
+
+Review PR 51 code at source d85411b05934dfb952278b00c1dfddf4a36a71fa. Prioritize security, path containment, privacy projections, write-method rejection, stale/unknown accuracy, Roadmap UX and executing JS behavior. This branch may write only TASK_BOARD_INDEPENDENT_REVIEW.md and TASK_BOARD_REVIEW_HANDOFF.json in docs/engineering. No implementation writes, no merge/deploy, no actual user records, accounts or journals. Distinguish observed source bugs from hypotheses and unexecuted tests. Realism/schema integration is being fixed separately; independently identify non-overlapping issues and cite file/function. This is source review only, not deployment certification.
