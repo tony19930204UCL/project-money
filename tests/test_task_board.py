@@ -131,6 +131,48 @@ class ObservatoryTests(unittest.TestCase):
         if os.name!="posix": return
         with patch("pathlib.Path.exists",return_value=True),patch("pathlib.Path.read_text",return_value="123 (synthetic) S "+" ".join(["0"]*19)+" 456 "+" ".join(["0"]*5)):
             self.assertEqual(health("pid",123,"not-456"),"PID_REUSED")
+    def test_pid_exists_not_genuine_running(self):
+        import os
+        self.write({"items":[{"id":"SYNTHETIC_PID","state":"DISPATCHED","handle":{"kind":"pid","ref":str(os.getpid())}}]})
+        self.assertFalse(json.loads(self.request()[1])["tasks"][0]["running"])
+    def test_string_dependency_is_atomic(self):
+        self.write({"items":[{"id":"SYNTHETIC_DEP","state":"BLOCKED","blocked_by":"SYNTHETIC_EVENT"}]})
+        self.assertEqual(json.loads(self.request()[1])["tasks"][0]["dependencies"],["SYNTHETIC_EVENT"])
+    def test_registry_failed_history_survives_dedupe(self):
+        p=self.root/"registry.json"
+        p.write_text(json.dumps({"items":[{"id":"SYNTHETIC_FAILED","state":"FAILED_DEADLINE","deadline":"2000-01-01T00:00:00Z"}]}))
+        self.config["obligation_registry"]=str(p)
+        self.write({"items":[{"id":"SYNTHETIC_LINK","state":"VERIFIED","registry_link":{"obligation_id":"SYNTHETIC_FAILED"}}]})
+        data=json.loads(self.request()[1])
+        self.assertEqual(len(data["tasks"]),1)
+        self.assertEqual(data["tasks"][0]["registry_lifecycle"],"FAILED_DEADLINE")
+        self.assertTrue(any(d["status"]=="CONFLICT" for d in data["diagnostics"]))
+    def test_secret_in_allowed_values_redacted(self):
+        self.write({"items":[{"id":"x","text":"token=synthetic-secret","reason":"token=synthetic-secret","owner":"token=synthetic-secret","handle":{"kind":"manual","ref":"/home/synthetic/private"}}]})
+        body=self.request()[1].decode()
+        self.assertNotIn("synthetic-secret",body)
+        self.assertNotIn("/home/synthetic/private",body)
+    def test_relay_job_outside_root_rejected(self):
+        allowed=self.root/"allowed";allowed.mkdir()
+        other=self.root/"other";other.mkdir()
+        (other/"job.json").write_text(json.dumps({"state_dir":str(other)}))
+        (other/"backlog.json").write_text(json.dumps({"items":[{"id":"leak","title":"SYNTHETIC_PRIVATE"}]}))
+        plan=allowed/"plan.json";plan.write_text(json.dumps({"jobs":[str(other/"job.json")]}))
+        self.config["relay_plan"]=str(plan)
+        data=json.loads(self.request()[1])
+        self.assertFalse(any(t["id"]=="leak" for t in data["tasks"]))
+        self.assertTrue(any(d["source"]=="relay_plan" and d["status"]=="ERROR" for d in data["diagnostics"]))
+    def test_malformed_roadmap_isolated(self):
+        p=self.root/"roadmap.json";p.write_text('{"projects":[{"id":"p","stages":null}]}')
+        self.config["roadmap"]=str(p)
+        data=json.loads(self.request()[1])
+        self.assertEqual(data["tasks"][0]["id"],"a")
+        self.assertTrue(any(d["source"]=="roadmap" and d["status"]=="ERROR" for d in data["diagnostics"]))
+    def test_malformed_dependency_row_visible(self):
+        self.write({"items":[{"id":"bad","blocked_by":True},{"id":"good","state":"PLANNED"}]})
+        data=json.loads(self.request()[1])
+        self.assertEqual([t["id"] for t in data["tasks"]],["good"])
+        self.assertTrue(any(d["status"]=="ERROR" for d in data["diagnostics"]))
     def test_non_loopback_rejected(self):
         with self.assertRaises(ValueError): serve({},host="0.0.0.0",port=0)
     def test_iso_unix(self): self.assertEqual(timestamp(0),"1970-01-01T00:00:00+00:00")
