@@ -4,10 +4,10 @@
   "pr_number": 51,
   "branch": "feat/task-observatory-20261015",
   "task_id": "task-observatory-20261015",
-  "instruction_id": "task_observatory_001-r2",
-  "source_head_sha": "0e3d70ef14680b182c105bbd9b8f07ff582d71a4",
+  "instruction_id": "task_observatory_001-r3",
+  "source_head_sha": "2306edad5b7143730777fd698049909eca3ef728",
   "status": "READY_FOR_REVIEW",
-  "summary": "R2: normalize actual obligation/relay/cron source schemas, detect explicit linked lifecycle conflict, verify PID start token, project source mtime/stale, retain UI last-success data/timestamp on fetch failure; added synthetic executing HTTP and Node regressions. Not executed locally.",
+  "summary": "R3 source fixes for Main's 3 reproduced failures: PID existence no longer genuine running; scalar dependencies atomic; linked failed obligation lifecycle and deadline retained. Additional audit hardening: relay root confinement, privacy redaction and conservative free-text omission, malformed row diagnostics, registry items compatibility, freshness threshold, UI schema validation, roadmap acceptance/unassigned, persistent refresh errors. Source-only; NOT_RUN.",
   "changed_files": [
     "cio_market_lab/observability/task_board.py",
     "cio_market_lab/observability/task-board.js",
@@ -19,21 +19,21 @@
     {
       "command": "PYTHONPATH=. python -m pytest -o addopts= -q tests/test_task_board.py tests/test_task_board_ui.py",
       "result": "NOT_RUN",
-      "evidence": "GitHub connector source edits; Main prior HEAD d85411b05934dfb952278b00c1dfddf4a36a71fa had 21 existing tests pass, three extra integration regressions fail. R2 exact HEAD not executed."
+      "evidence": "Main prior exact HEAD 0fb0a9f02ced825dc85707e150aaa31304648bbb: 33 passed, 3 failed in external synthetic regression suite. R3 source edits via GitHub connector; no local execution."
     }
   ],
   "remaining_work": [
     {
-      "item": "Main independently execute exact-HEAD acceptance plus additional synthetic integration regressions and inspect PID/relay edge cases",
+      "item": "Main run exact-HEAD tests including independent Issue52/audit synthetic regressions; inspect residual privacy, relay containment, and source freshness concerns",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Run exact-HEAD pytest and three additional synthetic integration regressions; verify source-only acceptance.",
-    "if_pass": "Source acceptance only; original-host integration and deployment remain separate.",
-    "if_fail": "Return exact failing assertions and HEAD for bounded correction.",
+    "verify_now": "Run full targeted pytest and independent synthetic regressions at exact PR HEAD; review read-only source security.",
+    "if_pass": "Source acceptance only; separately verify original host and client-visible deployment.",
+    "if_fail": "Return exact HEAD and traceback for bounded correction.",
     "blockers": []
   }
 }
