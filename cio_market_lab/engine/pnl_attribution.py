@@ -116,6 +116,8 @@ def attribute_pnl(journal=(), closed_trades=(), *, benchmark_return=None,
     overall["currencies"] = currencies
     worked, failed, downweight, suggestions = [], [], [], {}
     for strategy, metrics in by_strategy.items():
+        if incomplete or len(currencies) > 1:
+            continue
         if not metrics["closed_trades"]:
             continue
         if metrics["expectancy"] > 0:
