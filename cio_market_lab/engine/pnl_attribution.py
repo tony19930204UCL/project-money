@@ -87,7 +87,7 @@ def attribute_pnl(journal=(), closed_trades=(), *, benchmark_return=None,
         status = str(event.get("status", "")).upper()
         if status not in ("SIMULATED", "OPEN_POSITION"):
             continue
-        fees = _number(event.get("fee", 0), "fee") + _number(event.get("tax", 0), "tax")
+        fees = (0. if status == "SIMULATED" else _number(event.get("fee", 0), "fee") + _number(event.get("tax", 0), "tax"))
         capital = _number(event.get("capital", event.get("notional", 0)), "capital")
         if fees < 0 or capital < 0:
             raise ValueError("negative fees or capital")
