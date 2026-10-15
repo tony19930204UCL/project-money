@@ -64,12 +64,13 @@ def clean(value):
 
 def dependency_list(value):
     if value is None: return []
+    if isinstance(value, bool): raise ValueError("invalid dependencies")
     if isinstance(value, (str, int, dict)): value = [value]
     if not isinstance(value, list): raise ValueError("invalid dependencies")
     result = []
     for entry in value:
         if isinstance(entry, dict): entry = entry.get("id", entry.get("obligation_id"))
-        if not isinstance(entry, (str, int)): raise ValueError("invalid dependency")
+        if isinstance(entry, bool) or not isinstance(entry, (str, int)): raise ValueError("invalid dependency")
         result.append(str(entry)[:160])
     return result[:30]
 
