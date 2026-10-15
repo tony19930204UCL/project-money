@@ -55,6 +55,17 @@ def clean(value):
     if isinstance(value, (str, int, float, bool)) or value is None: return value
     return None
 
+def dependency_list(value):
+    if value is None: return []
+    if isinstance(value, (str, int, dict)): value = [value]
+    if not isinstance(value, list): raise ValueError("invalid dependencies")
+    result = []
+    for entry in value:
+        if isinstance(entry, dict): entry = entry.get("id", entry.get("obligation_id"))
+        if not isinstance(entry, (str, int)): raise ValueError("invalid dependency")
+        result.append(str(entry)[:160])
+    return result[:30]
+
 def normalize(item, source):
     handle = item.get("handle") if isinstance(item.get("handle"), dict) else (item.get("execution_handle") if isinstance(item.get("execution_handle"), dict) else {})
     kind = str(handle.get("kind") or item.get("executor_kind") or ("cron" if source == "cron_jobs" else "manual"))
@@ -68,21 +79,26 @@ def normalize(item, source):
         "last_activity_at": timestamp(item.get("updated", item.get("updated_at", item.get("last_run_at", item.get("last_activity_at"))))),
         "latest_result": clean(item.get("latest_result") or item.get("last_status") or item.get("result") or item.get("reason")),
         "acceptance_scope": clean(item.get("acceptance_scope") or item.get("accept")),
-        "dependencies": [str(x)[:160] for x in (item.get("blocked_by") or item.get("dependencies") or []) if isinstance(x, (str, int))][:30],
+        "dependencies": dependency_list(item.get("blocked_by", item.get("dependencies"))),
         "blocker": clean(item.get("blocker") or item.get("reason") if state == "BLOCKED" else item.get("blocker")),
         "executor_kind": kind, "executor_ref": str(ref)[:100] if ref is not None and kind != "cron" else None,
         "executor_health": health(kind, ref, handle.get("start_token") or handle.get("start_time") or handle.get("start_ticks")),
         "source_updated_at": timestamp(item.get("updated", item.get("updated_at", item.get("source_updated_at")))),
+        "original_deadline": timestamp(item.get("original_deadline", item.get("deadline"))),
+        "original_terminal_failure": item.get("original_terminal_failure") if isinstance(item.get("original_terminal_failure"), str) else None,
+        "recovery_state": item.get("recovery_state") if isinstance(item.get("recovery_state"), str) else None,
         "source": source,
     }
     record["stale"] = bool(record["source_updated_at"] and (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(record["source_updated_at"])).total_seconds() > 86400)
     record["overdue"] = bool(record["due_at"] and dt.datetime.fromisoformat(record["due_at"]) < dt.datetime.now(dt.timezone.utc) and state not in ("DONE", "VERIFIED", "CANCELLED"))
-    record["running"] = state in ("RUNNING", "DISPATCHED") and record["executor_health"] == "PROCESS_EXISTS_UNVERIFIED"
+    record["running"] = False  # PID existence alone never proves actual task execution
     record["scheduled"] = (kind == "cron" and item.get("enabled", True) is not False) or state == "SCHEDULED"
     record["awaiting_acceptance"] = state in ("DONE", "VERIFIED", "SOURCE_ACCEPTED") and record["acceptance_scope"] not in ("deployed", "client_received", "original_host_verified")
     return record
 
 def project(config):
+    threshold = config.get("freshness_threshold_seconds", 86400)
+    if not isinstance(threshold, (int, float)) or isinstance(threshold, bool) or threshold <= 0: threshold = 86400
     tasks, diagnostics, roadmaps, seen = [], [], [], set()
     loaded = {}
     for source in SOURCES:
@@ -94,22 +110,26 @@ def project(config):
             data = read_json(path)
             if not isinstance(data, (dict, list)): raise ValueError("invalid top-level structure")
             expected = {"commitment_ledger": "items", "obligation_registry": "obligations", "cron_jobs": "jobs", "relay_plan": "jobs", "roadmap": "projects"}[source]
+            if source == "obligation_registry" and isinstance(data, dict) and isinstance(data.get("items"), list): expected = "items"
             if not isinstance(data, dict) or not isinstance(data.get(expected), list): raise ValueError("invalid schema: expected " + expected + " list")
             loaded[source] = data
-            diagnostics.append({"source": source, "status": "OK", "source_mtime": timestamp(Path(path).stat().st_mtime), "source_updated_at": timestamp(data.get("updated_at")), "stale": dt.datetime.now(dt.timezone.utc).timestamp() - Path(path).stat().st_mtime > 86400})
+            diagnostics.append({"source": source, "status": "OK", "source_mtime": timestamp(Path(path).stat().st_mtime), "source_updated_at": timestamp(data.get("updated_at")), "stale": dt.datetime.now(dt.timezone.utc).timestamp() - Path(path).stat().st_mtime > threshold, "freshness_threshold_seconds": threshold})
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as e:
             diagnostics.append({"source": source, "status": "ERROR", "message": type(e).__name__})
     def add(items, source):
         if not isinstance(items, list): raise ValueError("items must be a list")
-        for item in items:
-            if not isinstance(item, dict): continue
-            obj = normalize(item, source)
+        for index, item in enumerate(items):
+            if not isinstance(item, dict) or not (item.get("id") or item.get("obligation_id") or item.get("name")):
+                diagnostics.append({"source": source, "status": "ERROR", "message": "invalid row", "index": index}); continue
+            try: obj = normalize(item, source)
+            except (ValueError, TypeError):
+                diagnostics.append({"source": source, "status": "ERROR", "message": "invalid row", "index": index}); continue
             key = (source, obj["id"])
             if key not in seen:
                 seen.add(key); tasks.append(obj)
     for source, key in (("commitment_ledger", "items"), ("obligation_registry", "obligations"), ("cron_jobs", "jobs")):
         if source in loaded:
-            try: add(loaded[source].get(key, []), source)
+            try: add(loaded[source].get("items" if source == "obligation_registry" and "obligations" not in loaded[source] else key, []), source)
             except (AttributeError, ValueError):
                 diagnostics.append({"source": source, "status": "ERROR", "message": "invalid items"})
     # Deduplicate only explicitly linked obligations, preserving any disagreement as diagnostics.
@@ -123,6 +143,11 @@ def project(config):
                 matches = [t for t in tasks if t["source"] == "obligation_registry" and t["id"] == oid]
                 if matches:
                     tasks.remove(matches[0])
+                    commitment = next((t for t in tasks if t["source"] == "commitment_ledger" and t["id"] == str(item.get("id"))), None)
+                    if commitment:
+                        commitment["registry_lifecycle"] = matches[0]["lifecycle"]
+                        commitment["registry_original_deadline"] = matches[0]["due_at"]
+                        commitment["registry_original_terminal_failure"] = matches[0]["lifecycle"] if matches[0]["lifecycle"].startswith("FAILED") else None
                     diagnostics.append({"source": "obligation_registry", "status": "LINKED", "id": oid})
                     commitment = next((t for t in tasks if t["source"] == "commitment_ledger" and t["id"] == str(item.get("id"))), None)
                     if commitment and commitment["lifecycle"] != matches[0]["lifecycle"]:
@@ -132,13 +157,21 @@ def project(config):
         for job in relay.get("jobs", []):
             try:
                 if not isinstance(job, str): raise ValueError()
+                root = Path(config.get("relay_allowed_root") or Path(config["relay_plan"]).parent).resolve(strict=True)
+                def confined(candidate):
+                    candidate = Path(candidate)
+                    if candidate.is_symlink(): raise ValueError("relay symlink denied")
+                    resolved = candidate.resolve(strict=True)
+                    if not resolved.is_relative_to(root): raise ValueError("relay path outside allowed root")
+                    return resolved
+                job = confined(job)
                 job_data = read_json(job)
                 state_dir = job_data.get("state_dir")
                 if not isinstance(state_dir, str): raise ValueError()
                 for name in ("backlog.json", "executor_latest.json", "executor_terminal.json"):
                     p = Path(state_dir) / name
                     if p.is_file():
-                        data = read_json(p)
+                        data = read_json(confined(p))
                         if isinstance(data, dict):
                             if name == "backlog.json":
                                 entries = data.get("items", data.get("tasks", data.get("backlog")))
@@ -159,7 +192,7 @@ def project(config):
                                 "acceptance_scope": clean(s.get("acceptance_scope")),
                                 "acceptance_conditions": clean(s.get("acceptance_conditions"))}
                                for s in p.get("stages", []) if isinstance(s, dict)]})
-    return {"tasks": tasks, "diagnostics": diagnostics, "projects": roadmaps,
+    return {"tasks": tasks, "diagnostics": diagnostics, "projects": roadmaps, "freshness_threshold_seconds": threshold,
             "polled_at": dt.datetime.now(dt.timezone.utc).isoformat()}
 
 def handler(config):
