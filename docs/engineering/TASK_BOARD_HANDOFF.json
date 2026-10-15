@@ -4,34 +4,36 @@
   "pr_number": 51,
   "branch": "feat/task-observatory-20261015",
   "task_id": "task-observatory-20261015",
-  "instruction_id": "task_observatory_001-r4",
-  "source_head_sha": "21f3842756d779d923f310f41a9213d0dea4e60d",
+  "instruction_id": "task_observatory_001-r5",
+  "source_head_sha": "ecef98404daf011799b6d59dec2c09780656369e",
   "status": "READY_FOR_REVIEW",
-  "summary": "R4: boolean blocked_by is invalid and rejected with row diagnostics; corrected privacy redaction regex for token=secret in allowlisted strings; distinguished explicitly supported legacy obligation_registry.items from malformed unknown schema, with separate positive legacy test. No deployment.",
+  "summary": "R5: malformed roadmap stage task_ids now produce source-specific ERROR while preserving healthy tasks and valid stages; acceptance_conditions supports string or validated string list and renders readable list in actual UI. Added HTTP and Node executing regressions. No deployment or runtime changes.",
   "changed_files": [
     "cio_market_lab/observability/task_board.py",
+    "cio_market_lab/observability/task-board.js",
     "tests/test_task_board.py",
+    "tests/test_task_board_ui.py",
     "docs/engineering/TASK_BOARD_HANDOFF.json"
   ],
   "tests": [
     {
       "command": "PYTHONPATH=. python -m pytest -o addopts= -q tests/test_task_board.py tests/test_task_board_ui.py",
       "result": "NOT_RUN",
-      "evidence": "Main previous exact HEAD cd7d7a5c9a6bd78c1613cc5ac25d21932f4860fd: 44 passed, 3 failed; R4 GitHub edits not locally executed."
+      "evidence": "Main prior exact HEAD fb2704ef8fdbcab15ea44d8aa8f415be59e11bc8: 48 passed, 2 failed in isolated acceptance; current R5 GitHub commits not locally executed."
     }
   ],
   "remaining_work": [
     {
-      "item": "Main independently run exact-HEAD backend, Node UI, and Issue52 synthetic security/integration regressions",
+      "item": "Main independently execute exact-HEAD targeted suite and Issue52/audit synthetic integrations, including malformed roadmap and acceptance list",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Run targeted pytest and independent synthetic audit regressions on exact PR HEAD; check legacy registry and unknown-schema behavior.",
-    "if_pass": "Source-only acceptance; original-host integration and deployment separately required.",
-    "if_fail": "Return exact HEAD and failing assertions for bounded repair.",
+    "verify_now": "Run specified pytest suite and independent synthetic regressions at exact final HEAD; review roadmap error isolation and acceptance criteria.",
+    "if_pass": "Accept source only; original-host integration and deployment require separate approval.",
+    "if_fail": "Return exact failing assertions and HEAD for bounded repair.",
     "blockers": []
   }
 }
