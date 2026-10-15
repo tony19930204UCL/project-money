@@ -192,17 +192,36 @@ def project(config):
                 diagnostics.append({"source": "relay_plan", "status": "ERROR", "message": "invalid relay job"})
     roadmap = loaded.get("roadmap", {})
     if isinstance(roadmap, dict):
-        for p in roadmap.get("projects", []):
-            if isinstance(p, dict) and isinstance(p.get("stages", []), list):
-                roadmaps.append({"id": clean(p.get("id")), "title": clean(p.get("title")),
-                    "stages": [{"id": clean(s.get("id")), "title": clean(s.get("title")),
-                                "task_ids": [str(x) for x in s.get("task_ids", []) if isinstance(x, (str, int))],
-                                "observed_state": clean(s.get("observed_state")),
-                                "acceptance_scope": clean(s.get("acceptance_scope")),
-                                "acceptance_conditions": clean(s.get("acceptance_conditions"))}
-                               for s in p.get("stages", []) if isinstance(s, dict)]})
-    if isinstance(roadmap, dict) and any(not isinstance(p, dict) or not isinstance(p.get("stages", []), list) for p in roadmap.get("projects", [])):
-        diagnostics.append({"source": "roadmap", "status": "ERROR", "message": "invalid project stages"})
+        for project_index, p in enumerate(roadmap.get("projects", [])):
+            if not isinstance(p, dict) or not isinstance(p.get("stages", []), list):
+                diagnostics.append({"source": "roadmap", "status": "ERROR", "message": "invalid project stages", "index": project_index})
+                continue
+            stages = []
+            for stage_index, stage in enumerate(p["stages"]):
+                if not isinstance(stage, dict):
+                    diagnostics.append({"source": "roadmap", "status": "ERROR", "message": "invalid stage", "index": stage_index})
+                    continue
+                ids = stage.get("task_ids", [])
+                if not isinstance(ids, list) or any(isinstance(x, bool) or not isinstance(x, (str, int)) for x in ids):
+                    diagnostics.append({"source": "roadmap", "status": "ERROR", "message": "invalid stage task_ids", "index": stage_index})
+                    continue
+                conditions = stage.get("acceptance_conditions")
+                if conditions is not None and not isinstance(conditions, (str, list)):
+                    diagnostics.append({"source": "roadmap", "status": "ERROR", "message": "invalid acceptance conditions", "index": stage_index})
+                    continue
+                if isinstance(conditions, list):
+                    if any(not isinstance(x, str) for x in conditions):
+                        diagnostics.append({"source": "roadmap", "status": "ERROR", "message": "invalid acceptance condition item", "index": stage_index})
+                        continue
+                    conditions = [safe_text(x, 300) for x in conditions[:30]]
+                else:
+                    conditions = safe_text(conditions, 300)
+                stages.append({"id": safe_text(stage.get("id")), "title": safe_text(stage.get("title"), 300),
+                    "task_ids": [safe_text(x) for x in ids[:100]],
+                    "observed_state": safe_text(stage.get("observed_state")),
+                    "acceptance_scope": safe_text(stage.get("acceptance_scope")),
+                    "acceptance_conditions": conditions})
+            roadmaps.append({"id": safe_text(p.get("id")), "title": safe_text(p.get("title"), 300), "stages": stages})
     return {"tasks": tasks, "diagnostics": diagnostics, "projects": roadmaps, "freshness_threshold_seconds": threshold,
             "polled_at": dt.datetime.now(dt.timezone.utc).isoformat()}
 
