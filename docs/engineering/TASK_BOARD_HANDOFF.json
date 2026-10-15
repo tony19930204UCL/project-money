@@ -4,36 +4,34 @@
   "pr_number": 51,
   "branch": "feat/task-observatory-20261015",
   "task_id": "task-observatory-20261015",
-  "instruction_id": "task_observatory_001-r5",
-  "source_head_sha": "ecef98404daf011799b6d59dec2c09780656369e",
+  "instruction_id": "task_observatory_001-r6",
+  "source_head_sha": "53451e6026d36bacc1a383727b60929003f3be78",
   "status": "READY_FOR_REVIEW",
-  "summary": "R5: malformed roadmap stage task_ids now produce source-specific ERROR while preserving healthy tasks and valid stages; acceptance_conditions supports string or validated string list and renders readable list in actual UI. Added HTTP and Node executing regressions. No deployment or runtime changes.",
+  "summary": "R6: redact privacy-sensitive lifecycle state, dependency values and executor kind before HTTP projection; fail-visible diagnostic for roadmap projects missing stages while preserving healthy sources. Added two real synthetic HTTP regressions. No deployment/runtime writes.",
   "changed_files": [
     "cio_market_lab/observability/task_board.py",
-    "cio_market_lab/observability/task-board.js",
     "tests/test_task_board.py",
-    "tests/test_task_board_ui.py",
     "docs/engineering/TASK_BOARD_HANDOFF.json"
   ],
   "tests": [
     {
       "command": "PYTHONPATH=. python -m pytest -o addopts= -q tests/test_task_board.py tests/test_task_board_ui.py",
       "result": "NOT_RUN",
-      "evidence": "Main prior exact HEAD fb2704ef8fdbcab15ea44d8aa8f415be59e11bc8: 48 passed, 2 failed in isolated acceptance; current R5 GitHub commits not locally executed."
+      "evidence": "Main isolated previous HEAD 47c389a611f36a6f0fc7446a865ed5602d797683: 53 passed, 2 failed. R6 commits written through GitHub connector; no tests executed in this session."
     }
   ],
   "remaining_work": [
     {
-      "item": "Main independently execute exact-HEAD targeted suite and Issue52/audit synthetic integrations, including malformed roadmap and acceptance list",
+      "item": "Main independently rerun exact-head suite, independent Issue52 synthetic HTTP/Node regressions, and audit security checks",
       "status": "ACTIONABLE_NOW",
       "owner": "Main CIO"
     }
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Run specified pytest suite and independent synthetic regressions at exact final HEAD; review roadmap error isolation and acceptance criteria.",
-    "if_pass": "Accept source only; original-host integration and deployment require separate approval.",
-    "if_fail": "Return exact failing assertions and HEAD for bounded repair.",
+    "verify_now": "Run targeted pytest and independent synthetic HTTP regressions on exact PR HEAD, particularly sensitive lifecycle/dependency/executor and missing roadmap stages.",
+    "if_pass": "Accept source only, subject to separate original-host and deployment review.",
+    "if_fail": "Return exact HEAD, traceback and concrete counterexample for bounded repair.",
     "blockers": []
   }
 }
