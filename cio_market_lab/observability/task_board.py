@@ -30,7 +30,7 @@ def read_json(path):
     if len(data) > LIMIT: raise ValueError("source oversized")
     return json.loads(data)
 
-def health(kind, ref):
+def health(kind, ref, start_token=None):
     if kind == "cron": return "SCHEDULED"
     if kind != "pid": return "UNVERIFIED"
     try: pid = int(ref)
@@ -39,8 +39,12 @@ def health(kind, ref):
     if os.name == "posix":
         try:
             stat = Path("/proc") / str(pid) / "stat"
-            if stat.exists() and stat.read_text().split(") ", 1)[1][0] == "Z": return "DEAD"
-        except (OSError, IndexError): pass
+            if stat.exists():
+                fields = stat.read_text().split(") ", 1)[1].split()
+                if fields[0] in ("Z", "X"): return "DEAD"
+                if start_token is not None and str(fields[19]) != str(start_token): return "PID_REUSED"
+        except PermissionError: return "UNKNOWN"
+        except (OSError, IndexError, ValueError): pass
     try: os.kill(pid, 0)
     except ProcessLookupError: return "DEAD"
     except PermissionError: return "UNKNOWN"
@@ -52,28 +56,29 @@ def clean(value):
     return None
 
 def normalize(item, source):
-    handle = item.get("handle") if isinstance(item.get("handle"), dict) else {}
-    kind = str(handle.get("kind") or item.get("executor_kind") or "manual")
+    handle = item.get("handle") if isinstance(item.get("handle"), dict) else (item.get("execution_handle") if isinstance(item.get("execution_handle"), dict) else {})
+    kind = str(handle.get("kind") or item.get("executor_kind") or ("cron" if source == "cron_jobs" else "manual"))
     ref = handle.get("ref", item.get("executor_ref"))
-    state = str(item.get("state") or item.get("lifecycle") or "UNKNOWN").upper()
+    state = str(item.get("state") or item.get("status") or item.get("lifecycle") or "UNKNOWN").upper()
     record = {
-        "id": str(item.get("id", ""))[:160], "title": str(item.get("text") or item.get("title") or item.get("id") or "未命名")[:300],
+        "id": str(item.get("id") or item.get("obligation_id") or item.get("name") or "")[:160], "title": str(item.get("text") or item.get("title") or item.get("name") or item.get("obligation_id") or item.get("id") or "未命名")[:300],
         "project": clean(item.get("project")), "stage": clean(item.get("stage")),
         "lifecycle": state, "owner": clean(item.get("owner")), "priority": clean(item.get("priority")),
-        "due_at": timestamp(item.get("due", item.get("due_at"))),
-        "last_activity_at": timestamp(item.get("updated", item.get("last_activity_at"))),
-        "latest_result": clean(item.get("latest_result") or item.get("reason")),
+        "due_at": timestamp(item.get("due", item.get("deadline", item.get("next_run_at", item.get("due_at"))))),
+        "last_activity_at": timestamp(item.get("updated", item.get("updated_at", item.get("last_run_at", item.get("last_activity_at"))))),
+        "latest_result": clean(item.get("latest_result") or item.get("last_status") or item.get("result") or item.get("reason")),
         "acceptance_scope": clean(item.get("acceptance_scope") or item.get("accept")),
         "dependencies": [str(x)[:160] for x in (item.get("blocked_by") or item.get("dependencies") or []) if isinstance(x, (str, int))][:30],
         "blocker": clean(item.get("blocker") or item.get("reason") if state == "BLOCKED" else item.get("blocker")),
         "executor_kind": kind, "executor_ref": str(ref)[:100] if ref is not None and kind != "cron" else None,
-        "executor_health": health(kind, ref),
-        "source_updated_at": timestamp(item.get("updated", item.get("source_updated_at"))),
+        "executor_health": health(kind, ref, handle.get("start_token") or handle.get("start_time") or handle.get("start_ticks")),
+        "source_updated_at": timestamp(item.get("updated", item.get("updated_at", item.get("source_updated_at")))),
         "source": source,
     }
+    record["stale"] = bool(record["source_updated_at"] and (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(record["source_updated_at"])).total_seconds() > 86400)
     record["overdue"] = bool(record["due_at"] and dt.datetime.fromisoformat(record["due_at"]) < dt.datetime.now(dt.timezone.utc) and state not in ("DONE", "VERIFIED", "CANCELLED"))
     record["running"] = state in ("RUNNING", "DISPATCHED") and record["executor_health"] == "PROCESS_EXISTS_UNVERIFIED"
-    record["scheduled"] = kind == "cron" or state == "SCHEDULED"
+    record["scheduled"] = (kind == "cron" and item.get("enabled", True) is not False) or state == "SCHEDULED"
     record["awaiting_acceptance"] = state in ("DONE", "VERIFIED", "SOURCE_ACCEPTED") and record["acceptance_scope"] not in ("deployed", "client_received", "original_host_verified")
     return record
 
@@ -88,8 +93,10 @@ def project(config):
         try:
             data = read_json(path)
             if not isinstance(data, (dict, list)): raise ValueError("invalid top-level structure")
+            expected = {"commitment_ledger": "items", "obligation_registry": "obligations", "cron_jobs": "jobs", "relay_plan": "jobs", "roadmap": "projects"}[source]
+            if not isinstance(data, dict) or not isinstance(data.get(expected), list): raise ValueError("invalid schema: expected " + expected + " list")
             loaded[source] = data
-            diagnostics.append({"source": source, "status": "OK"})
+            diagnostics.append({"source": source, "status": "OK", "source_mtime": timestamp(Path(path).stat().st_mtime), "source_updated_at": timestamp(data.get("updated_at")), "stale": dt.datetime.now(dt.timezone.utc).timestamp() - Path(path).stat().st_mtime > 86400})
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as e:
             diagnostics.append({"source": source, "status": "ERROR", "message": type(e).__name__})
     def add(items, source):
@@ -100,7 +107,7 @@ def project(config):
             key = (source, obj["id"])
             if key not in seen:
                 seen.add(key); tasks.append(obj)
-    for source, key in (("commitment_ledger", "items"), ("obligation_registry", "items"), ("cron_jobs", "jobs")):
+    for source, key in (("commitment_ledger", "items"), ("obligation_registry", "obligations"), ("cron_jobs", "jobs")):
         if source in loaded:
             try: add(loaded[source].get(key, []), source)
             except (AttributeError, ValueError):
@@ -117,6 +124,9 @@ def project(config):
                 if matches:
                     tasks.remove(matches[0])
                     diagnostics.append({"source": "obligation_registry", "status": "LINKED", "id": oid})
+                    commitment = next((t for t in tasks if t["source"] == "commitment_ledger" and t["id"] == str(item.get("id"))), None)
+                    if commitment and commitment["lifecycle"] != matches[0]["lifecycle"]:
+                        diagnostics.append({"source": "obligation_registry", "status": "CONFLICT", "id": oid, "message": "linked lifecycle disagreement"})
     relay = loaded.get("relay_plan", {})
     if isinstance(relay, dict):
         for job in relay.get("jobs", []):
@@ -129,7 +139,13 @@ def project(config):
                     p = Path(state_dir) / name
                     if p.is_file():
                         data = read_json(p)
-                        if isinstance(data, dict): add(data.get("items", []), "relay_" + name)
+                        if isinstance(data, dict):
+                            if name == "backlog.json":
+                                entries = data.get("items", data.get("tasks", data.get("backlog")))
+                                if not isinstance(entries, list): raise ValueError("invalid relay backlog")
+                                add(entries, "relay_" + name)
+                            else: add([data], "relay_" + name)
+                        else: raise ValueError("invalid relay payload")
             except (OSError, ValueError, TypeError, AttributeError):
                 diagnostics.append({"source": "relay_plan", "status": "ERROR", "message": "invalid relay job"})
     roadmap = loaded.get("roadmap", {})
