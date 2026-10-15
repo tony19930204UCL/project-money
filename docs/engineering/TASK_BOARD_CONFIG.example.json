@@ -1,0 +1,7 @@
+{
+  "commitment_ledger": "/LOCAL/commitments.json",
+  "obligation_registry": "/LOCAL/obligations.json",
+  "relay_plan": "/LOCAL/relay.json",
+  "cron_jobs": "/LOCAL/cron.json",
+  "roadmap": "/LOCAL/roadmap.json"
+}
