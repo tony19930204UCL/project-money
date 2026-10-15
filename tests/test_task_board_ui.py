@@ -23,7 +23,7 @@ global.Option=function(t,v){const n=new Node('option');n.textContent=t;n.value=v
 global.document={getElementById:id=>ids[id],createElement:tag=>new Node(tag),querySelectorAll:()=>buttons};
 let result={tasks:[{id:'task1',title:'<img onerror=alert(1)>',project:'P',lifecycle:'PLANNED',executor_kind:'manual',executor_health:'UNVERIFIED',dependencies:[]},{id:'task2',title:'阻塞工作',lifecycle:'BLOCKED',blocker:'等待',dependencies:[]},{id:'task3',title:'來源已接受',lifecycle:'DONE',acceptance_scope:'source_accepted',awaiting_acceptance:true,dependencies:[]}],projects:[{title:'P',stages:[{title:'驗收',observed_state:'original_host_pending',task_ids:['task3']}]}],diagnostics:[],polled_at:'2026-10-15'};
 global.fetch=async()=>({ok:true,json:async()=>result});global.setInterval=()=>{};
-vm.runInThisContext(fs.readFileSync(process.argv[2],'utf8'));
+vm.runInThisContext(fs.readFileSync(process.argv[1],'utf8'));
 setImmediate(async()=>{
  await new Promise(r=>setImmediate(r));
  assert(ids.content.textContent.includes('<img onerror=alert(1)>'));
