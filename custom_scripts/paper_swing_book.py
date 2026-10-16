@@ -8,7 +8,9 @@ from pathlib import Path
 sys.path.insert(0,"/home/chihcheng/project-money-github/custom_scripts")
 import pandas as pd, yfinance as yf
 ROOT=Path("/home/chihcheng/project-money-github/data/paper_runtime"); BOOK=ROOT/"swing_book.json"; LOG=ROOT/"swing_decisions.jsonl"
-MKT={"NVDA":"US","AMD":"US","PLTR":"US","RKLB":"US","TSLA":"US","2330.TW":"TW","2317.TW":"TW","2454.TW":"TW","2308.TW":"TW"}
+import importlib.util as _u
+_sp=_u.spec_from_file_location("po","/home/chihcheng/project-money-github/custom_scripts/paper_optimizer.py"); _po=_u.module_from_spec(_sp); _sp.loader.exec_module(_po)
+MKT={t:m for m,L in _po.UNI.items() for t in L}
 COST={"US":0.0005,"TW":0.00585/2+0.0005}  # per side
 START=1_000_000.0
 def log(**k): open(LOG,"a").write(json.dumps({"ts":dt.datetime.now(dt.timezone.utc).isoformat(),**k})+"\n")
@@ -68,7 +70,7 @@ if __name__=="__main__":
     while True:
         n=dt.datetime.now(dt.timezone.utc)
         try:
-            if n.weekday()==5 and n.hour==8: subprocess.run([sys.executable,"/home/chihcheng/project-money-github/custom_scripts/paper_optimizer.py"],timeout=900)
+            if n.weekday()<5 and n.hour==20: subprocess.run([sys.executable,"/home/chihcheng/project-money-github/custom_scripts/paper_optimizer.py"],timeout=900)
             if n.weekday()<5 and n.hour>=21: print(step(),flush=True)
         except Exception as ex: log(act="ERROR",err=str(ex)[:300])
         time.sleep(3000)

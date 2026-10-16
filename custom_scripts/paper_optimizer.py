@@ -7,7 +7,7 @@ import json, sys, itertools, datetime as dt
 from pathlib import Path
 import pandas as pd, numpy as np, yfinance as yf
 ROOT = Path("/home/chihcheng/project-money-github/data/paper_runtime")
-UNI = {"US": ["NVDA","AMD","PLTR","RKLB","TSLA"], "TW": ["2330.TW","2317.TW","2454.TW","2308.TW"]}
+UNI = {"US": ["NVDA","AMD","PLTR","RKLB","TSLA","AVGO","MU","SMCI","ANET","MSFT","META","AMZN","GOOGL","COIN","HOOD","CRWD","UBER","NFLX","ARM","TSM"], "TW": ["2330.TW","2317.TW","2454.TW","2308.TW","2382.TW","3711.TW","2345.TW","3017.TW","2303.TW","2603.TW"]}
 COST = {"US": 0.0010, "TW": 0.00585 + 0.0010}  # round trip incl. slippage
 MIN_TRADES = 12
 
