@@ -14,27 +14,32 @@ from cio_market_lab.engine.paper_session import PaperSession
 from cio_market_lab.engine.paper_trading_loop import PaperTradingLoop, Signal
 from cio_market_lab.engine.paper_strategy_policy import ExitPolicy, SizingPolicy
 from cio_market_lab.engine.strategy_feedback import apply_weights, save_table
+from cio_market_lab.engine.trade_discipline import TradeDiscipline
 
 UNIVERSE = {
     # The integer values are retained only as legacy fallbacks. New entries are
     # sized from current marked equity by SizingPolicy, never copied as shares.
     "US": {"cash": 30000.0, "tickers": {"NVDA": 5, "AMD": 5, "PLTR": 20, "RKLB": 30, "TSLA": 3}, "ticks": 385,
-           "target_pct": 0.10, "max_position_pct": 0.20, "day_trade": False},
+           "target_pct": 0.10, "max_position_pct": 0.20, "day_trade": False, "mkt": "US"},
     "TW": {"cash": 1000000.0, "tickers": {"2330.TW": 100, "2317.TW": 500, "2454.TW": 100, "2308.TW": 200}, "ticks": 265,
-           "target_pct": 0.10, "max_position_pct": 0.20, "day_trade": True},
+           "target_pct": 0.10, "max_position_pct": 0.20, "day_trade": False, "mkt": "TW"},
 }
 TICK_SECONDS = 60
 
 
 class _Base:
-    take, stop_pct = 0.012, 0.008
+    # swing parameters: 1m-scalp (+1.2%/-0.8%) lost to costs and noise (see lessons)
+    take, stop_pct = 0.06, 0.03
+    discipline = None
+    LOOKBACK = 120
 
     def __init__(self, ticker, size=None, market="US", target_pct=0.10,
-                 max_position_pct=0.20, day_trade=False, max_hold_ticks=30):
+                 max_position_pct=0.20, day_trade=False, max_hold_ticks=1500):
         self.ticker, self.size, self.entry = ticker, size, None
         self.strategy_id = type(self).__name__ + "_" + market
         self.sizing = SizingPolicy(target_pct=target_pct, max_pct=max_position_pct)
-        self.exit_policy = ExitPolicy(max_hold_ticks=max_hold_ticks,
+        self.exit_policy = ExitPolicy(stop_pct=self.stop_pct, take_pct=self.take, trail_pct=0.02,
+                                      max_hold_ticks=max_hold_ticks,
                                       force_flat_at_session_end=day_trade)
         self.peak = None
         self.held_ticks = 0
@@ -57,6 +62,14 @@ class _Base:
                            "exit:" + reason, "realize", reason)]
         return None
 
+    def _gate(self, thesis):
+        if self.discipline is None:
+            return True
+        ok, why = self.discipline.allow_entry(self.ticker, thesis, self.take)
+        if not ok:
+            self.entry = None
+        return ok
+
     def _size(self, price, account):
         equity = account.cash + sum(
             qty * account.marks.get(symbol, price if symbol == self.ticker else 0.0)
@@ -68,14 +81,19 @@ class Momentum(_Base):
     def __init__(self, ticker, size=None, market="US", **policy):
         super().__init__(ticker, size, market, **policy)
         self.prev = None
+        self.hist = []
 
     def signals(self, quotes, account):
         p = quotes[self.ticker].c
         prior, self.prev = self.prev, p
+        mean = sum(self.hist) / len(self.hist) if self.hist else p
+        self.hist = (self.hist + [p])[-self.LOOKBACK:]
         out = self._exit(p, account)
         if out is not None:
             return out
-        if prior is None or p <= prior * 1.001 or account.positions.get(self.ticker, 0) > 0:
+        if len(self.hist) < self.LOOKBACK or prior is None or p <= mean * 1.004 or p <= prior or account.positions.get(self.ticker, 0) > 0:
+            return []
+        if not self._gate("1m momentum continuation"):
             return []
         self.entry = p
         size = self.size or self._size(p, account)
@@ -88,7 +106,7 @@ class Momentum(_Base):
 
 
 class MeanRev(_Base):
-    def __init__(self, ticker, size=None, lookback=20, market="US", **policy):
+    def __init__(self, ticker, size=None, lookback=120, market="US", **policy):
         super().__init__(ticker, size, market, **policy)
         self.hist, self.lookback = [], lookback
 
@@ -99,7 +117,9 @@ class MeanRev(_Base):
         self.hist = (self.hist + [p])[-self.lookback:]
         if out is not None:
             return out
-        if len(self.hist) < 5 or p >= mean * 0.997 or account.positions.get(self.ticker, 0) > 0:
+        if len(self.hist) < 60 or p >= mean * 0.99 or account.positions.get(self.ticker, 0) > 0:
+            return []
+        if not self._gate("dip below 20-tick mean"):
             return []
         self.entry = p
         size = self.size or self._size(p, account)
@@ -167,8 +187,12 @@ def build_config(root, feed=None, order_service=None, ticks=None, sleep_free=Fal
             policy = {"target_pct": spec["target_pct"],
                       "max_position_pct": spec["max_position_pct"],
                       "day_trade": spec["day_trade"]}
+            disc = TradeDiscipline(spec["mkt"], jr)
             for t in spec["tickers"]:
-                strategies += [Momentum(t, market=mkt, **policy), MeanRev(t, market=mkt, **policy)]
+                pair = [Momentum(t, market=mkt, **policy), MeanRev(t, market=mkt, **policy)]
+                for st in pair:
+                    st.discipline = disc
+                strategies += pair
             _restore_entries(strategies, root / (mkt + "_loop.jsonl"), acct)
             strategies = apply_weights(strategies, load_table(wt))
             loop = PaperTradingLoop(orders, root / (mkt + "_loop.jsonl"),
