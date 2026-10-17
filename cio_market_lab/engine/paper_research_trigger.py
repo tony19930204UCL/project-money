@@ -132,6 +132,15 @@ def compact_learning(rows: Any, *, outcome: bool = False) -> list[dict]:
     return result
 
 
+def semantic_evidence_identity(evidence: dict) -> tuple[dict, str]:
+    """One bounded non-recursive identity for cache and trigger admission."""
+    semantic = bounded_semantic({k: evidence.get(k) for k in (
+        'symbol', 'market', 'source_url', 'published_at', 'title',
+        'verified_facts', 'raw_metadata')})
+    event_id = hashlib.sha256(json.dumps(semantic, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    return semantic, event_id
+
+
 def admit_script_request(root: Path, *, symbol: str, evidence: dict,
                          quote: dict | None, lessons: Any, outcomes: Any,
                          ceiling: float) -> dict:
@@ -141,10 +150,17 @@ def admit_script_request(root: Path, *, symbol: str, evidence: dict,
     not admission signals. A genuinely changed official fact creates a new event.
     This is research_triage, never a substitute for independent Main approval.
     """
-    semantic = bounded_semantic({k: evidence.get(k) for k in (
-        'symbol', 'market', 'source_url', 'published_at', 'title',
-        'verified_facts', 'raw_metadata')})
-    event_id = hashlib.sha256(json.dumps(semantic, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    semantic, event_id = semantic_evidence_identity(evidence)
+    directory = Path(root) / 'paper_trigger_events'
+    path = directory / (event_id + '.json')
+    # Reject repeats before loading self-generated learning or building prompts.
+    # The exclusive create below still arbitrates concurrent new admissions.
+    if path.exists():
+        return {'status': 'DUPLICATE_SUBSTANTIVE_EVENT', 'symbol': symbol,
+                'event_id': event_id, 'model_called': False, 'paid_calls': 0,
+                'request_path': str(path)}
+    lessons = lessons() if callable(lessons) else lessons
+    outcomes = outcomes() if callable(outcomes) else outcomes
     summary = {
         'purpose': 'PAPER_RESEARCH_TRIAGE_NOT_CIO_APPROVAL_NOT_ORDER',
         'event_id': event_id, 'symbol': symbol, 'official_evidence': semantic,
@@ -163,9 +179,7 @@ def admit_script_request(root: Path, *, symbol: str, evidence: dict,
         raise TriggerBudgetError('PAPER_TRIGGER_NON_FINITE') from exc
     if len(encoded) > PROMPT_BYTE_BUDGET:
         raise TriggerBudgetError('PAPER_TRIGGER_PROMPT_BYTE_BUDGET')
-    directory = Path(root) / 'paper_trigger_events'
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / (event_id + '.json')
     # O_EXCL arbitrates concurrent processes. A crash leaves a claimed event,
     # never an automatic retry that can charge again on identical evidence.
     try:

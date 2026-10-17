@@ -190,3 +190,58 @@ def test_malformed_evidence_fails_closed(kind):
 def test_shallow_outcome_projection_and_lesson_ids():
     rows = [{'lesson_id': 'L-real', 'summary': 'bounded', 'packet': {'huge': []}}]
     assert compact_learning(rows) == [{'lesson_id': 'L-real', 'summary': 'bounded'}]
+
+
+def test_duplicate_is_admitted_before_reading_self_generated_learning(producer_case):
+    state, make, refresh, _ = producer_case
+    first = refresh()
+    producer = make()
+
+    def forbidden(**kwargs):
+        pytest.fail('duplicate evidence must not load recursive learning history')
+
+    producer.learning_store.retrieve_context_lessons = forbidden
+    producer.learning_store.retrieve_past_outcomes = forbidden
+    state['outcomes'].append({'action': 'WAIT', 'thesis': 'self-added'})
+    result = refresh(producer)
+    assert result['status'] == 'DUPLICATE_SUBSTANTIVE_EVENT'
+    assert result['event_id'] == first['event_id']
+
+
+def test_cache_digest_uses_same_bounded_nonrecursive_identity(producer_case):
+    from cio_market_lab.engine.daily_research_plan import semantic_research_digest
+
+    state, _, refresh, _ = producer_case
+    before = semantic_research_digest(state['evidence'])
+    first = refresh()
+    assert before == first['event_id']
+    state['evidence']['verified_facts'].reverse()
+    state['evidence']['raw_metadata']['wire_sha256'] = 'refresh-only'
+    assert semantic_research_digest(state['evidence']) == before
+    state['evidence']['raw_metadata']['recursive'] = state['evidence']
+    with pytest.raises(TriggerBudgetError, match='CYCLIC'):
+        semantic_research_digest(state['evidence'])
+
+
+def test_learning_failure_does_not_claim_material_event(producer_case):
+    _, make, refresh, root = producer_case
+    producer = make()
+
+    def unavailable(**kwargs):
+        raise RuntimeError('test-only learning unavailable')
+
+    producer.learning_store.retrieve_context_lessons = unavailable
+    with pytest.raises(RuntimeError, match='learning unavailable'):
+        refresh(producer)
+    assert list((root / 'producer').glob('paper_trigger_events/*.json')) == []
+
+
+def test_prompt_budget_failure_does_not_claim_event(producer_case):
+    state, _, refresh, root = producer_case
+    state['lessons'] = [{'lesson_id': 'L', 'lesson': '台' * 2000,
+                         'summary': '台' * 2000}] * 5
+    with pytest.raises(TriggerBudgetError, match='PROMPT_BYTE_BUDGET'):
+        refresh()
+    assert list((root / 'producer').glob('paper_trigger_events/*.json')) == []
+    state['lessons'] = []
+    assert refresh()['status'] == 'SCRIPT_RESEARCH_REVIEW_REQUIRED'

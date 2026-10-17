@@ -101,27 +101,9 @@ def plan_session_date(symbol: str, now: datetime) -> str:
     return now.astimezone(ZoneInfo('Asia/Taipei' if symbol.upper().endswith(('.TW','.TWO')) else 'America/New_York')).date().isoformat()
 
 
-def _semantic_evidence_value(value: Any) -> Any:
-    """Drop acquisition clocks recursively without erasing material source facts."""
-    if isinstance(value, dict):
-        return {
-            key: _semantic_evidence_value(item)
-            for key, item in value.items()
-            if key != 'observed_at'
-        }
-    if isinstance(value, list):
-        return [_semantic_evidence_value(item) for item in value]
-    return value
-
-
 def semantic_research_digest(evidence: dict[str, Any]) -> str:
-    # Acquisition/refresh clocks are not material evidence, including nested
-    # supplemental rows. Source URLs, wire hashes, periods and values remain.
-    semantic = {
-        k: _semantic_evidence_value(evidence.get(k))
-        for k in ('symbol','market','source_url','published_at','verified_facts','title','raw_metadata')
-    }
-    return hashlib.sha256(json.dumps(semantic, sort_keys=True, default=str).encode()).hexdigest()
+    from .paper_research_trigger import semantic_evidence_identity
+    return semantic_evidence_identity(evidence)[1]
 
 
 def normalize_reference_quote(reference_quote: dict[str, Any] | None, *, now: datetime) -> dict[str, Any] | None:
@@ -346,7 +328,7 @@ class DailyResearchPlanProducer:
         from .paper_research_trigger import admit_script_request
         return admit_script_request(
             self.root, symbol=symbol, evidence=evidence, quote=quote_context,
-            lessons=self.learning_store.retrieve_context_lessons(symbol=symbol, as_of=now, limit=5),
-            outcomes=self.learning_store.retrieve_past_outcomes(symbol=symbol, as_of=now, limit=5),
+            lessons=lambda: self.learning_store.retrieve_context_lessons(symbol=symbol, as_of=now, limit=5),
+            outcomes=lambda: self.learning_store.retrieve_past_outcomes(symbol=symbol, as_of=now, limit=5),
             ceiling=self.maximum_ceiling,
         )
