@@ -18,7 +18,9 @@ def evaluated_harness(tmp_path, verdict="WAIT"):
     packet.conditions["daily_research_assessment"] = {
         "verdict": verdict, "rationale": "TEST_ONLY economics need uncertainty discount",
         "needed_evidence": ["TEST_ONLY official cash flow"],
+        "price_trigger": "TEST_ONLY independently valued entry zone",
         "invalidation": "TEST_ONLY commercial failure",
+        "review_at": (now + timedelta(hours=6)).isoformat(),
     }
 
     def signed_response(request):

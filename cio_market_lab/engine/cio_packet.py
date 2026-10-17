@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Set, Tuple
@@ -31,12 +32,17 @@ def compute_packet_signature(packet: CIODecisionPacket, secret: Optional[str] = 
         f"{packet.case_id}|{packet.selected_instrument}|{packet.action}|"
         f"{packet.quantity}|{packet.thesis}|{prov.signer_id}|{prov.authority}"
     )
+    # Freshness is signed authority, not editable trust-store metadata. No
+    # legacy-signature fallback: old packets must be reissued by their signer.
+    canonical_payload += "|freshness_v2:" + json.dumps(
+        {"as_of": packet.as_of.isoformat(), "expiry": packet.expiry.isoformat()},
+        sort_keys=True, separators=(",", ":"))
     if (packet.conditions.get("daily_research_assessment")
             or packet.predecision_snapshot.get("decision_type") == "DAILY_RESEARCH_REVIEW"
             or "frozen_daily_context" in packet.predecision_snapshot):
-        import json
         canonical_payload += "|daily_research_assessment_v1:" + json.dumps(
             {"assessment": packet.conditions.get("daily_research_assessment", {}),
+             "review_valid_until": (packet.as_of + timedelta(hours=24)).isoformat(),
              "horizon": getattr(packet.holding_horizon, "value", packet.holding_horizon),
              "predecision_snapshot": packet.predecision_snapshot},
             sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -107,10 +113,15 @@ def validate_cio_packet(
 
     # 3. Freshness validation
     packet_expiry = packet.expiry if packet.expiry.tzinfo else packet.expiry.replace(tzinfo=timezone.utc)
-    if now_utc > packet_expiry:
+    if now_utc >= packet_expiry:
         return False, f"PACKET_EXPIRED: Packet expiry timestamp ({packet_expiry.isoformat()}) has passed (now: {now_utc.isoformat()})"
 
     packet_as_of = packet.as_of if packet.as_of.tzinfo else packet.as_of.replace(tzinfo=timezone.utc)
+    if (packet.conditions.get("daily_research_assessment")
+            or packet.predecision_snapshot.get("decision_type") == "DAILY_RESEARCH_REVIEW"
+            or "frozen_daily_context" in packet.predecision_snapshot):
+        if now_utc >= packet_as_of + timedelta(hours=24):
+            return False, "REVIEW_EXPIRED: Daily Main review validity has elapsed"
     age = (now_utc - packet_as_of).total_seconds()
     if age > max_age_seconds:
         return False, f"PACKET_STALE: Packet as_of age ({age:.1f}s) exceeds maximum data age ({max_age_seconds}s)"

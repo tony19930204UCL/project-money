@@ -974,6 +974,17 @@ class AutonomousPaperRunner:
                     "WAIT": "MAIN_REVIEW_WAIT", "REJECT": "MAIN_REVIEW_REJECTED"}
         verdict = assessment.get("verdict")
         reviewed = isinstance(verdict, str) and verdict in statuses and isinstance(assessment.get("rationale"), str) and bool(assessment["rationale"].strip())
+        needed = assessment.get("needed_evidence")
+        reviewed = (reviewed and isinstance(needed, list) and bool(needed)
+                    and all(isinstance(item, str) and bool(item.strip()) for item in needed)
+                    and all(isinstance(assessment.get(field), str) and bool(assessment[field].strip())
+                            for field in ("price_trigger", "invalidation", "review_at")))
+        if reviewed:
+            try:
+                review_at = datetime.fromisoformat(assessment["review_at"])
+                reviewed = review_at.tzinfo is not None and review_at.utcoffset() is not None
+            except ValueError:
+                reviewed = False
         return (statuses[verdict], True) if reviewed else ("MAIN_REVIEW_REQUIRED_NOT_EVALUATED", False)
 
     def daily_main_review_opportunities(self, *, include_expired=False):
