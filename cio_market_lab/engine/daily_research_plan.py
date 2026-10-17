@@ -1,21 +1,22 @@
-"""Official facts -> authenticated daily CIO judgment -> trusted frozen packet.
+"""Official facts -> bounded, deduplicated script-only PAPER research request.
 
-This module is PAPER-only research formation, not an order generator. Source facts
-are owned by OfficialResearchProducer; every price/valuation/thesis is explicitly
-model judgment. No fixture, stale filing-index surrogate or caller-supplied model.
+Source facts are owned by OfficialResearchProducer. New formation deliberately
+does not invoke any model or publish authenticated CIO approvals. Existing trusted
+packets are read-only cache inputs, not permission to restart paid inference.
 """
 from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal
 from zoneinfo import ZoneInfo
 
 import requests
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
-from cio_market_lab.engine.cio_session import CIOSessionHistory
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from cio_market_lab.engine.stage_d_observation import PersistedResearchPacketLoader
 from cio_market_lab.research.official import OfficialResearchProducer
 
@@ -161,9 +162,16 @@ def validate_plan_against_inputs(plan: DailyPlanJudgment, evidence: dict[str, An
 
 def atomic_json(path: Path, data: Any):
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix('.tmp')
-    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str))
-    temp.replace(path)
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix='.' + path.name + '-')
+    temp = Path(name)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            json.dump(data, stream, ensure_ascii=False, indent=2, default=str)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temp.replace(path)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 class _OfficialCollector:
@@ -304,6 +312,9 @@ class DailyResearchPlanProducer:
             raise RuntimeError('official source intake unavailable: ' + str(intake))
         evidence = dict(candidates[-1])
         evidence['market'] = market
+        from .paper_research_trigger import bounded_semantic
+        # Enforce bounds before excerpt construction, disk writes or old caches.
+        bounded_semantic(evidence)
         evidence['excerpt'] = 'Canonical extracted official facts (not verbatim source quote):\n' + '\n'.join(evidence['verified_facts'])
         # Validate official operating inputs before cache/inference/publication.
         # A filing index is discovery only, never an operating financial baseline.
@@ -332,152 +343,10 @@ class DailyResearchPlanProducer:
             packet = PersistedResearchPacketLoader(self.packet_root, trusted_manifest=self.manifest).load(symbol, now)
             if packet.get('research_digest') == digest and packet.get('plan_session_date') == date:
                 return {'status':'CACHED_IMMUTABLE_PLAN', 'symbol':symbol, 'plan_path':str(prior), 'packet_path':str(self.packet_root/(symbol+'.json')), 'model_called':False}
-        prompt = {'purpose':'DAILY_FROZEN_PAPER_RESEARCH_PLAN_NOT_ORDER', 'symbol':symbol, 'market':market,
-                  'observed_at':now.isoformat(), 'market_session_date':date,
-                  'official_evidence':evidence, 'reference_quote_for_valuation_only':quote_context,
-                  'position_ceiling_fraction':self.maximum_ceiling,
-                  'prior_lessons':self.learning_store.retrieve_context_lessons(symbol=symbol, as_of=now, limit=5),
-                  'matured_past_outcomes':self.learning_store.retrieve_past_outcomes(symbol=symbol, as_of=now, limit=5)}
-        public_model_input = {
-            'official_evidence': evidence,
-            'reference_quote_for_valuation_only': quote_context,
-        }
-        prompt_sha256 = hashlib.sha256(
-            json.dumps(prompt, sort_keys=True, ensure_ascii=False, default=str).encode()
-        ).hexdigest()
-        message = ('You are the authenticated Main CIO, forming the isolated PAPER daily frozen research plan. '
-                   'Not a real broker order. Use ONLY supplied official facts. Valuation, thesis and numeric buy/invalidations '
-                   'are explicitly uncertain model judgments, not source quotes. Identify missing evidence and do not invent '
-                   'contracts, future catalysts, EPS, prices, growth or precise expected returns. No trade is required. '
-                   'SCOUT_REVIEW requires commercial and financial support; missing essentials -> WAIT or REJECT. '
-                   'Give independent fundamental/valuation reasoning, not VWAP/RSI ownership verdicts. '
-                   'Exposure is a fraction of total isolated PAPER NAV, at most the supplied ceiling. '
-                   'Supply explicit bear/base/bull assumptions, buy zone, failure condition and next source/price trigger. '
-                   'When facts cannot support a numeric zone, use buy_zone=null and invalidation_condition=null, '
-                   'exposure_ceiling=0 and name missing_evidence; do NOT invent a zone or zero-priced bounds. '
-                   'Output pure concise JSON, no markdown, matching this schema:\n' + json.dumps(DailyPlanJudgment.model_json_schema()) +
-                   '\nExact input:\n' + json.dumps(prompt, ensure_ascii=False, default=str))
-        from cio_market_lab.integrations.hermes_chat import run_hermes_cli_chat
-        from cio_market_lab.integrations.runtime_evidence import RuntimeEvidenceAdapter
-        validator = RuntimeEvidenceAdapter(pinned_provider='openai-codex', pinned_model='gpt-6.1-sol')
-        result = metadata = response = runtime = plan = None
-        validation_error = None
-        for attempt in (1, 2):
-            attempt_message = message
-            if attempt == 2:
-                attempt_message = (
-                    message
-                    + '\nSchema correction only. The prior authenticated response failed validation. '
-                      'Do not change the supplied official evidence, quote, stance policy, or risk ceiling. '
-                      'Return a fresh complete JSON object matching the advertised schema exactly. '
-                      'Do not use aliases such as lower_ntd/upper_ntd. Fundamental invalidation belongs in '
-                      'the prose invalidation field; invalidation_condition may only be null or '
-                      '{"field":"last_price","operator":"lt|lte|gt|gte","threshold":positive_number}. '
-                      'Validation failure:\n'
-                    + str(validation_error)
-                )
-            result = run_hermes_cli_chat(
-                attempt_message,
-                session_id=self.session_id,
-                workspace_root=self.workspace_root,
-                timeout_seconds=self.timeout_seconds,
-                provider='openai-codex',
-                model='gpt-6.1-sol',
-                enforce_cio_pin=True,
-            )
-            metadata = result.get('runtime_metadata') or {}
-            response = result.get('response','')
-            runtime = validator.verify_runtime_evidence(
-                metadata=metadata,
-                response_text=response,
-                exit_code=result.get('returncode',0),
-                pinned_provider='openai-codex',
-                pinned_model='gpt-6.1-sol',
-                allow_fixture=False,
-            )
-            if (
-                result.get('is_fixture')
-                or runtime.is_fixture
-                or not runtime.auth_verified
-                or not runtime.is_success_response
-                or result.get('failed')
-                or result.get('error')
-            ):
-                raise RuntimeError('unauthenticated/fixture/failed daily-plan receipt rejected')
-            receipt_data = {
-                'observed_at':self._now().isoformat(),'symbol':symbol,'runtime_metadata':metadata,
-                'response':response,'session_id':result.get('session_id'),'is_fixture':False,
-                'purpose':'DAILY_RESEARCH_PLAN_NOT_ORDER','input_sha256':prompt_sha256,
-                'public_model_input':public_model_input,'attempt':attempt,
-            }
-            atomic_json(self.root/'authenticated_model_receipts'/(key+'.json'),receipt_data)
-            try:
-                plan = DailyPlanJudgment.model_validate_json(response)
-                validate_plan_against_inputs(plan, evidence, maximum_ceiling=self.maximum_ceiling)
-                if attempt == 2:
-                    atomic_json(
-                        self.root/'authenticated_model_receipts'/(key+'-retry-success.json'),
-                        {**receipt_data,'validation_status':'VALID_AFTER_SCHEMA_RETRY'},
-                    )
-                break
-            except (ValidationError, ValueError) as exc:
-                validation_error = exc
-                atomic_json(
-                    self.root/'authenticated_model_receipts'/(key+f'-attempt-{attempt}-validation-failed.json'),
-                    {**receipt_data,'validation_status':'INVALID_MODEL_OUTPUT','validation_error':str(exc)},
-                )
-                if attempt == 2:
-                    return {
-                        'status':'BLOCKED_MODEL_SCHEMA_RETRY_EXHAUSTED',
-                        'symbol':symbol,
-                        'model_called':True,
-                        'attempts':2,
-                        'input_sha256':prompt_sha256,
-                    }
-        actual_now = self._now()
-        # A research formation crossing market-day boundaries must be retried, not misdated.
-        if plan_session_date(symbol, actual_now) != date:
-            raise RuntimeError('plan formation crossed market session date')
-        local = actual_now.astimezone(ZoneInfo('Asia/Taipei' if market=='TW' else 'America/New_York'))
-        formation_phase = 'PREOPEN' if (local.hour,local.minute) < ((9,0) if market=='TW' else (9,30)) else 'MID_OR_POST_SESSION_BOOTSTRAP'
-        research_only = plan.buy_zone is None or plan.invalidation_condition is None or plan.exposure_ceiling == 0
-        capture = self._evidence_capture(evidence)
-        capture_text = capture.read_text()
-        selectors = dict(evidence['raw_metadata'].get('raw_row') or {})
-        if market == 'US':
-            selectors = {'cik':evidence['raw_metadata']['cik']}
-            for item in evidence['raw_metadata']['financial_baseline']:
-                for field in ('val','end','form','accn'):
-                    if item.get(field) is not None:
-                        selectors[f'{item["concept"]}:{field}'] = (field,item[field])
-        excerpts = []
-        for field,value in selectors.items():
-            if isinstance(value,tuple): field,value = value
-            text = json.dumps({field:value},ensure_ascii=False)[1:-1]
-            if text not in capture_text:
-                raise RuntimeError('derived official fact missing from exact raw capture: '+field)
-            if text not in excerpts: excerpts.append(text)
-        packet = {**evidence, **plan.model_dump(mode='json'), 'observed_at':actual_now.isoformat(),
-                  'source_excerpts':excerpts, 'research_only':research_only,
-                  'verified':True, 'verification_scope':'OFFICIAL_FACTS_ONLY_THESIS_AND_VALUATION_ARE_MAIN_CIO_JUDGMENT',
-                  'verified_facts':evidence['verified_facts'], 'is_fixture':False, 'research_digest':digest,
-                  'plan_session_date':date, 'formation_phase':formation_phase, 'raw_excerpt':evidence.get('excerpt',''),
-                  'official_baseline_path':str(self.root/'official_baselines'/(symbol+'.json'))}
-        packet_hash = hashlib.sha256(json.dumps(packet,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
-        receipt = {'observed_at':actual_now.isoformat(),'symbol':symbol,'plan_session_date':date,'formation_phase':formation_phase,
-                   'runtime_metadata':metadata,'resolved_session_id':result.get('session_id'), 'packet_sha256':packet_hash,
-                   'model_called':True,'is_fixture':False,'plan':plan.model_dump(mode='json'),
-                   'input_sha256':prompt_sha256,'public_model_input':public_model_input}
-        atomic_json(prior,receipt)
-        manifest = json.loads(self.manifest.read_text()) if self.manifest.exists() else {'approved_packets':{}}
-        manifest.setdefault('approved_packets',{})[packet_hash] = {
-            'symbol':symbol,'approved_by':'MAIN_CIO','source_verified':True,'source_url':evidence['source_url'],
-            'capture_file':str(capture.relative_to(self.root)),
-            'capture_sha256':hashlib.sha256(capture.read_bytes()).hexdigest(),
-            'receipt_path':str(prior),'observed_at':actual_now.isoformat()}
-        # Publish packet after its approval. Atomic replacements never expose partial JSON.
-        atomic_json(self.manifest,manifest)
-        atomic_json(self.packet_root/(symbol+'.json'),packet)
-        CIOSessionHistory(self.root/'formation_history',self.session_id).append({**receipt,'kind':'DAILY_OFFICIAL_RESEARCH_PLAN_FORMED'})
-        return {'status':'AUTHENTICATED_RESEARCH_ONLY_PLAN' if research_only else 'AUTHENTICATED_PLAN_FORMED','symbol':symbol,'formation_phase':formation_phase,
-                'plan_path':str(prior),'packet_path':str(self.packet_root/(symbol+'.json')),'model_called':True}
+        from .paper_research_trigger import admit_script_request
+        return admit_script_request(
+            self.root, symbol=symbol, evidence=evidence, quote=quote_context,
+            lessons=self.learning_store.retrieve_context_lessons(symbol=symbol, as_of=now, limit=5),
+            outcomes=self.learning_store.retrieve_past_outcomes(symbol=symbol, as_of=now, limit=5),
+            ceiling=self.maximum_ceiling,
+        )

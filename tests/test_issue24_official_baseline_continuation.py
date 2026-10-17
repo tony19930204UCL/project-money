@@ -183,7 +183,7 @@ def test_sec_ambiguous_and_future_lease_facts_fail_closed_without_erasing_other_
     assert any(x["concept"]=="FinanceLeasePrincipalPayments" and x["reason"]=="AMBIGUOUS_SAME_FILING_FACT" for x in gaps)
 
 
-def test_authenticated_consumer_path_carries_current_annual_quote_and_keeps_old_plan_immutable(tmp_path,monkeypatch):
+def test_script_consumer_carries_current_annual_quote_and_keeps_request_immutable(tmp_path,monkeypatch):
     current_pdf={"document_part":"PDF page 1","text":"Six Months 2026 CFO 1482341 capex 846765",
                  "source_url":CURRENT_PDF,"observed_at":NOW.isoformat(),"document_sha256":"CUR",
                  "body_provenance":"EXTRACTED_FROM_CAPTURED_WIRE_BYTES"}
@@ -254,25 +254,22 @@ def test_authenticated_consumer_path_carries_current_annual_quote_and_keeps_old_
 
     quote={"symbol":"2330.TW","price":2585,"source":"TWSE_OPENAPI_DAILY","source_date":"2026-10-06"}
     first=p.refresh("2330.TW",now=NOW,reference_quote=quote)
-    assert first["status"]=="AUTHENTICATED_RESEARCH_ONLY_PLAN"
-    assert current_pdf["text"] in captured["message"]
-    assert annual_pdf["text"] in captured["message"]
-    assert '"price": 2585' in captured["message"]
-
-    old_plan=Path(first["plan_path"])
+    assert first["status"]=="SCRIPT_RESEARCH_REVIEW_REQUIRED"
+    assert captured=={}
+    old_plan=Path(first["request_path"])
     old_bytes=old_plan.read_bytes()
     receipt=json.loads(old_plan.read_text())
-    public_input=receipt["public_model_input"]
+    public_input=receipt
     assert public_input["official_evidence"]["raw_metadata"]["source"]=="official TWSE financial statements"
     facts="\n".join(public_input["official_evidence"]["verified_facts"])
     assert current_pdf["text"] in facts and annual_pdf["text"] in facts
     assert public_input["reference_quote_for_valuation_only"]["price"]==2585
 
     second=p.refresh("2330.TW",now=NOW,reference_quote=quote)
-    assert second["status"]=="CACHED_IMMUTABLE_PLAN"
+    assert second["status"]=="DUPLICATE_SUBSTANTIVE_EVENT"
     assert old_plan.read_bytes()==old_bytes
     reloaded=json.loads(old_plan.read_text())
-    assert reloaded["public_model_input"]["official_evidence"]["raw_metadata"]["source"]=="official TWSE financial statements"
+    assert reloaded["official_evidence"]["raw_metadata"]["source"]=="official TWSE financial statements"
 
 
 def test_historical_scope_missing_official_source_provenance_remains_rejected():
@@ -418,7 +415,7 @@ def _retry_producer(tmp_path,monkeypatch,responses):
     return p,calls
 
 
-def test_schema_validation_failure_gets_one_bounded_retry_on_same_verified_input(tmp_path,monkeypatch):
+def test_script_producer_never_calls_or_retries_model_schema_correction(tmp_path,monkeypatch):
     invalid=_base_plan(
         buy_zone={"lower_ntd":2500,"upper_ntd":2600},
         invalidation_condition={"rule":"fundamental deterioration"},
@@ -430,18 +427,14 @@ def test_schema_validation_failure_gets_one_bounded_retry_on_same_verified_input
         "2330.TW",now=NOW,
         reference_quote={"symbol":"2330.TW","price":2585,"source":"TWSE_OPENAPI_DAILY","source_date":"2026-10-06"},
     )
-    assert result["status"]=="AUTHENTICATED_RESEARCH_ONLY_PLAN"
+    assert result["status"]=="SCRIPT_RESEARCH_REVIEW_REQUIRED"
     assert calls["acquire"]==1
-    assert len(calls["chat"])==2
-    exact1=calls["chat"][0].split("\nExact input:\n",1)[1]
-    exact2=calls["chat"][1].split("\nExact input:\n",1)[1].split("\nSchema correction only.",1)[0]
-    assert exact1==exact2
-    receipts=list((p.root/"authenticated_model_receipts").glob("*"))
-    assert any("attempt-1-validation-failed" in x.name for x in receipts)
-    assert any("retry-success" in x.name for x in receipts)
+    assert calls["chat"]==[]
+    assert not (p.root/"authenticated_model_receipts").exists()
+    assert not (p.packet_root/"2330.TW.json").exists()
 
 
-def test_schema_retry_exhaustion_fails_closed_without_plan_or_packet(tmp_path,monkeypatch):
+def test_script_producer_never_consumes_invalid_model_outputs_or_publishes_packet(tmp_path,monkeypatch):
     bad_zone=_base_plan(
         buy_zone={"lower_ntd":2500,"upper_ntd":2600},
         invalidation_condition=None,
@@ -459,14 +452,12 @@ def test_schema_retry_exhaustion_fails_closed_without_plan_or_packet(tmp_path,mo
         "2330.TW",now=NOW,
         reference_quote={"symbol":"2330.TW","price":2585,"source":"TWSE_OPENAPI_DAILY","source_date":"2026-10-06"},
     )
-    assert result["status"]=="BLOCKED_MODEL_SCHEMA_RETRY_EXHAUSTED"
-    assert result["attempts"]==2
+    assert result["status"]=="SCRIPT_RESEARCH_REVIEW_REQUIRED"
     assert calls["acquire"]==1
-    assert len(calls["chat"])==2
+    assert calls["chat"]==[]
     assert not (p.packet_root/"2330.TW.json").exists()
     assert not (p.root/"authenticated_plans").exists()
-    failures=list((p.root/"authenticated_model_receipts").glob("*validation-failed.json"))
-    assert len(failures)==2
+    assert not (p.root/"authenticated_model_receipts").exists()
 
 
 
@@ -504,7 +495,7 @@ def test_price_invalidation_condition_accepts_legitimate_json_numbers(good_thres
     assert parsed.threshold==float(good_threshold)
 
 
-def test_boolean_invalidation_threshold_exhausts_retry_without_armed_plan(tmp_path,monkeypatch):
+def test_script_producer_never_calls_model_or_arms_boolean_threshold(tmp_path,monkeypatch):
     bad=_base_plan(
         stance="SCOUT_REVIEW",
         buy_zone={"low":2500,"high":2600},
@@ -518,12 +509,9 @@ def test_boolean_invalidation_threshold_exhausts_retry_without_armed_plan(tmp_pa
         "2330.TW",now=NOW,
         reference_quote={"symbol":"2330.TW","price":2585,"source":"TWSE_OPENAPI_DAILY","source_date":"2026-10-06"},
     )
-    assert result["status"]=="BLOCKED_MODEL_SCHEMA_RETRY_EXHAUSTED"
-    assert result["attempts"]==2
+    assert result["status"]=="SCRIPT_RESEARCH_REVIEW_REQUIRED"
     assert calls["acquire"]==1
-    assert len(calls["chat"])==2
+    assert calls["chat"]==[]
     assert not (p.packet_root/"2330.TW.json").exists()
     assert not (p.root/"authenticated_plans").exists()
-    failures=list((p.root/"authenticated_model_receipts").glob("*validation-failed.json"))
-    assert len(failures)==2
-    assert all("invalid invalidation threshold type" in json.loads(x.read_text())["validation_error"] for x in failures)
+    assert not (p.root/"authenticated_model_receipts").exists()

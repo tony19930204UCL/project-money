@@ -3,6 +3,7 @@ from __future__ import annotations
 import builtins
 import hashlib
 import json
+from pathlib import Path
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -317,7 +318,7 @@ def test_legacy_wire_hash_capture_is_not_silently_reused(tmp_path, monkeypatch):
 
 
 
-def test_taipei_current_quarter_statement_and_latest_quote_reach_authenticated_input(tmp_path, monkeypatch):
+def test_taipei_current_quarter_statement_and_latest_quote_reach_script_request(tmp_path, monkeypatch):
     observed=datetime(2026,10,6,22,39,33,tzinfo=timezone.utc)  # 2026-10-07 in Taipei
     quote={"symbol":"2330.TW","price":2585,"source":"TWSE_OPENAPI_DAILY","source_date":"2026-10-06"}
     financial=[{
@@ -409,15 +410,9 @@ def test_taipei_current_quarter_statement_and_latest_quote_reach_authenticated_i
     )
 
     result=p.refresh("2330.TW",now=observed,reference_quote=quote)
-    assert result["status"]=="AUTHENTICATED_RESEARCH_ONLY_PLAN"
-    assert statement_text in captured["message"]
-    assert '"price": 2585' in captured["message"]
-    assert '"source_date": "2026-10-06"' in captured["message"]
-
-    auth_receipts=list((p.root/"authenticated_model_receipts").glob("*.json"))
-    assert len(auth_receipts)==1
-    auth=json.loads(auth_receipts[0].read_text())
-    public_input=auth["public_model_input"]
+    assert result["status"]=="SCRIPT_RESEARCH_REVIEW_REQUIRED"
+    assert captured=={}
+    public_input=json.loads(Path(result["request_path"]).read_text())
     assert public_input["reference_quote_for_valuation_only"]["price"]==2585
     assert public_input["reference_quote_for_valuation_only"]["source_date"]=="2026-10-06"
     assert any(statement_text in fact for fact in public_input["official_evidence"]["verified_facts"])
@@ -427,9 +422,10 @@ def test_taipei_current_quarter_statement_and_latest_quote_reach_authenticated_i
     assert "Three Months Ended June 30, 2026" in pdf_rows[0]["text"]
     assert "Six Months Ended June 30, 2026" in pdf_rows[0]["text"]
 
-    plan_receipt=json.loads(next((p.root/"authenticated_plans").glob("*.json")).read_text())
-    assert plan_receipt["public_model_input"]==public_input
-    packet=json.loads((p.packet_root/"2330.TW.json").read_text())
-    assert packet["source_url"]==TW_FINANCIAL_URL
-    assert packet["raw_metadata"]["published_at_original"]=="1151007"
-    assert packet["raw_metadata"]["published_at_timezone"]=="Asia/Taipei"
+    assert not (p.root/"authenticated_plans").exists()
+    assert not (p.root/"authenticated_model_receipts").exists()
+    assert not (p.packet_root/"2330.TW.json").exists()
+    evidence=public_input["official_evidence"]
+    assert evidence["source_url"]==TW_FINANCIAL_URL
+    assert evidence["raw_metadata"]["published_at_original"]=="1151007"
+    assert evidence["raw_metadata"]["published_at_timezone"]=="Asia/Taipei"
