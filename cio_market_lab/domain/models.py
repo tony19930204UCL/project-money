@@ -369,6 +369,8 @@ class CIODecisionContextRequest(BaseModel):
     verified_quotes: Dict[str, Any] = Field(default_factory=dict)
     verified_research: List[Dict[str, Any]] = Field(default_factory=list)
     research_gaps: List[Dict[str, Any]] = Field(default_factory=list)
+    # Research inputs only; a separate Main packet is required for execution.
+    research_opportunities: List[Dict[str, Any]] = Field(default_factory=list)
     prior_lessons: List[Dict[str, Any]] = Field(default_factory=list)
     past_outcomes: List[Dict[str, Any]] = Field(default_factory=list)
     rejected_opportunities: List[Dict[str, Any]] = Field(default_factory=list)

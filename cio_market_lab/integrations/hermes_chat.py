@@ -790,6 +790,8 @@ class HermesCIODecisionExecutor:
             f"- Omit optional predecision_snapshot and predecision_version: the authenticated bridge binds the exact input snapshot.\n"
             f"- Do not copy the schema or context into the response. No tools are available; use supplied evidence only.\n"
             f"- A justified BUY/SELL is permitted; do not default to NO_TRADE merely because this is a paper test.\n"
+            f"- research_opportunities are economic inputs, never trade authority. Evaluate thesis, valuation, uncertainties, portfolio fit and the strongest alternative; a generic missing-input list is not economic judgment.\n"
+            f"- For DAILY_RESEARCH_REVIEW the allowed NO_TRADE/REJECT actions override the general BUY/SELL permission. Return conditions.daily_research_assessment with verdict QUALIFIED_FOR_ENTRY_REVIEW, WAIT or REJECT, rationale, needed_evidence, price_trigger, invalidation and review_at. Qualification still requires a separate signed execution decision and fresh risk checks; never invent approval or a BUY.\n"
             f"- Use the request's symbol as selected_instrument, including NO_TRADE/HOLD; cash preservation is action NO_TRADE, not a fabricated CASH security.\n"
             f"- For BUY/SELL include conditions.instrument_type='EQUITY' or 'ETF' (the runtime enum), limit_price, "
             f"risk bounds and a future review condition. Missing/stale required evidence must still fail closed."

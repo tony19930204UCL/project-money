@@ -926,6 +926,105 @@ class AutonomousPaperRunner:
                 reserved += notional + self.paper_orders.cost_config.calculate_fee(order.market, notional)
         return reserved
 
+    def _persist_daily_main_review(self, context, settings, packet, receipt, reference):
+        """Persist one source-bound Main review without creating trade authority."""
+        import hashlib
+        from .daily_research_plan import atomic_json
+        if (receipt is None or getattr(receipt, "readback_verified", False) is not True
+                or getattr(receipt, "case_id", None) != packet.case_id):
+            raise ValueError("DAILY_PLAN_MAIN_RECEIPT_NOT_BOUND")
+        if packet.conditions.get("daily_context_id") != context.context_id:
+            raise ValueError("DAILY_PLAN_MAIN_CONTEXT_NOT_BOUND")
+        context_data = context.model_dump(mode="json")
+        key = hashlib.sha256((settings.strategy_id + "|" + context.context_id).encode()).hexdigest()
+        path = self.runtime_dir / "daily_contexts" / key / "main_review.json"
+        if path.exists():
+            prior = json.loads(path.read_text())
+            if prior.get("context_id") != context.context_id:
+                raise ValueError("MAIN_REVIEW_CONTEXT_ID_MISMATCH")
+            return prior  # Polling cannot renew a missed review deadline.
+        assessment = packet.conditions.get("daily_research_assessment", {})
+        if not isinstance(assessment, dict):
+            assessment = {}
+        status, reviewed = self._daily_main_assessment_status(assessment)
+        deadline = (packet.as_of + timedelta(hours=24)).isoformat()
+        row = {
+            "schema_version": "daily-main-review.v1", "context_id": context.context_id,
+            "opportunity_id": "review-" + hashlib.sha256((settings.strategy_id + "|" + context.context_id).encode()).hexdigest(),
+            "strategy_id": settings.strategy_id, "symbol": packet.selected_instrument,
+            "source_case_id": packet.case_id, "created_at": packet.as_of.isoformat(),
+            "horizon": getattr(packet.holding_horizon, "value", str(packet.holding_horizon)),
+            "status": status, "main_assessment": assessment, "main_economics_evaluated": reviewed,
+            "next_owner": "Main CIO", "next_review_at": deadline, "valid_until": deadline,
+            "source_receipt": receipt.model_dump(mode="json"),
+            "source_lineage": context_data["official_source_lineage"],
+            "frozen_context_sha256": hashlib.sha256(json.dumps(context_data, sort_keys=True, default=str).encode()).hexdigest(),
+            "economics": {field: context_data[field] for field in ("thesis", "valuation_scenarios", "entry_zone", "invalidation", "exposure_ceiling")},
+            "analysis_reference": reference,
+            "hard_entry_barriers": ["SEPARATE_SIGNED_MAIN_EXECUTION_DECISION_REQUIRED", "FRESH_EXECUTION_DATA_AND_RISK_CHECK_REQUIRED"],
+            "execution_armed": False, "authorized_notional": 0, "paper_only": True,
+            "is_fixture": packet.is_fixture, "performance_improvement_proven": False,
+        }
+        atomic_json(path, row)
+        return row
+
+    @staticmethod
+    def _daily_main_assessment_status(assessment):
+        statuses = {"QUALIFIED_FOR_ENTRY_REVIEW": "MAIN_ENTRY_REVIEW_REQUIRED",
+                    "WAIT": "MAIN_REVIEW_WAIT", "REJECT": "MAIN_REVIEW_REJECTED"}
+        verdict = assessment.get("verdict")
+        reviewed = isinstance(verdict, str) and verdict in statuses and isinstance(assessment.get("rationale"), str) and bool(assessment["rationale"].strip())
+        return (statuses[verdict], True) if reviewed else ("MAIN_REVIEW_REQUIRED_NOT_EVALUATED", False)
+
+    def daily_main_review_opportunities(self, *, include_expired=False):
+        """Read back authenticated, frozen-source reviews; fail closed on edits."""
+        import hashlib
+        from .cio_packet import validate_cio_packet
+        rows = []
+        for path in sorted((self.runtime_dir / "daily_contexts").glob("*/main_review.json")):
+            try:
+                row = json.loads(path.read_text())
+                record = self.learning_store.get_record(row["source_case_id"])
+                if not record:
+                    continue
+                packet = record.packet
+                authentic, _ = validate_cio_packet(packet, now=packet.as_of, processed_case_ids=set())
+                receipt = row.get("source_receipt", {})
+                context = packet.predecision_snapshot.get("frozen_daily_context", {})
+                digest = hashlib.sha256(json.dumps(context, sort_keys=True, default=str).encode()).hexdigest()
+                assessment = packet.conditions.get("daily_research_assessment", {})
+                if not isinstance(assessment, dict):
+                    continue
+                status, reviewed = self._daily_main_assessment_status(assessment)
+                if (not authentic or packet.action.upper() not in {"NO_TRADE", "REJECT"}
+                        or packet.quantity != 0 or not receipt.get("readback_verified")
+                        or receipt.get("case_id") != packet.case_id
+                        or row.get("symbol") != packet.selected_instrument
+                        or row.get("is_fixture") != packet.is_fixture
+                        or packet.is_fixture and not getattr(self, "allow_fixture_quotes", False)
+                        or row.get("context_id") != packet.conditions.get("daily_context_id")
+                        or row.get("context_id") != context.get("context_id")
+                        or row.get("strategy_id") != packet.predecision_snapshot.get("native_portfolio", {}).get("strategy_id")
+                        or row.get("frozen_context_sha256") != digest
+                        or row.get("source_lineage") != context.get("official_source_lineage")
+                        or row.get("main_assessment") != assessment
+                        or row.get("status") != status or row.get("main_economics_evaluated") != reviewed
+                        or row.get("horizon") != getattr(packet.holding_horizon, "value", str(packet.holding_horizon))
+                        or row.get("execution_armed") is not False or row.get("authorized_notional") != 0):
+                    continue
+                if any(row.get("economics", {}).get(field) != context.get(field) for field in ("thesis", "valuation_scenarios", "entry_zone", "invalidation", "exposure_ceiling")):
+                    continue
+                expires = datetime.fromisoformat(row["valid_until"])
+                if expires.tzinfo is None or expires != packet.as_of + timedelta(hours=24):
+                    continue
+                expired = self._now() >= expires
+                if expired and not include_expired:
+                    continue
+                rows.append({**row, "review_state": "REVIEW_OVERDUE_NOT_AUTO_RENEWED" if expired else status})
+            except (KeyError, TypeError, ValueError, OSError, AttributeError):
+                continue
+        return rows
+
     def _review_daily_unarmed_plan(self, run_id, settings, symbol):
         """Submit genuine WAIT research to CIO; no executable book or trade is required.
 
@@ -1016,7 +1115,8 @@ class AutonomousPaperRunner:
         # counterfactual outcomes; never coerce a lesson into a simulated fill.
         prior_lessons = self.learning_store.retrieve_context_lessons(symbol=symbol, as_of=now)
         past_outcomes = [record.model_dump(mode="json") for record in self.learning_store._records.values() if record.packet.selected_instrument == symbol and record.packet.as_of <= now][-10:]
-        snapshot = {"frozen_daily_context": context.model_dump(mode="json"),
+        snapshot = {"decision_type": "DAILY_RESEARCH_REVIEW",
+                    "frozen_daily_context": context.model_dump(mode="json"),
                     "daily_research_plan": observation, "native_portfolio": native,
                     "analysis_reference": reference_evidence,
                     "analysis_history": analysis_history,
@@ -1031,6 +1131,16 @@ class AutonomousPaperRunner:
             canonical_portfolio=native, verified_quotes={symbol: reference_evidence} if reference_evidence else {},
             verified_research=context.model_dump(mode="json")["official_source_lineage"],
             research_gaps=[{"symbol": symbol, "gaps": observation.get("missing_evidence", []), "stance": "WAIT", "armed": False}],
+            research_opportunities=[{
+                "context_id": context.context_id, "symbol": symbol,
+                "authority": "RESEARCH_INPUT_ONLY_MAIN_ECONOMICS_ASSESSMENT_REQUIRED",
+                "economics": {"thesis": context.thesis, "valuation_scenarios": context.valuation_scenarios,
+                    "entry_zone": context.entry_zone, "invalidation": context.invalidation,
+                    "exposure_ceiling": context.exposure_ceiling,
+                    "uncertainties": observation.get("missing_evidence", [])},
+                "official_source_lineage": context.model_dump(mode="json")["official_source_lineage"],
+                "execution_armed": False, "authorized_notional": 0,
+            }],
             prior_lessons=prior_lessons, past_outcomes=past_outcomes,
             rejected_opportunities=[alternative for record in past_outcomes for alternative in record.get("rejected_opportunities", [])],
             tactical_risk_limits={"max_position_notional": settings.max_position_notional, "execution_armed": False},
@@ -1045,6 +1155,13 @@ class AutonomousPaperRunner:
         receipt = getattr(executor, "last_receipt", None)
         valid, validation_reason = validate_cio_packet(packet, now=now, processed_case_ids=self.learning_store.processed_case_ids)
         errors = [] if valid else [validation_reason]
+        if (receipt is None or getattr(receipt, "readback_verified", False) is not True
+                or getattr(receipt, "case_id", None) != packet.case_id):
+            errors.append("DAILY_PLAN_MAIN_RECEIPT_NOT_BOUND")
+        if (packet.conditions.get("daily_research_assessment") or packet.predecision_snapshot) and packet.predecision_snapshot != snapshot:
+            errors.append("DAILY_PLAN_SIGNED_SNAPSHOT_MISMATCH")
+        if not packet.is_fixture and packet.predecision_snapshot != snapshot:
+            errors.append("DAILY_PLAN_LIVE_SIGNED_SNAPSHOT_REQUIRED")
         if packet.is_fixture and not getattr(self, "allow_fixture_quotes", False):
             errors.append("DAILY_PLAN_FIXTURE_PACKET_FORBIDDEN")
         if packet.selected_instrument != symbol:
@@ -1094,6 +1211,8 @@ class AutonomousPaperRunner:
             inputs["validation_errors"] = ["DAILY_PLAN_INVALID_DECISION_DELTA"]
             return self._decision(run_id, settings, symbol, "NO_TRADE", "BLOCKED_DAILY_PLAN_PACKET_VALIDATION", inputs, terminal_status="TERMINAL_RISK_BLOCK")
         packet.conditions["delivered_lesson_ids"] = delivered_lesson_ids
+        packet.conditions["thesis_review_horizon"] = horizon
+        packet.conditions["entry_order_expiry_liquidates_position"] = False
         self.learning_store.record_decision(
             packet, native, reference,
             applied_lesson_ids=applied_lesson_ids,
@@ -1104,6 +1223,8 @@ class AutonomousPaperRunner:
                        "model_id": getattr(receipt, "model_id", None), "cio_receipt": receipt.model_dump(mode="json"),
                        "observation_deadline": packet.conditions["observation_deadline"],
                        "observation_status": packet.conditions["observation_status"]})
+        opportunity = self._persist_daily_main_review(context, settings, packet, receipt, reference_evidence)
+        inputs["main_review_opportunity_id"] = opportunity["opportunity_id"]
         gate.record_call(material, {"success": True, "case_id": packet.case_id, "reason": "AUTHENTICATED_DAILY_WAIT_REVIEW"})
         return self._decision(run_id, settings, symbol, "NO_TRADE", f"CIO daily research review: {packet.action}", inputs, terminal_status="TERMINAL_NO_TRADE")
 
@@ -2283,6 +2404,7 @@ class AutonomousPaperRunner:
             verified_quotes=quotes,
             verified_research=verified_research,
             research_gaps=research_gaps,
+            research_opportunities=[row for row in self.daily_main_review_opportunities() if row["symbol"] in target_symbols],
             prior_lessons=prior_lessons,
             past_outcomes=past_outcomes,
             rejected_opportunities=rejected,

@@ -46,12 +46,24 @@ class AutomationRiskPolicy:
         average_entry_price: float,
         current_price: float,
         now: datetime,
+        thesis_broken: bool = False,
+        portfolio_risk_breach: bool = False,
+        explicit_main_exit: bool = False,
     ) -> ExitDecision:
         if quantity <= 0 or average_entry_price <= 0 or current_price <= 0:
             return ExitDecision(action=ExitAction.HOLD, reason="NO_OPEN_POSITION")
 
-        high = max(self._high_water.get(symbol, average_entry_price), current_price)
-        self._high_water[symbol] = high
+        if thesis_broken or portfolio_risk_breach or explicit_main_exit:
+            reason = "THESIS_BROKEN" if thesis_broken else "PORTFOLIO_RISK_BREACH" if portfolio_risk_breach else "EXPLICIT_MAIN_EXIT"
+            return ExitDecision(action=ExitAction.EXIT, reason=reason, quantity=quantity, reference_price=current_price)
+        if bucket == DecisionScope.LONG_TERM:
+            # Preserve downside protection, not short-horizon profit churn.
+            if current_price <= average_entry_price * (1.0 - self.rules.stop_loss_pct):
+                return ExitDecision(action=ExitAction.EXIT, reason="LONG_TERM_CONFIGURED_RISK_STOP", quantity=quantity, reference_price=current_price)
+            return ExitDecision(action=ExitAction.HOLD, reason="LONG_TERM_MAIN_THESIS_AND_RISK_REVIEW_REQUIRED")
+        key = f"{bucket.value}:{symbol}"
+        high = max(self._high_water.get(key, average_entry_price), current_price)
+        self._high_water[key] = high
         pnl_pct = (current_price / average_entry_price) - 1.0
         drawdown_from_high = (current_price / high) - 1.0
 

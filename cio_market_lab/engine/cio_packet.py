@@ -31,6 +31,15 @@ def compute_packet_signature(packet: CIODecisionPacket, secret: Optional[str] = 
         f"{packet.case_id}|{packet.selected_instrument}|{packet.action}|"
         f"{packet.quantity}|{packet.thesis}|{prov.signer_id}|{prov.authority}"
     )
+    if (packet.conditions.get("daily_research_assessment")
+            or packet.predecision_snapshot.get("decision_type") == "DAILY_RESEARCH_REVIEW"
+            or "frozen_daily_context" in packet.predecision_snapshot):
+        import json
+        canonical_payload += "|daily_research_assessment_v1:" + json.dumps(
+            {"assessment": packet.conditions.get("daily_research_assessment", {}),
+             "horizon": getattr(packet.holding_horizon, "value", packet.holding_horizon),
+             "predecision_snapshot": packet.predecision_snapshot},
+            sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hmac.new(sec.encode("utf-8"), canonical_payload.encode("utf-8"), hashlib.sha256).hexdigest()
 
 

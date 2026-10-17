@@ -18,6 +18,11 @@ def harness(tmp_path, action='NO_TRADE'):
     r.learning_store=CIODecisionLearningStore(tmp_path/'learning')
     packet=sign_cio_packet(CIODecisionPacket(case_id='TEST_ONLY_case',as_of=now,expiry=now+timedelta(hours=1),selected_instrument='MSFT',action=action,quantity=1 if action=='BUY' else 0,thesis='TEST_ONLY justified missing valuation WAIT',is_fixture=True),signer_id='fixture-test-signer')
     r.cio_executor=SimpleNamespace(is_available=lambda:True,request_decision=Mock(return_value=packet),last_receipt=SimpleNamespace(readback_verified=True,case_id=packet.case_id,provider_id='TEST_ONLY',model_id='TEST_ONLY',model_dump=lambda **_: {'readback_verified':True,'case_id':packet.case_id,'test_only':True}))
+    def signed_response(request):
+        import copy
+        packet.predecision_snapshot = copy.deepcopy(request.predecision_snapshot)
+        return sign_cio_packet(packet, signer_id='fixture-test-signer')
+    r.cio_executor.request_decision.side_effect = signed_response
     r.last_receipt=None
     obs={'symbol':'MSFT','market':'US','official_material_ids':['TEST_ONLY_fact_v1'],'research_only':True,'stance':'WAIT','missing_evidence':['TEST_ONLY valuation'],'verified_facts':['TEST_ONLY revenue fact'],'thesis':'TEST_ONLY missing valuation WAIT','buy_zone':None,'invalidation':'TEST_ONLY new official disclosure required'}
     context=FrozenDecisionContext(context_id='TEST_ONLY_MSFT_2026-10-01',session_date='2026-10-01',official_source_lineage=[{'source_url':'https://data.sec.gov/TEST_ONLY','verified_facts':['TEST_ONLY revenue fact']}],thesis=obs['thesis'],valuation_scenarios={},catalysts=[],entry_zone={},invalidation={'rule':obs['invalidation']},exposure_ceiling=0)
