@@ -294,10 +294,9 @@ class DailyResearchPlanProducer:
             raise RuntimeError('official source intake unavailable: ' + str(intake))
         evidence = dict(candidates[-1])
         evidence['market'] = market
-        from .paper_research_trigger import bounded_semantic
-        # Enforce bounds before excerpt construction, disk writes or old caches.
-        bounded_semantic(evidence)
-        evidence['excerpt'] = 'Canonical extracted official facts (not verbatim source quote):\n' + '\n'.join(evidence['verified_facts'])
+        # Validate/summarize before disk writes or old caches. Do not rebuild the
+        # huge duplicated excerpt; the original evidence remains read-only input.
+        semantic_research_digest(evidence)
         # Validate official operating inputs before cache/inference/publication.
         # A filing index is discovery only, never an operating financial baseline.
         if not evidence.get('verified_facts'):

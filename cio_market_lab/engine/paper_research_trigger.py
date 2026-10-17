@@ -16,6 +16,9 @@ PROMPT_BYTE_BUDGET = 24_000
 MAX_NODES = 4096
 MAX_DEPTH = 12
 MAX_TEXT = 2000
+LARGE_RAW_BYTE_BUDGET = 2_000_000
+LARGE_MAX_NODES = 32_768
+EVIDENCE_SUMMARY_BYTE_BUDGET = 12_000
 
 # Acquisition clocks and byte-capture identities are provenance, not new facts.
 VOLATILE = frozenset({
@@ -29,7 +32,8 @@ class TriggerBudgetError(ValueError):
     pass
 
 
-def bounded_semantic(value: Any) -> Any:
+def bounded_semantic(value: Any, *, raw_budget: int = RAW_BYTE_BUDGET,
+                     node_budget: int = MAX_NODES, summarize_text: bool = False) -> Any:
     """Iterative copy/canonicalization; reject oversized/deep/cyclic input.
 
     Only JSON-shaped source evidence belongs here, never full learning records.
@@ -58,13 +62,13 @@ def bounded_semantic(value: Any) -> Any:
             results.append(result)
             continue
         nodes += 1
-        if nodes > MAX_NODES or depth > MAX_DEPTH:
+        if nodes > node_budget or depth > MAX_DEPTH:
             raise TriggerBudgetError('PAPER_TRIGGER_STRUCTURE_BUDGET')
         if isinstance(item, (dict, list, tuple)):
             if id(item) in active:
                 raise TriggerBudgetError('PAPER_TRIGGER_CYCLIC_INPUT')
             active.add(id(item))
-            if len(item) > MAX_NODES:
+            if len(item) > node_budget:
                 raise TriggerBudgetError('PAPER_TRIGGER_STRUCTURE_BUDGET')
             if isinstance(item, dict):
                 if any(not isinstance(k, str) for k in item):
@@ -86,10 +90,15 @@ def bounded_semantic(value: Any) -> Any:
                 size += len(json.dumps(item, ensure_ascii=False, allow_nan=False).encode('utf-8'))
             except (ValueError, OverflowError) as exc:
                 raise TriggerBudgetError('PAPER_TRIGGER_NON_FINITE') from exc
+            if summarize_text and isinstance(item, str) and len(item.encode('utf-8')) > MAX_TEXT:
+                raw = item.encode('utf-8')
+                item = {'text_prefix': raw[:512].decode('utf-8', errors='ignore'),
+                        'text_bytes': len(raw), 'text_sha256': hashlib.sha256(raw).hexdigest(),
+                        'truncated': True}
             results.append(item)
         else:
             raise TriggerBudgetError('PAPER_TRIGGER_NON_JSON_VALUE')
-        if size > RAW_BYTE_BUDGET:
+        if size > raw_budget:
             raise TriggerBudgetError('PAPER_TRIGGER_RAW_BYTE_BUDGET')
     return results[0]
 
@@ -134,11 +143,67 @@ def compact_learning(rows: Any, *, outcome: bool = False) -> list[dict]:
 
 def semantic_evidence_identity(evidence: dict) -> tuple[dict, str]:
     """One bounded non-recursive identity for cache and trigger admission."""
-    semantic = bounded_semantic({k: evidence.get(k) for k in (
+    source = {k: evidence.get(k) for k in (
         'symbol', 'market', 'source_url', 'published_at', 'title',
-        'verified_facts', 'raw_metadata')})
+        'verified_facts', 'raw_metadata')}
+    semantic = bounded_semantic(source, raw_budget=LARGE_RAW_BYTE_BUDGET,
+                                node_budget=LARGE_MAX_NODES)
+    # Hash the complete bounded canonical evidence BEFORE lossy projection.
+    # Existing identities stay stable, even across the former 128KB boundary;
+    # omitted tails remain material and repeated/reordered facts are still sets.
     event_id = hashlib.sha256(json.dumps(semantic, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    semantic = bounded_semantic(semantic, raw_budget=LARGE_RAW_BYTE_BUDGET,
+                                node_budget=LARGE_MAX_NODES, summarize_text=True)
+    pending = [semantic]
+    compressed = False
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            compressed |= item.get('truncated') is True and 'text_sha256' in item
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+    if compressed or len(json.dumps(semantic, ensure_ascii=False).encode()) > EVIDENCE_SUMMARY_BYTE_BUDGET:
+        semantic = summarize_official_evidence(semantic, event_id)
     return semantic, event_id
+
+
+def summarize_official_evidence(semantic: dict, event_id: str) -> dict:
+    """Deterministic, lossy leaf projection, never a fundamental/CIO judgment.
+
+    Input was fully validated and bounded above. Traverse iteratively, retain
+    source identity and short operating fields first, and explicitly count gaps.
+    The digest covers ALL admitted semantic evidence, including omitted leaves.
+    """
+    summary = {'summary_policy': 'bounded-official-leaves-v1',
+               'semantic_sha256': event_id, 'lossy': True,
+               'retained_leaves': [], 'omitted_leaves': 0}
+    stack = [(semantic, [])]
+    leaves = []
+    while stack:
+        item, path = stack.pop()
+        if isinstance(item, dict):
+            stack.extend((item[k], path + [k]) for k in reversed(sorted(item)))
+        elif isinstance(item, list):
+            stack.extend((v, path + [i]) for i, v in reversed(list(enumerate(item))))
+        else:
+            leaves.append({'path': path, 'value': item})
+    def priority(leaf):
+        path = leaf['path']
+        if path and path[0] in {'symbol', 'market', 'source_url', 'published_at', 'title'}:
+            return 0
+        if path[:2] == ['raw_metadata', 'raw_row']:
+            return 1
+        if path and path[0] == 'verified_facts':
+            return 2
+        return 3
+    for leaf in sorted(leaves, key=priority):
+        summary['retained_leaves'].append(leaf)
+        # Reserve space for the final omission count, including UTF-8 bytes.
+        if len(json.dumps(summary, ensure_ascii=False).encode()) > EVIDENCE_SUMMARY_BYTE_BUDGET - 32:
+            summary['retained_leaves'].pop()
+            summary['omitted_leaves'] += 1
+    return summary
 
 
 def admit_script_request(root: Path, *, symbol: str, evidence: dict,

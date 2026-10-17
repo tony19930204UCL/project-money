@@ -138,22 +138,32 @@ def test_matured_learning_context_never_changes_event_identity(producer_case):
     assert result['event_id'] != first['event_id']
 
 
-@pytest.mark.parametrize('size', [200_000, 30_000])
-def test_oversize_blocks_before_admission_or_transport(producer_case, size):
+@pytest.mark.parametrize('size', [200_000, 30_000, 9000])
+def test_large_evidence_is_summarized_before_admission_without_transport(producer_case, size):
     state, _, refresh, root = producer_case
-    state['evidence']['verified_facts'].append('x' * size)
-    with pytest.raises(TriggerBudgetError, match='BUDGET'):
-        refresh()
-    assert list((root / 'producer').glob('paper_trigger_events/*.json')) == []
-    state['evidence']['verified_facts'].pop()
-    assert refresh()['status'] == 'SCRIPT_RESEARCH_REVIEW_REQUIRED'
+    state['evidence']['verified_facts'].append('台' * size)
+    result = refresh()
+    assert result['status'] == 'SCRIPT_RESEARCH_REVIEW_REQUIRED'
+    assert result['prompt_bytes'] <= PROMPT_BYTE_BUDGET
+    assert refresh()['status'] == 'DUPLICATE_SUBSTANTIVE_EVENT'
+    assert len(list((root / 'producer').glob('paper_trigger_events/*.json'))) == 1
+    state['evidence']['verified_facts'][-1] += 'tail changed'
+    assert refresh()['event_id'] != result['event_id']
 
 
 def test_utf8_prompt_budget_not_character_count(producer_case):
     state, _, refresh, _ = producer_case
+    from cio_market_lab.engine.paper_research_trigger import EVIDENCE_SUMMARY_BYTE_BUDGET
     state['evidence']['verified_facts'].append('台' * 9000)
-    with pytest.raises(TriggerBudgetError, match='PROMPT_BYTE_BUDGET'):
-        refresh()
+    result = refresh()
+    saved = json.loads(Path(result['request_path']).read_text())
+    summary = saved['official_evidence']
+    assert summary['lossy'] is True
+    compressed = {tuple(v['path']): v['value'] for v in summary['retained_leaves']}
+    assert any(path[-1] == 'truncated' and value is True for path, value in compressed.items())
+    assert any(path[-1] == 'text_bytes' and value == len(('台' * 9000).encode())
+               for path, value in compressed.items())
+    assert len(json.dumps(summary, ensure_ascii=False).encode()) <= EVIDENCE_SUMMARY_BYTE_BUDGET
 
 
 def test_concurrent_admission_is_at_most_once(producer_case):
