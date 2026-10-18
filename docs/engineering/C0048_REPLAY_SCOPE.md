@@ -1,0 +1,28 @@
+# C0048 read-only shadow calculation repair — engineering contract
+
+This is sanitized engineering scope. All fixtures must be synthetic. Do not request or publish private books, accounts, real frozen datasets, research bodies, credentials or local runtime paths.
+
+## Observed failure
+The real parent acceptance rejected a result with `response="already <processed-session>"`, empty events and `signal_recalculation_executed=false`. The baseline and candidate both skipped the actual strategy. Positive input-validation and horizon tests do not cure that failure. Preserve this shape as a negative fixture. Do not weaken the live duplicate-trade guard or merely flip a flag.
+
+## Required implementation
+1. Separate the deterministic policy calculation from live I/O/idempotent execution in `custom_scripts/paper_swing_book.py`, reusing the same formulas, costs, sizing, stops, trailing and holding-day semantics rather than inventing a second mechanical strategy. Provide a pure injectable interface, optionally in `cio_market_lab/engine/paper_swing_decision.py`. Live `step()` must retain its duplicate-session protection, existing output contract and one-write semantics. No network, files, order or book mutation inside the pure calculation.
+2. Expose a genuine read-only shadow calculation from explicit frozen bars + exact initial book + frozen parameter version and costs. Return policy proposals and derived shadow state without touching any input/runtime state. Reprocessing must never be mislabeled as an actual historical trade/fill or a fresh live session. A current-state counterfactual is permissible only with explicit mode/proposal-only labels and no performance claim. Historical replay requires actual verified pre-session state, not invented earlier `last`, cleared holdings or fabricated cash. If valid inputs cannot support the requested semantics, return a machine-readable blocker rather than fake NO_TRADE/PASS.
+3. Baseline and candidate use identical frozen market/book/cost inputs, differing only in the predeclared parameter change. Record input hashes/version/rule hash, coverage, calculation-exercised evidence and unexecuted recommendations. No forced trade or forced difference; real zero differences are valid after genuine calculation. Neither arm may treat missing input or an idempotence early return as a completed decision comparison.
+4. Refactor `scripts/c0048_round2_prepare.py` / `cio_market_lab/engine/c0048_shadow.py` only as needed to invoke this interface. Do not overwrite existing immutable runtime artifacts on rerun. Add an explicit new output location/round when inputs or semantics change. Legacy round2 input manifest and Main response remain historical evidence; do not silently relabel them as fresh outputs. Main independently handles private native-data integration and any authenticated Main decision call; no new model loop or inference spend is authorized here.
+5. Preserve separation of position review clocks and unfilled order expiry. A late review does not trigger selling. Missing legacy owner review metadata remains unknown, never backfilled as historical fact.
+
+## Tests and acceptance
+Add meaningful behavioral tests in `tests/test_c0048_shadow_replay.py` (at least 12) plus existing focused suites. Include: frozen-input immutability; duplicate live guard retained; actual policy invoked in each shadow arm even when live `last` equals the bar session; no runtime I/O/network; one-variable candidate input contract; missing data fail closed; invalid historical pre-state blocked; costs/proposal-only labeling; stop/trailing/time-stop boundaries; parameter-sensitive synthetic example; existing no-difference case; original skipped-calculation payload rejected. Do not set `signal_recalculation_executed=true` without a trace proving the calculator ran.
+
+Acceptance command: `python -m pytest -o addopts= -q tests/test_c0048_shadow_replay.py tests/test_c0048_round2_shadow.py tests/test_c0048_main_handoff.py`.
+
+Never fabricate execution results. If your tool environment cannot run tests, report NOT_RUN; Main reruns them. Include exact source commit and semantic limitations in the mailbox.
+
+## Allowed paths and boundaries
+Allowed changes: this scope document; `docs/engineering/C0048_REPLAY_HANDOFF.json`; `custom_scripts/paper_swing_book.py`; `cio_market_lab/engine/paper_swing_decision.py`; `cio_market_lab/engine/c0048_shadow.py`; `scripts/c0048_round2_prepare.py`; `tests/test_c0048_shadow_replay.py`; existing two focused test modules only when preserving/strengthening their tests.
+No other files. No runtime `data/`, source snapshots, live parameter updates, persona/policy/authorization, scheduler, environment or credentials. No merge, deploy or real trades. This is code/source acceptance only. Main retains original C0048 product acceptance and C0051/C0052 obligations.
+
+## GitHub handback
+Use the assigned repository/branch/PR, not default/main. Commit code before handback. The handoff JSON uses schema_version=2 and exact IDs from Main's instruction, actual full pre-mailbox `source_head_sha`, status READY_FOR_REVIEW/WAITING_CI/BLOCKED, changed_files, tests[{command,result,evidence}], remaining_work and next_step_reminder{to:"Main CIO",verify_now,if_pass,if_fail,blockers:[]}.
+If GitHub write access is unavailable, report the actual block and provide an applicable unified patch; do not invent a commit or claim read-only access grants write permission. On a platform safety denial, stop and report it rather than switching accounts/tools or rewording to bypass it.
