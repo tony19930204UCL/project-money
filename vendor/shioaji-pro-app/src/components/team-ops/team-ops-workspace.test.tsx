@@ -732,4 +732,63 @@ describe('TeamOpsWorkspace component', () => {
         expect(textContent).not.toContain('CONSOLIDATION');
         expect(textContent).not.toContain('暫無團隊論據輸入');
     });
+
+    it('renders merged same-symbol positions with source and filters quote provenance', async () => {
+        const snapshot = await (await fetch('/fixture')).json();
+        snapshot.holdings = [
+            { symbol: '2454.TW', market: 'TW', source: 'TW_account', strategy_id: 'Momentum_TW',
+                quantity: 2, entry_price: 100, current_price: 101, market_value: 202 },
+            { symbol: '2454.TW', market: 'TW', source: 'swing_book', strategy_id: 'pullback',
+                quantity: 4, entry_price: 80, current_price: null, market_value: null },
+        ];
+        snapshot.quotes = [
+            { symbol: '2454.TW', market: 'TW', source: 'TW_account.marks', price: 101,
+                timestamp: '2026-10-13T02:00:00Z', freshness: 'stale' },
+            { symbol: '2454.TW', market: 'TW', source: 'swing_book.marks', price: null,
+                timestamp: null, freshness: 'UNKNOWN' },
+        ];
+        snapshot.posture.desk = {
+            roles: [],
+            current_duty: { source: 'TW_account', task: 'SIMULATED 2454.TW exit:time_stop',
+                observed_at: '2026-10-13T02:00:00Z', freshness: 'stale', status: 'LAST_RECORDED_EVENT' },
+        };
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(snapshot))));
+        let r!: ReactTestRenderer;
+        await act(async () => { r = render(); });
+        const sourceHeader = r.root.findAllByType('th').find((node) =>
+            node.children.join('') === '帳本來源 (Source)');
+        expect(sourceHeader).toBeDefined();
+        const holdingsTable = sourceHeader!.parent!.parent!.parent!;
+        expect(holdingsTable.findAllByType('tbody')[0].findAllByType('tr')).toHaveLength(2);
+
+        const rows = holdingsTable.findAllByType('tbody')[0].findAllByType('tr');
+        expect(rows[0].findAllByType('td')[3].children.join('')).toBe('TW_account');
+        expect(rows[1].findAllByType('td')[3].children.join('')).toBe('swing_book');
+        const quoteTable = r.root.findAllByType('table').find((table) =>
+            table.findAllByType('th').some((node) => node.children.join('') === '行情來源 (Quote Source)'))!;
+        expect(quoteTable.findAllByType('tbody')[0].findAllByType('tr')).toHaveLength(2);
+        const select = r.root.findByProps({ 'aria-label': '行情來源篩選' });
+        act(() => select.props.onChange({ target: { value: 'swing_book.marks' } }));
+        const filteredRows = quoteTable.findAllByType('tbody')[0].findAllByType('tr');
+        expect(filteredRows).toHaveLength(1);
+        expect(filteredRows[0].findAllByType('td')[2].children.join('')).toBe('swing_book.marks');
+        expect(select.props.value).toBe('swing_book.marks');
+        const duty = r.root.findByProps({ 'data-testid': 'current-duty' }).children.join('');
+        expect(duty).toContain('SIMULATED 2454.TW exit:time_stop');
+        expect(duty).toContain('2026-10-13T02:00:00Z');
+        expect(duty).toContain('stale');
+        expect(duty).toContain('非執行中證明');
+        act(() => r.unmount());
+    });
+
+    it('does not invent current duty or working roles when no event was recorded', async () => {
+        let r!: ReactTestRenderer;
+        await act(async () => { r = render(); });
+        const duty = r.root.findByProps({ 'data-testid': 'current-duty' }).children.join('');
+        expect(duty).toContain('UNKNOWN — 無可驗證職責紀錄');
+        const text = JSON.stringify(r.toJSON());
+        expect(text).not.toContain('監控標的流動性與動能突破');
+        expect(text).not.toContain('數據品質狀態:');
+        act(() => r.unmount());
+    });
 });

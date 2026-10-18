@@ -182,7 +182,7 @@ def build_live_team_ops(root: Path, *, now: datetime | None = None) -> dict:
     out["holdings"], out["quotes"], out["orders"], out["fills"], out["activity"] = [], [], [], [], []
     roles, all_events = [], []
     sources = out["portfolio"]["sources"]
-    quote_symbols = set()
+
 
     for market in ("TW", "US"):
         source = f"{market}_account"
@@ -204,10 +204,14 @@ def build_live_team_ops(root: Path, *, now: datetime | None = None) -> dict:
             px = _number(marks.get(symbol))
             value = qty * px if px is not None else None
             values.append(value)
-            out["holdings"].append(_holding(symbol, market, source, qty, None, px, value,
-                _mapping(account.get("quote_timestamps")).get(symbol), now))
+            owner = _mapping(_mapping(account.get("strategy_state")).get(symbol))
+            holding = _holding(symbol, market, source, qty, _number(owner.get("entry")), px, value,
+                _mapping(account.get("quote_timestamps")).get(symbol), now)
+            holding.update(strategy_id=owner.get("strategy_id"), held_ticks=owner.get("held_ticks"))
+            if owner.get("strategy_id"):
+                holding["strategy_attribution"] = {owner["strategy_id"]: {"quantity": qty}}
+            out["holdings"].append(holding)
         for symbol in sorted(marks.keys() | positions.keys()):
-            quote_symbols.add(symbol)
             px = _number(marks.get(symbol))
             previous = _number(_mapping(account.get("previous_close")).get(symbol))
             timestamp = _mapping(account.get("quote_timestamps")).get(symbol)
@@ -251,13 +255,11 @@ def build_live_team_ops(root: Path, *, now: datetime | None = None) -> dict:
         holding = _holding(symbol, _market(symbol), "swing_book", qty, entry, px, value, timestamp, now)
         holding.update(stop=_number(pos.get("stop")), strategy_id=pos.get("fam"), entry_day=pos.get("entry_day"))
         out["holdings"].append(holding)
-        # A swing entry or high-water peak is never a current quote. Keep missing
-        # symbols visible but do not overwrite a genuine account-mark quote.
-        if symbol not in quote_symbols:
-            out["quotes"].append({"symbol": symbol, "market": _market(symbol), "price": px,
-                "change_pct": None, "source": "swing_book.marks" if px is not None else "UNKNOWN",
-                "timestamp": timestamp, "freshness": _freshness(timestamp, now) if px is not None else "UNKNOWN"})
-            quote_symbols.add(symbol)
+        # Keep each recorded source independently selectable, even for the same
+        # ticker. Missing marks stay null; entry/peak is never a quote substitute.
+        out["quotes"].append({"symbol": symbol, "market": _market(symbol), "price": px,
+            "change_pct": None, "source": "swing_book.marks",
+            "timestamp": timestamp, "freshness": _freshness(timestamp, now) if px is not None else "UNKNOWN"})
     complete_marks = isinstance(book.get("pos"), dict) and all(v is not None for v in values)
     recorded = _number(book.get("equity"))
     # The producer stores close equity even though it does not persist each mark.
@@ -295,6 +297,18 @@ def build_live_team_ops(root: Path, *, now: datetime | None = None) -> dict:
         "risk_multiplier": None, "selected_at": None, "next_review_time": None}
     desk = {"desk_id": "paper_runtime", "desk_name": "Paper runtime (read-only)",
         "active_playbook": playbook, "roles": roles, "next_review_time": None}
+    # This is the latest evidenced duty, not a fabricated running-worker claim.
+    dated_events = []
+    for src, event in all_events:
+        observed = _time(_timestamp(event))
+        if observed is not None and observed <= now:
+            dated_events.append((observed, src, event))
+    latest = max(dated_events, key=lambda item: item[0], default=None)
+    desk["current_duty"] = ({
+        "source": latest[1], "task": _role(latest[1], [latest[2]])["current_task"],
+        "observed_at": _timestamp(latest[2]), "status": "LAST_RECORDED_EVENT",
+        "freshness": _freshness(_timestamp(latest[2]), now),
+    } if latest else None)
     out["posture"].update(desk=desk, active_playbook=playbook, next_review_time=None)
     if book.get("params_ver") and book["params_ver"] != version:
         warnings.append(f"SWING_PARAMS_VERSION_DIFFERS: book={book['params_ver']}; file={version}")

@@ -49,6 +49,7 @@ export function TeamOpsWorkspace() {
     const [error, setError] = useState<string | null>(null);
     const [lastRefreshTime, setLastRefreshTime] = useState<Date>(new Date());
     const [ordersTab, setOrdersTab] = useState<'orders' | 'fills'>('orders');
+    const [quoteSource, setQuoteSource] = useState('ALL');
     const [showLegacyLeaderboard, setShowLegacyLeaderboard] = useState(false);
     const [agents, setAgents] = useState<Array<{ experiment: Experiment; status: ExperimentRuntimeStatus }>>([]);
 
@@ -99,6 +100,9 @@ export function TeamOpsWorkspace() {
     const sessions = snapshot?.sessions;
     const holdings = snapshot?.holdings ?? [];
     const quotes = snapshot?.quotes ?? [];
+    const quoteSources = Array.from(new Set(quotes.map((q) => q.source))).sort();
+    const selectedQuoteSource = quoteSources.includes(quoteSource) ? quoteSource : 'ALL';
+    const visibleQuotes = quotes.filter((q) => selectedQuoteSource === 'ALL' || q.source === selectedQuoteSource);
     const orders = snapshot?.orders ?? [];
     const fills = snapshot?.fills ?? [];
     const activity = snapshot?.activity ?? [];
@@ -111,46 +115,7 @@ export function TeamOpsWorkspace() {
     const activePlaybook = desk?.active_playbook ?? (posture as any)?.active_playbook;
     const nextReviewTime = desk?.next_review_time ?? activePlaybook?.next_review_time ?? (posture as any)?.next_review_time;
 
-    const deskRoles: FunctionalDeskRole[] = (desk?.roles && desk.roles.length > 0)
-        ? desk.roles
-        : [
-            {
-                role_id: 'cio_strategist',
-                title: '宏觀策略長 (Main CIO)',
-                role_name: 'Macro & Portfolio Architect',
-                scope: '總體體系判定 · 劇本動態切換 · 30天評估窗口治理',
-                status: activeAgentCount > 0 ? 'WORKING' : 'MONITORING',
-                current_task: `評估 TW/US 體系，維持 ${activePlaybook?.playbook_name ?? '穩健成長'} 劇本運作`,
-                next_review_time: nextReviewTime,
-            },
-            {
-                role_id: 'tactical_execution',
-                title: '程序化執行席 (Execution Desk)',
-                role_name: 'Tactical Execution Officer',
-                scope: '台美跨市場紙盤撮合 · 買賣訂單排程 · 滑價成本控制',
-                status: activeAgentCount > 0 ? 'WORKING' : (scheduledAgentCount > 0 ? 'STANDBY' : 'MONITORING'),
-                current_task: '監控標的流動性與動能突破，執行本地紙盤隔離委託',
-                next_review_time: nextReviewTime,
-            },
-            {
-                role_id: 'risk_sentinel',
-                title: '風控防禦席 (Risk Sentinel)',
-                role_name: 'Risk & Capital Sentinel',
-                scope: hasVerifiedCapital ? '單一TWD資金池保護 · 10%回撤防線 · 券商斷線隔離' : '單一資金池保護 · 10%回撤防線 · 券商斷線隔離',
-                status: 'ACTIVE',
-                current_task: `總曝險監控中 · 風險乘數 ${formatValue(posture?.risk_budget_multiplier ?? 1.0, 2)} · 熔斷守護`,
-                next_review_time: nextReviewTime,
-            },
-            {
-                role_id: 'data_watcher',
-                title: '數據品質監理 (Data Telemetry)',
-                role_name: 'Data Telemetry Watcher',
-                scope: '報價即時性驗證 · 拒絕Stale/Synthetic · 會話閘門判定',
-                status: 'ACTIVE',
-                current_task: `數據品質狀態: ${String(freshness).toUpperCase()} · 標的行情連續驗證`,
-                next_review_time: nextReviewTime,
-            },
-        ];
+    const deskRoles: FunctionalDeskRole[] = desk?.roles ?? [];
 
     const currency = portfolio?.reporting_currency?.trim() ? portfolio.reporting_currency : '—';
     const benchmarkCurrency = benchmark?.currency?.trim() && benchmark.currency !== '—' ? benchmark.currency : '—';
@@ -745,6 +710,13 @@ export function TeamOpsWorkspace() {
                 </div>
             </div>
 
+            <div data-testid="current-duty" role="status">
+                目前職責（最後紀錄，非執行中證明）：{' '}
+                {desk?.current_duty
+                    ? `${desk.current_duty.source} · ${desk.current_duty.task} · ${desk.current_duty.observed_at} · ${desk.current_duty.freshness}`
+                    : 'UNKNOWN — 無可驗證職責紀錄'}
+            </div>
+
             {/* 4. Market Quotes Feed (Source, Timestamp, Freshness) */}
             <div className={styles.tableCard}>
                 <div className={styles.tableHeader}>
@@ -752,6 +724,14 @@ export function TeamOpsWorkspace() {
                         <Activity size={14} style={{ color: '#3d8bff' }} />
                         核心行情源與即時性 (Market Quotes & Freshness)
                     </div>
+                    <label>
+                        行情來源篩選{' '}
+                        <select aria-label="行情來源篩選" value={selectedQuoteSource}
+                            onChange={(event) => setQuoteSource(event.target.value)}>
+                            <option value="ALL">全部來源</option>
+                            {quoteSources.map((source) => <option key={source} value={source}>{source}</option>)}
+                        </select>
+                    </label>
                     <span style={{ fontSize: '0.72rem', color: '#8b94a7' }}>
                         顯示權威行情源、撮合時間戳與延遲狀態
                     </span>
@@ -770,8 +750,8 @@ export function TeamOpsWorkspace() {
                             </tr>
                         </thead>
                         <tbody>
-                            {quotes.map((q) => (
-                                <tr key={q.symbol}>
+                            {visibleQuotes.map((q) => (
+                                <tr key={`${q.source}-${q.market}-${q.symbol}`}>
                                     <td className={styles.td}>
                                         <strong>{q.symbol}</strong>{' '}
                                         <span style={{ color: '#8b94a7', fontSize: '0.73rem' }}>{q.name}</span>
@@ -808,7 +788,7 @@ export function TeamOpsWorkspace() {
                                     </td>
                                 </tr>
                             ))}
-                            {quotes.length === 0 && (
+                            {visibleQuotes.length === 0 && (
                                 <tr>
                                     <td colSpan={7} style={{ textAlign: 'center', padding: '16px', color: '#8b94a7' }}>
                                         無即時行情數據
@@ -838,6 +818,7 @@ export function TeamOpsWorkspace() {
                                 <th className={styles.th}>標的 / 名稱</th>
                                 <th className={styles.th}>市場</th>
                                 <th className={styles.th}>策略小組 (Strategy)</th>
+                                <th className={styles.th}>帳本來源 (Source)</th>
                                 <th className={styles.th}>持倉數量</th>
                                 <th className={styles.th}>進場成本</th>
                                 <th className={styles.th}>現價</th>
@@ -849,7 +830,7 @@ export function TeamOpsWorkspace() {
                         </thead>
                         <tbody>
                             {holdings.map((h) => (
-                                <tr key={`${h.market}-${h.symbol}`}>
+                                <tr key={`${h.source ?? 'UNKNOWN'}-${h.market}-${h.symbol}-${h.strategy_id ?? 'UNKNOWN'}`}>
                                     <td className={styles.td}>
                                         <strong>{h.symbol}</strong>{' '}
                                         <span style={{ color: '#8b94a7', fontSize: '0.72rem' }}>{h.name}</span>
@@ -871,7 +852,10 @@ export function TeamOpsWorkspace() {
                                         </span>
                                     </td>
                                     <td className={styles.td} style={{ color: '#8b94a7', fontSize: '0.72rem' }}>
-                                        {h.strategy_id ?? 'team_core'}
+                                        {h.strategy_id ?? 'UNKNOWN'}
+                                    </td>
+                                    <td className={styles.td}>
+                                        {h.source ?? 'UNKNOWN'}
                                     </td>
                                     <td className={styles.td}>
                                         {formatValue(h.quantity, 0)}
@@ -918,7 +902,7 @@ export function TeamOpsWorkspace() {
                             ))}
                             {holdings.length === 0 && (
                                 <tr>
-                                    <td colSpan={10} style={{ textAlign: 'center', padding: '16px', color: '#8b94a7' }}>
+                                    <td colSpan={11} style={{ textAlign: 'center', padding: '16px', color: '#8b94a7' }}>
                                         當前全體團隊無在倉部位 (Zero Paper Positions)
                                     </td>
                                 </tr>

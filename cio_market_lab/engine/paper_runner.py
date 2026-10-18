@@ -50,10 +50,18 @@ class _Base:
             self.entry = self.peak = None
             self.held_ticks = 0
             return None
+        state = getattr(account, "strategy_state", {}).get(self.ticker)
+        if state is not None:
+            if state["strategy_id"] != self.strategy_id:
+                self.entry = self.peak = None
+                self.held_ticks = 0
+                return None
+            self.entry, self.peak, self.held_ticks = state["entry"], state["peak"], state["held_ticks"]
         if self.entry is None:
             return None  # position belongs to another strategy; its experiment would reject our SELL
         self.peak = max(self.peak or self.entry, price)
         self.held_ticks += 1
+        self._save_state(account)
         reason = self.exit_policy.reason(self.entry, price, self.peak,
                                          self.held_ticks,
                                          getattr(account, "session_end", False))
@@ -61,6 +69,30 @@ class _Base:
             return [Signal(self.ticker, "stock", "SELL", qty, None, None,
                            "exit:" + reason, "realize", reason)]
         return None
+
+    def _save_state(self, account):
+        if not hasattr(account, "strategy_state"):
+            account.strategy_state = {}
+        account.strategy_state[self.ticker] = {
+            "strategy_id": self.strategy_id, "entry": self.entry,
+            "peak": self.peak, "held_ticks": self.held_ticks,
+        }
+
+    def on_execution(self, signal, record, account):
+        """Ownership starts at a successful local paper fill, never at intent."""
+        if record["status"] != "SIMULATED":
+            if account.positions.get(self.ticker, 0) <= 0:
+                self.entry = self.peak = None
+                self.held_ticks = 0
+            return
+        if signal.side.upper() == "BUY":
+            self.entry = self.peak = record["fill_price"]
+            self.held_ticks = 0
+            self._save_state(account)
+        elif account.positions.get(self.ticker, 0) <= 0:
+            account.strategy_state.pop(self.ticker, None)
+            self.entry = self.peak = None
+            self.held_ticks = 0
 
     def _gate(self, thesis):
         if self.discipline is None:
@@ -95,11 +127,9 @@ class Momentum(_Base):
             return []
         if not self._gate("1m momentum continuation"):
             return []
-        self.entry = p
         size = self.size or self._size(p, account)
         if size <= 0:
             return []
-        self.peak, self.held_ticks = p, 0
         return [Signal(self.ticker, "stock", "BUY", size, p * (1 - self.stop_pct),
                        p * (1 + self.take), "1m momentum continuation",
                        "+1.2% swing", "-0.8% stop")]
@@ -121,11 +151,9 @@ class MeanRev(_Base):
             return []
         if not self._gate("dip below 20-tick mean"):
             return []
-        self.entry = p
         size = self.size or self._size(p, account)
         if size <= 0:
             return []
-        self.peak, self.held_ticks = p, 0
         return [Signal(self.ticker, "stock", "BUY", size, p * (1 - self.stop_pct),
                        mean, "dip below 20-tick mean", "revert to mean", "-0.8% stop")]
 
@@ -145,13 +173,14 @@ def _restore_entries(strategies, loop_path, acct_path):
     owner = {}
     for r in rows:
         if r.get("status") == "SIMULATED" and r.get("side") == "BUY":
-            owner[r.get("ticker")] = (r.get("thesis", ""), r.get("fill_price"))
+            owner[r.get("ticker")] = (r.get("strategy_id"), r.get("thesis", ""), r.get("fill_price"))
         elif r.get("status") == "SIMULATED" and r.get("side") == "SELL":
             owner.pop(r.get("ticker"), None)
     for st in strategies:
-        thesis, px = owner.get(st.ticker, ("", None))
+        sid, thesis, px = owner.get(st.ticker, (None, "", None))
         kind = "Momentum" if "momentum" in thesis else "MeanRev" if "mean" in thesis else None
-        if px and held.get(st.ticker, 0) > 0 and type(st).__name__ == kind:
+        matches = st.strategy_id == sid if sid else type(st).__name__ == kind
+        if px and held.get(st.ticker, 0) > 0 and matches:
             st.entry = px
 
 

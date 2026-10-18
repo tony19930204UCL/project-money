@@ -22,7 +22,8 @@ class PaperSession:
         if self.account_path.exists():
             try:
                 state = json.loads(self.account_path.read_text(encoding="utf-8"))
-                if not isinstance(state, dict) or set(state) != {"cash", "positions", "realized_pnl", "marks", "daily_start_equity"}:
+                required = {"cash", "positions", "realized_pnl", "marks", "daily_start_equity"}
+                if not isinstance(state, dict) or not required <= set(state) or set(state) - required - {"strategy_state"}:
                     raise ValueError("invalid state schema")
                 if not isinstance(state["positions"], dict) or not isinstance(state["marks"], dict):
                     raise ValueError("invalid position/mark maps")
@@ -32,6 +33,22 @@ class PaperSession:
                 start = state["daily_start_equity"]
                 if start is not None and (isinstance(start, bool) or not isinstance(start, (int, float)) or not math.isfinite(start)):
                     raise ValueError("invalid starting equity")
+                owners = state.get("strategy_state", {})
+                if not isinstance(owners, dict):
+                    raise ValueError("invalid strategy state")
+                for symbol, owner in owners.items():
+                    if (not isinstance(owner, dict)
+                            or set(owner) != {"strategy_id", "entry", "peak", "held_ticks"}
+                            or not isinstance(owner["strategy_id"], str) or not owner["strategy_id"]
+                            or state["positions"].get(symbol, 0) <= 0):
+                        raise ValueError("invalid strategy owner")
+                    for key in ("entry", "peak"):
+                        v = owner[key]
+                        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0:
+                            raise ValueError("invalid strategy price")
+                    age = owner["held_ticks"]
+                    if isinstance(age, bool) or not isinstance(age, int) or age < 0:
+                        raise ValueError("invalid strategy age")
                 self.account = PaperAccount(**state)
             except (OSError, ValueError, TypeError, KeyError) as exc:
                 raise ValueError("CORRUPT_PAPER_ACCOUNT_STATE") from exc
@@ -47,7 +64,7 @@ class PaperSession:
     def _persist(self):
         self.account_path.parent.mkdir(parents=True, exist_ok=True)
         state = {key: getattr(self.account, key) for key in
-                 ("cash", "positions", "realized_pnl", "marks", "daily_start_equity")}
+                 ("cash", "positions", "realized_pnl", "marks", "daily_start_equity", "strategy_state")}
         fd, name = tempfile.mkstemp(prefix=".paper-account-", dir=self.account_path.parent)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:

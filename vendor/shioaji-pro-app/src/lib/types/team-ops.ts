@@ -47,6 +47,8 @@ export interface TeamHolding {
     price_freshness: FreshnessStatus;
     quote_timestamp?: string | null;
     strategy_id?: string;
+    source?: string;
+    held_ticks?: number | null;
 }
 
 export interface MarketRegimeInfo {
@@ -88,6 +90,13 @@ export interface DeskStatus {
     desk_name: string;
     active_playbook: ActivePlaybookInfo;
     roles: FunctionalDeskRole[];
+    current_duty?: {
+        source: string;
+        task: string;
+        observed_at: string;
+        status: string;
+        freshness: string;
+    } | null;
     next_review_time: string;
 }
 

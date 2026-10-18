@@ -221,3 +221,175 @@ def test_future_quote_timestamp_cannot_claim_freshness(runtime):
     put(runtime, "US_account.json", {"cash": 50, "positions": {}, "marks": {"NVDA": 10},
         "quote_timestamps": {"NVDA": "2026-10-19T10:00:00+00:00"}})
     assert next(q for q in build(runtime)["quotes"] if q["symbol"] == "NVDA")["freshness"] == "UNKNOWN"
+
+
+def test_quote_sources_preserve_same_symbol_and_duty_is_recorded(runtime):
+    snap = build(runtime)
+    same_symbol = [q for q in snap["quotes"] if q["symbol"] == "2454.TW"]
+    assert {q["source"] for q in same_symbol} == {"TW_account.marks", "swing_book.marks"}
+    assert next(q for q in same_symbol if q["source"] == "swing_book.marks")["price"] is None
+    duty = snap["posture"]["desk"]["current_duty"]
+    assert duty["source"] == "feed"
+    assert duty["status"] == "LAST_RECORDED_EVENT"
+    assert duty["observed_at"] == "2026-10-18T09:59:59+00:00"
+    assert duty["task"] == next(r["current_task"] for r in snap["posture"]["desk"]["roles"]
+                                if r["role_id"] == "feed")
+    assert duty["freshness"] == "fresh"
+
+
+def test_no_events_or_only_future_events_cannot_claim_current_duty(runtime):
+    for path in runtime.glob("*.jsonl"):
+        path.write_text("")
+    assert build(runtime)["posture"]["desk"]["current_duty"] is None
+    lines(runtime, "TW_journal.jsonl", [{"status": "SIMULATED", "ticker": "2454.TW",
+        "timestamp": "2026-10-19T05:00:00+00:00"}])
+    assert build(runtime)["posture"]["desk"]["current_duty"] is None
+
+
+def paper_chain(root, *, reject=False, cash=10000):
+    """Real paper order service, loop, persistence and API; fixture quotes only."""
+    from types import SimpleNamespace
+    from cio_market_lab.engine.paper_runner import Momentum, MeanRev, _configure, _default_orders
+    from cio_market_lab.engine.paper_session import PaperSession
+    from cio_market_lab.engine.paper_trading_loop import PaperTradingLoop
+
+    opened = datetime(2026, 10, 13, 2, tzinfo=timezone.utc)
+
+    class RecordedFeed:
+        price = 100
+
+        def clock(self):
+            return opened
+
+        def latest(self, symbol):
+            return SimpleNamespace(c=self.price, ts=opened, source="TWSE_MIS", staleness_seconds=0)
+
+    root.mkdir(parents=True, exist_ok=True)
+    account_path = root / "TW_account.json"
+    if not account_path.exists():
+        put(root, account_path.name, {"cash": cash, "positions": {}, "marks": {},
+            "realized_pnl": 0, "daily_start_equity": None})
+    orders = _default_orders(root)
+    orders._now_fn = lambda: opened
+    _configure(orders, "TW", {"cash": 10000, "tickers": {"2454.TW": 2}})
+    if reject:
+        orders.experiments["Momentum_TW"].enabled = False
+    momentum = Momentum("2454.TW", 2, market="TW", max_hold_ticks=3)
+    other = MeanRev("2454.TW", 2, market="TW", max_hold_ticks=1)
+    feed = RecordedFeed()
+    loop = PaperTradingLoop(orders, root / "TW_loop.jsonl", max_position_pct=0.2)
+    session = PaperSession(feed, loop, [other, momentum], account_path,
+                           root / "TW_journal.jsonl", ["2454.TW"])
+    return session, feed, momentum, other
+
+
+def test_e2e_strategy_owner_time_stop_survives_restart_and_reaches_api(tmp_path):
+    root = tmp_path / "data" / "paper_runtime"
+    session, feed, owner, other = paper_chain(root)
+    session.run_session(120)
+    feed.price = 101
+    session.run_session(1)
+    state = json.loads((root / "TW_account.json").read_text())
+    assert state["positions"]["2454.TW"] == 2
+    assert state["strategy_state"]["2454.TW"]["strategy_id"] == "Momentum_TW"
+    assert state["strategy_state"]["2454.TW"]["held_ticks"] == 0
+    assert other.entry is None
+    session.run_session(1)
+    assert session.account.strategy_state["2454.TW"]["held_ticks"] == 1
+    assert other.held_ticks == 0  # max_hold_ticks=1 on the non-owner cannot sell
+    put(root, "swing_book.json", {"cash": 200, "pos": {"2454.TW": {
+        "e": 80, "sh": 4, "fam": "pullback"}}})
+    app = create_app(workspace_root=tmp_path, is_read_only=True)
+    with TestClient(app) as client:
+        snap = client.get("/api/paper/team-ops").json()
+        rows = [h for h in snap["holdings"] if h["symbol"] == "2454.TW"]
+        assert {(h["source"], h["strategy_id"], h["quantity"]) for h in rows} == {
+            ("TW_account", "Momentum_TW", 2), ("swing_book", "pullback", 4)}
+        assert next(h for h in rows if h["source"] == "TW_account")["held_ticks"] == 1
+        assert snap["posture"]["desk"]["current_duty"]["source"] == "TW_account"
+
+        restarted, resumed_feed, resumed_owner, resumed_other = paper_chain(root)
+        resumed_feed.price = 101
+        restarted.run_session(1)
+        assert restarted.account.positions["2454.TW"] == 2
+        assert restarted.account.strategy_state["2454.TW"]["held_ticks"] == 2
+        restarted.run_session(1)
+        assert restarted.account.positions["2454.TW"] == 0
+        assert "2454.TW" not in restarted.account.strategy_state
+        assert resumed_other.entry is None
+        snap = client.get("/api/paper/team-ops").json()
+        assert [(h["source"], h["quantity"]) for h in snap["holdings"]] == [("swing_book", 4)]
+        exits = [r for r in snap["fills"] if r["side"] == "SELL"]
+        assert len(exits) == 1
+        assert exits[0]["source"] == "TW_account"
+    events = [json.loads(line) for line in (root / "TW_loop.jsonl").read_text().splitlines()]
+    assert [(e["strategy_id"], e["side"], e["status"]) for e in events] == [
+        ("Momentum_TW", "BUY", "SIMULATED"), ("Momentum_TW", "SELL", "SIMULATED")]
+    assert events[-1]["thesis"] == "exit:time_stop"
+    assert all(e["paper_only"] is True for e in events)
+
+
+def test_e2e_rejected_entry_never_acquires_ownership(tmp_path):
+    session, feed, owner, other = paper_chain(tmp_path, reject=True)
+    session.run_session(120)
+    feed.price = 101
+    session.run_session(1)
+    events = [json.loads(line) for line in (tmp_path / "TW_loop.jsonl").read_text().splitlines()]
+    assert len(events) == 1 and events[0]["status"] == "REJECTED"
+    assert not session.account.positions and not session.account.strategy_state
+    assert owner.entry is owner.peak is None and owner.held_ticks == 0
+
+
+def test_e2e_wrong_strategy_cannot_sell_owned_position(tmp_path):
+    from cio_market_lab.engine.paper_trading_loop import Signal
+
+    session, feed, owner, other = paper_chain(tmp_path)
+    session.run_session(120)
+    feed.price = 101
+    session.run_session(1)
+    other.signals = lambda quotes, account: [Signal("2454.TW", "stock", "SELL", 2,
+                                                   None, None, "forced wrong-owner sell")]
+    session.strategies = [other]
+    session.run_session(1)
+    events = [json.loads(line) for line in (tmp_path / "TW_loop.jsonl").read_text().splitlines()]
+    assert events[-1]["reason"] == "STRATEGY_OWNERSHIP_MISMATCH"
+    assert events[-1]["status"] == "REJECTED"
+    assert session.account.positions["2454.TW"] == 2
+    assert session.account.strategy_state["2454.TW"]["strategy_id"] == "Momentum_TW"
+
+
+def test_e2e_rejected_time_stop_preserves_owner_until_success(tmp_path):
+    session, feed, owner, other = paper_chain(tmp_path)
+    session.run_session(120)
+    feed.price = 101
+    session.run_session(1)
+    session.loop.orders.experiments["Momentum_TW"].enabled = False
+    session.run_session(3)
+    assert session.account.positions["2454.TW"] == 2
+    assert session.account.strategy_state["2454.TW"]["held_ticks"] == 3
+    assert owner.entry is not None
+    assert owner.entry == session.account.strategy_state["2454.TW"]["entry"]
+    assert owner.entry > 101 and owner.held_ticks == 3  # actual fill includes paper slippage
+    session.loop.orders.experiments["Momentum_TW"].enabled = True
+    session.run_session(1)
+    assert session.account.positions["2454.TW"] == 0
+    assert not session.account.strategy_state
+    events = [json.loads(line) for line in (tmp_path / "TW_loop.jsonl").read_text().splitlines()]
+    assert [(e["side"], e["status"]) for e in events] == [
+        ("BUY", "SIMULATED"), ("SELL", "REJECTED"), ("SELL", "SIMULATED")]
+
+
+@pytest.mark.parametrize("override", [
+    {"strategy_id": ""}, {"entry": 0}, {"peak": float("nan")},
+    {"held_ticks": -1}, {"held_ticks": True}, {"held_ticks": 1.5},
+])
+def test_invalid_persisted_strategy_state_is_fail_closed(tmp_path, override):
+    state = {"cash": 10000, "positions": {"2454.TW": 2}, "marks": {"2454.TW": 101},
+             "realized_pnl": 0, "daily_start_equity": None,
+             "strategy_state": {"2454.TW": {"strategy_id": "Momentum_TW", "entry": 101,
+                                              "peak": 101, "held_ticks": 1, **override}}}
+    put(tmp_path, "TW_account.json", state)
+    before = (tmp_path / "TW_account.json").read_bytes()
+    with pytest.raises(ValueError, match="CORRUPT_PAPER_ACCOUNT_STATE"):
+        paper_chain(tmp_path)
+    assert (tmp_path / "TW_account.json").read_bytes() == before

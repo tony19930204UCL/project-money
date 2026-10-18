@@ -30,6 +30,7 @@ class PaperAccount:
     realized_pnl: float = 0.0
     daily_start_equity: float | None = None
     marks: dict = field(default_factory=dict)
+    strategy_state: dict = field(default_factory=dict)
 
 
 class MomentumSwing:
@@ -125,6 +126,10 @@ class PaperTradingLoop:
                     reason = "INVALID_SIGNAL"
                 elif kind not in ("stock", "etf", "option", "warrant", "future"):
                     reason = "INVALID_INSTRUMENT"
+                elif (account.positions.get(signal.ticker, 0) > 0
+                      and account.strategy_state.get(signal.ticker, {}).get("strategy_id")
+                      not in (None, getattr(strategy, "strategy_id", None))):
+                    reason = "STRATEGY_OWNERSHIP_MISMATCH"
                 elif breaker:
                     reason = "DAILY_LOSS_CIRCUIT_BREAKER"
                 elif kind in ("option", "warrant", "future"):
@@ -200,6 +205,9 @@ class PaperTradingLoop:
                               tax=tax if not reason else 0., paper_only=True,
                               quote_timestamp=quote.ts.isoformat() if quote else None)
                 self._journal(record)
+                callback = getattr(strategy, "on_execution", None)
+                if callable(callback):
+                    callback(signal, record, account)
                 results.append(record)
         return dict(events=results, equity=self._equity(account, quotes),
                     circuit_breaker=breaker, marks={s: q.c for s, q in quotes.items()})
