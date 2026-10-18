@@ -114,6 +114,86 @@ def _events(root: Path, market: str, warnings: list[str]) -> list[dict]:
     return sorted(unique.values(), key=lambda r: _timestamp(r) or "")
 
 
+def _fifo(source: str, market: str, events: list[dict]) -> tuple[dict, list[dict]]:
+    """Rebuild open lots and closed long round trips from recorded simulated fills (FIFO)."""
+    lots: dict[str, list[dict]] = {}
+    trips: list[dict] = []
+    for ev in events:
+        if ev.get("status") != "SIMULATED":
+            continue
+        sym, side = ev.get("ticker"), ev.get("side")
+        qty, px = _number(ev.get("size")), _number(ev.get("fill_price"))
+        if not sym or qty is None or px is None or qty <= 0 or side not in {"BUY", "SELL"}:
+            continue
+        fee = (_number(ev.get("fee")) or 0.0) + (_number(ev.get("tax")) or 0.0)
+        if side == "BUY":
+            lots.setdefault(sym, []).append({"qty": qty, "px": px, "fee": fee, "q0": qty,
+                "ts": _timestamp(ev), "strategy": ev.get("strategy_id"), "thesis": ev.get("thesis"),
+                "stop": _number(ev.get("stop")), "target": _number(ev.get("target"))})
+            continue
+        left, legs, cost, buy_fee = qty, [], 0.0, 0.0
+        queue = lots.get(sym, [])
+        while left > 1e-9 and queue:
+            lot = queue[0]
+            take = min(left, lot["qty"])
+            share = take / lot["q0"]
+            legs.append({"qty": take, "price": lot["px"], "time": lot["ts"], "fee": lot["fee"] * share,
+                         "strategy": lot["strategy"], "thesis": lot["thesis"]})
+            cost += take * lot["px"]
+            buy_fee += lot["fee"] * share
+            lot["qty"] -= take
+            left -= take
+            if lot["qty"] <= 1e-9:
+                queue.pop(0)
+        matched = qty - left
+        if matched <= 1e-9:
+            continue
+        proceeds = matched * px
+        pnl = proceeds - cost - buy_fee - fee * matched / qty
+        strategies = sorted({l["strategy"] for l in legs if l["strategy"]})
+        trips.append({"trip_id": f"{source}:{sym}:{_timestamp(ev)}", "symbol": sym, "market": market,
+            "currency": "TWD" if market == "TW" else "USD", "source": source, "direction": "LONG",
+            "strategy_id": "+".join(strategies) or ev.get("strategy_id"), "quantity": matched,
+            "buy_price": cost / matched, "sell_price": px, "buy_time": legs[0]["time"],
+            "sell_time": _timestamp(ev), "pnl": pnl, "pnl_pct": pnl / cost * 100 if cost else None,
+            "fees": buy_fee + fee * matched / qty, "exit_reason": ev.get("thesis"),
+            "entry_reason": legs[0]["thesis"],
+            "legs": {"buys": legs, "sell": {"qty": matched, "price": px, "time": _timestamp(ev), "fee": fee * matched / qty}}})
+    return lots, trips
+
+
+def _open_lot_summary(lots: list[dict]) -> dict | None:
+    qty = sum(l["qty"] for l in lots)
+    if qty <= 1e-9:
+        return None
+    strategies = sorted({l["strategy"] for l in lots if l["strategy"]})
+    return {"entry": sum(l["qty"] * l["px"] for l in lots) / qty, "strategy": "+".join(strategies) or None,
+            "entered_at": lots[0]["ts"], "stop": lots[-1]["stop"], "target": lots[-1]["target"]}
+
+
+def _latest_eod(root: Path) -> tuple[dict, str | None]:
+    """Latest official end-of-day closes (TWSE+TPEX) stored beside the runtime dir."""
+    folder = Path(root).parent / "official_eod"
+    closes: dict[str, float] = {}
+    day = None
+    try:
+        files = sorted(folder.glob("twse_*.json"))
+        if not files:
+            return {}, None
+        stem = files[-1].stem.split("_")[1]
+        day = f"{int(stem[:-4]) + 1911}-{stem[-4:-2]}-{stem[-2:]}"
+        for venue in ("twse", "tpex"):
+            f = folder / f"{venue}_{stem}.json"
+            if f.exists():
+                for code, row in json.loads(f.read_text()).items():
+                    c = _number(row.get("close")) if isinstance(row, dict) else None
+                    if c:
+                        closes[code] = c
+    except (OSError, ValueError):
+        return {}, None
+    return closes, day
+
+
 def _role(source: str, events: list[dict]) -> dict:
     last = events[-1] if events else {}
     task = None
@@ -180,6 +260,7 @@ def build_live_team_ops(root: Path, *, now: datetime | None = None) -> dict:
     benchmark.update(benchmark_name="UNKNOWN", name="UNKNOWN", period="UNKNOWN", currency="MIXED")
     out["benchmark"] = benchmark
     out["holdings"], out["quotes"], out["orders"], out["fills"], out["activity"] = [], [], [], [], []
+    out["round_trips"] = []
     roles, all_events = [], []
     sources = out["portfolio"]["sources"]
 
@@ -190,6 +271,8 @@ def build_live_team_ops(root: Path, *, now: datetime | None = None) -> dict:
         events = _events(root, market, warnings)
         roles.append(_role(source, events))
         all_events.extend((source, row) for row in events)
+        open_lots, trips = _fifo(source, market, events)
+        out["round_trips"].extend(trips)
         marks = _mapping(account.get("marks"))
         positions = _mapping(account.get("positions"))
         values = []
@@ -205,11 +288,20 @@ def build_live_team_ops(root: Path, *, now: datetime | None = None) -> dict:
             value = qty * px if px is not None else None
             values.append(value)
             owner = _mapping(_mapping(account.get("strategy_state")).get(symbol))
-            holding = _holding(symbol, market, source, qty, _number(owner.get("entry")), px, value,
+            derived = _open_lot_summary(open_lots.get(symbol, []))
+            entry = _number(owner.get("entry"))
+            strategy = owner.get("strategy_id")
+            if derived and abs(sum(l["qty"] for l in open_lots[symbol]) - qty) < 1e-6:
+                entry = entry if entry is not None else derived["entry"]
+                strategy = strategy or derived["strategy"]
+            holding = _holding(symbol, market, source, qty, entry, px, value,
                 _mapping(account.get("quote_timestamps")).get(symbol), now)
-            holding.update(strategy_id=owner.get("strategy_id"), held_ticks=owner.get("held_ticks"))
-            if owner.get("strategy_id"):
-                holding["strategy_attribution"] = {owner["strategy_id"]: {"quantity": qty}}
+            holding.update(strategy_id=strategy, held_ticks=owner.get("held_ticks"))
+            if derived:
+                holding.update(entry_day=(derived["entered_at"] or "")[:10] or None, stop=derived["stop"],
+                               entry_basis="由逐筆成交紀錄(FIFO)還原")
+            if strategy:
+                holding["strategy_attribution"] = {strategy: {"quantity": qty}}
             out["holdings"].append(holding)
         for symbol in sorted(marks.keys() | positions.keys()):
             px = _number(marks.get(symbol))
@@ -239,6 +331,7 @@ def build_live_team_ops(root: Path, *, now: datetime | None = None) -> dict:
     currency = book.get("currency") or (next(iter(currencies)) if len(currencies) == 1 else "UNKNOWN")
     cash = _number(book.get("cash"))
     values = []
+    eod_close, eod_day = _latest_eod(root)
     for symbol, raw_pos in positions.items():
         pos = _mapping(raw_pos)
         qty, entry = _number(pos.get("sh")), _number(pos.get("e"))
@@ -249,17 +342,30 @@ def build_live_team_ops(root: Path, *, now: datetime | None = None) -> dict:
             values.append(None)
             continue
         px = _number(_mapping(book.get("marks")).get(symbol))
+        timestamp = _mapping(book.get("quote_timestamps")).get(symbol)
+        eod_ref = None
+        if px is None and eod_close.get(symbol.split(".")[0]) is not None:
+            eod_ref = eod_close[symbol.split(".")[0]]
         value = qty * px if px is not None else None
         values.append(value)
-        timestamp = _mapping(book.get("quote_timestamps")).get(symbol)
         holding = _holding(symbol, _market(symbol), "swing_book", qty, entry, px, value, timestamp, now)
         holding.update(stop=_number(pos.get("stop")), strategy_id=pos.get("fam"), entry_day=pos.get("entry_day"))
+        if eod_ref is not None:
+            # Reference-only: official close is shown, but never enters NAV/equity.
+            holding.update(current_price=eod_ref, market_value=qty * eod_ref,
+                unrealized_pnl=(eod_ref - entry) * qty if entry is not None else None,
+                return_pct=(eod_ref / entry - 1) * 100 if entry else None,
+                unrealized_pnl_pct=(eod_ref / entry - 1) * 100 if entry else None,
+                price_freshness="stale", price_basis=f"官方收盤價 {eod_day}（參考，未計入淨值）")
         out["holdings"].append(holding)
         # Keep each recorded source independently selectable, even for the same
         # ticker. Missing marks stay null; entry/peak is never a quote substitute.
-        out["quotes"].append({"symbol": symbol, "market": _market(symbol), "price": px,
-            "change_pct": None, "source": "swing_book.marks",
-            "timestamp": timestamp, "freshness": _freshness(timestamp, now) if px is not None else "UNKNOWN"})
+        out["quotes"].append({"symbol": symbol, "market": _market(symbol),
+            "price": px if px is not None else eod_ref,
+            "change_pct": None, "source": "swing_book.marks" if px is not None else (
+                "official_eod.close" if eod_ref is not None else "swing_book.marks"),
+            "timestamp": timestamp or (eod_day if eod_ref is not None else None),
+            "freshness": _freshness(timestamp, now) if px is not None else ("stale" if eod_ref is not None else "UNKNOWN")})
     complete_marks = isinstance(book.get("pos"), dict) and all(v is not None for v in values)
     recorded = _number(book.get("equity"))
     # The producer stores close equity even though it does not persist each mark.

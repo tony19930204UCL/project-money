@@ -54,7 +54,7 @@ def test_schema_key_sets(runtime):
     snap = build(runtime)
     old = to_public_team_ops_snapshot({"portfolio": {"nav_status": "OK"}, "safety": {"paper_only": True},
                                        "integrity_warnings": []})
-    assert set(snap) == set(old)
+    assert set(snap) == set(old) | {"round_trips"}
     for section in ("safety", "sessions", "benchmark"):
         assert set(snap[section]) == set(old[section])
     for section in ("portfolio", "posture", "risk"):
@@ -92,7 +92,9 @@ def test_unknowns_not_entry_peak_or_latency_as_quotes(runtime):
     assert h["current_price"] is h["market_value"] is h["return_pct"] is None
     assert h["price_freshness"] == "UNKNOWN"
     account = next(h for h in snap["holdings"] if h["source"] == "TW_account")
-    assert account["entry_price"] is account["cost_basis"] is None
+    # Entry/strategy are rebuilt from recorded fills (evidence), never from marks.
+    assert account["entry_price"] == 95 and account["cost_basis"] == 190
+    assert account["strategy_id"] == "MeanRev_TW"
     assert all(q["change_pct"] is None and q["timestamp"] is None and q["freshness"] == "UNKNOWN"
                for q in snap["quotes"])
     assert snap["portfolio"]["return_pct"] is None
@@ -393,3 +395,28 @@ def test_invalid_persisted_strategy_state_is_fail_closed(tmp_path, override):
     with pytest.raises(ValueError, match="CORRUPT_PAPER_ACCOUNT_STATE"):
         paper_chain(tmp_path)
     assert (tmp_path / "TW_account.json").read_bytes() == before
+
+
+def test_round_trip_fifo_pairs_buy_and_sell(runtime):
+    buy = {"status": "SIMULATED", "ticker": "AMD", "side": "BUY", "size": 10, "fill_price": 100,
+           "fee": 1, "sequence": 1, "strategy_id": "Momentum_US", "thesis": "in",
+           "timestamp": "2026-10-16T14:00:00+00:00"}
+    sell = dict(buy, side="SELL", size=4, fill_price=110, sequence=2, strategy_id=None,
+                thesis="exit:x", timestamp="2026-10-16T15:00:00+00:00")
+    lines(runtime, "US_journal.jsonl", [buy, sell])
+    snap = build(runtime)
+    trip = next(t for t in snap["round_trips"] if t["symbol"] == "AMD")
+    assert trip["direction"] == "LONG" and trip["strategy_id"] == "Momentum_US"
+    assert (trip["quantity"], trip["buy_price"], trip["sell_price"]) == (4, 100, 110)
+    assert abs(trip["pnl"] - (40 - 0.4 - 1)) < 1e-9  # 4/10 of buy fee 1 = 0.4; sell fee 1
+    assert trip["legs"]["sell"]["qty"] == 4
+
+
+def test_swing_reference_close_does_not_enter_nav(runtime):
+    eod = runtime.parent / "official_eod"
+    eod.mkdir()
+    (eod / "twse_1151015.json").write_text(json.dumps({"2454": {"close": 90.0}}))
+    snap = build(runtime)
+    h = next(h for h in snap["holdings"] if h["source"] == "swing_book")
+    assert h["current_price"] == 90.0 and h["price_freshness"] == "stale"
+    assert snap["portfolio"]["sources"]["swing_book"]["equity"] == 580

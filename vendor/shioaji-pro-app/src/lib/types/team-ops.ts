@@ -212,6 +212,36 @@ export interface StrategyBreakdownRow {
     cash_reporting?: number;
 }
 
+export interface RoundTripLeg {
+    qty: number;
+    price: number;
+    time: string | null;
+    fee: number;
+    strategy?: string | null;
+    thesis?: string | null;
+}
+
+export interface RoundTrip {
+    trip_id: string;
+    symbol: string;
+    market: string;
+    currency: string;
+    source: string;
+    direction: 'LONG' | 'SHORT';
+    strategy_id: string | null;
+    quantity: number;
+    buy_price: number;
+    sell_price: number;
+    buy_time: string | null;
+    sell_time: string | null;
+    pnl: number;
+    pnl_pct: number | null;
+    fees: number;
+    exit_reason: string | null;
+    entry_reason: string | null;
+    legs: { buys: RoundTripLeg[]; sell: { qty: number; price: number; time: string | null; fee: number } };
+}
+
 export interface TeamOpsSnapshot {
     server_time: string;
     data_freshness: FreshnessStatus;
@@ -227,6 +257,7 @@ export interface TeamOpsSnapshot {
     quotes: QuoteItem[];
     orders: PaperOrder[];
     fills: PaperFill[];
+    round_trips?: RoundTrip[];
     activity: TeamActivity[];
     benchmark: BenchmarkComparison;
     desk?: DeskStatus;

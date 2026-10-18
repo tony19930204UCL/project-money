@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import App from './App';
+import { TeamOpsWorkspace } from './components/team-ops/team-ops-workspace';
 import './workstation-shell.css';
 
 type WorkspaceKey =
+    | 'team-ops'
     | 'command-center'
     | 'markets'
     | 'chart'
@@ -26,6 +28,13 @@ type ViewDefinition = {
 };
 
 const VIEWS: ViewDefinition[] = [
+    {
+        key: 'team-ops',
+        label: '團隊運維',
+        eyebrow: 'TEAM OPS',
+        title: '團隊運維',
+        description: 'Paper team operations',
+    },
     {
         key: 'command-center',
         label: 'Command Center',
@@ -450,7 +459,7 @@ function DataWorkspace({ definition }: { definition: ViewDefinition }) {
 }
 
 export function WorkstationShell() {
-    const [active, setActive] = useState<WorkspaceKey>('command-center');
+    const [active, setActive] = useState<WorkspaceKey>('team-ops');
     const [healthStatus, setHealthStatus] = useState<LoadStatus>('loading');
     const [healthPayload, setHealthPayload] = useState<unknown>(null);
     const [terminalOpen, setTerminalOpen] = useState(false);
@@ -498,7 +507,9 @@ export function WorkstationShell() {
                 ))}
             </nav>
             <main className="pm-workstation-main">
-                {definition.key === 'command-center' ? (
+                {definition.key === 'team-ops' ? (
+                    <div className="pm-teamops-host"><TeamOpsWorkspace /></div>
+                ) : definition.key === 'command-center' ? (
                     <section
                         className="pm-workspace-panel pm-command-center"
                         data-workspace-view="command-center"

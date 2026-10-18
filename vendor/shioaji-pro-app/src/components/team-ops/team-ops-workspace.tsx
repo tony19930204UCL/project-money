@@ -25,7 +25,7 @@ import {
     Users,
     ZapOff,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import {
     cioApi,
     formatCurrency,
@@ -38,17 +38,56 @@ import type {
     FunctionalDeskRole,
     PaperFill,
     PaperOrder,
+    RoundTrip,
     TeamOpsSnapshot,
 } from '../../lib/types/team-ops';
 import { vars } from '../../theme.css';
 import * as styles from './team-ops-workspace.css';
+
+const NOTICE_TEXT: Array<[string, string]> = [
+    ['LIVE_PAPER_RUNTIME_READ_ONLY', '資料來源是紙盤執行紀錄檔的唯讀快照，不是券商帳戶或正式結算資料。'],
+    ['Per source equity', '各帳本（台股、美股、波段）各自獨立計算「現金＋持倉市值」，同代碼不合併；台幣與美元沒有可驗證匯率前，不加總成總淨值。'],
+    ['UNKNOWN_RUNTIME_KILL_SWITCH', '目前沒有執行器回報熔斷開關狀態，頁面以保守的「已鎖定」顯示，並非實際觸發。'],
+    ['UNKNOWN_MARK_TIMESTAMPS', '帳戶持倉價是紀錄當下的收盤／標記值，沒有逐筆時間戳，因此不標示「即時」。'],
+    ['UNKNOWN_INITIAL_CAPITAL_FX_BENCHMARK', '尚未記錄初始本金、匯率與基準，所以不顯示總報酬率與總淨值（不拿估算值充數）。'],
+    ['SWING_INDIVIDUAL_MARKS_UNAVAILABLE', '波段帳本沒有逐檔即時價；持倉旁的價格改用官方收盤價作參考，帳本總淨值沿用其自己記錄的收盤權益。'],
+    ['SWING_PARAMS_VERSION_DIFFERS', '波段帳本進場時用的參數版本，與目前參數檔版本不同（參數之後又被更新過），屬正常的版本差異。'],
+    ['HISTORY_BOUNDED', '委託、成交與動態流水只顯示最新 100 筆；完整交易（買賣配對）則由全部成交紀錄還原。'],
+];
+
+function isKnownNotice(raw: string): boolean {
+    return NOTICE_TEXT.some(([key]) => raw.startsWith(key));
+}
+
+function describeNotice(raw: string): string {
+    const hit = NOTICE_TEXT.find(([key]) => raw.startsWith(key));
+    return hit ? hit[1] : raw;
+}
+
+const fmtTripTime = (ts?: string | null): string => {
+    if (!ts) return '—';
+    const d = new Date(ts);
+    return Number.isNaN(d.getTime()) ? ts : d.toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+};
+
+const fmtHold = (a?: string | null, b?: string | null): string => {
+    if (!a || !b) return '—';
+    const mins = Math.round((new Date(b).getTime() - new Date(a).getTime()) / 60000);
+    if (!Number.isFinite(mins) || mins < 0) return '—';
+    if (mins < 60) return `${mins} 分鐘`;
+    if (mins < 1440) return `${(mins / 60).toFixed(1)} 小時`;
+    return `${(mins / 1440).toFixed(1)} 天`;
+};
 
 export function TeamOpsWorkspace() {
     const [snapshot, setSnapshot] = useState<TeamOpsSnapshot | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [lastRefreshTime, setLastRefreshTime] = useState<Date>(new Date());
-    const [ordersTab, setOrdersTab] = useState<'orders' | 'fills'>('orders');
+    const [ordersTab, setOrdersTab] = useState<'trips' | 'orders' | 'fills'>('trips');
+    const [expandedTrip, setExpandedTrip] = useState<string | null>(null);
+    const [tripLimit, setTripLimit] = useState(30);
+    const [showNotices, setShowNotices] = useState(false);
     const [quoteSource, setQuoteSource] = useState('ALL');
     const [showLegacyLeaderboard, setShowLegacyLeaderboard] = useState(false);
     const [agents, setAgents] = useState<Array<{ experiment: Experiment; status: ExperimentRuntimeStatus }>>([]);
@@ -105,6 +144,20 @@ export function TeamOpsWorkspace() {
     const visibleQuotes = quotes.filter((q) => selectedQuoteSource === 'ALL' || q.source === selectedQuoteSource);
     const orders = snapshot?.orders ?? [];
     const fills = snapshot?.fills ?? [];
+    const allNotices = snapshot?.integrity_warnings ?? [];
+    const knownNotices = allNotices.filter(isKnownNotice);
+    const unknownNotices = allNotices.filter(w => !isKnownNotice(w));
+    const pendingOrders = orders.filter(o => o.status !== 'FILLED');
+    const trips = [...(snapshot?.round_trips ?? [])].sort((a, b) => (b.sell_time ?? '').localeCompare(a.sell_time ?? ''));
+    const tripSummary = ['TWD', 'USD'].map(currency => {
+        const rows = trips.filter(t => t.currency === currency);
+        return {
+            currency,
+            count: rows.length,
+            pnl: rows.reduce((sum, t) => sum + t.pnl, 0),
+            winRate: rows.length ? (rows.filter(t => t.pnl > 0).length / rows.length) * 100 : 0,
+        };
+    }).filter(s => s.count > 0);
     const activity = snapshot?.activity ?? [];
     const benchmark = snapshot?.benchmark;
     const legacyLeaderboard = snapshot?.legacy_leaderboard ?? [];
@@ -289,13 +342,26 @@ export function TeamOpsWorkspace() {
                 </div>
             )}
 
-            {snapshot?.integrity_warnings && snapshot.integrity_warnings.length > 0 && (
-                <div className={styles.alertBanner} style={{ backgroundColor: 'rgba(255, 140, 140, 0.12)', border: '1px solid rgba(255, 140, 140, 0.35)' }}>
-                    {snapshot.integrity_warnings.map((w, idx) => (
-                        <div key={idx}>
-                            <strong>數據完整性警告 (Integrity Warning):</strong> {w}
-                        </div>
+            {unknownNotices.length > 0 && (
+                <div className={styles.alertBanner}>
+                    {unknownNotices.map((w, idx) => (
+                        <div key={idx}><strong>數據完整性警告 (Integrity Warning):</strong> {w}</div>
                     ))}
+                </div>
+            )}
+            {knownNotices.length > 0 && (
+                <div style={{ padding: '6px 12px', borderRadius: 4, backgroundColor: 'rgba(139, 148, 167, 0.08)', border: '1px solid rgba(139, 148, 167, 0.25)', fontSize: '0.75rem', color: '#8b94a7' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }} onClick={() => setShowNotices(v => !v)}>
+                        <span>資料說明：本頁為唯讀紀錄回放（非即時券商資料），共 {knownNotices.length} 項已知限制，並非系統錯誤。</span>
+                        <span>{showNotices ? '收合 ▲' : '展開 ▼'}</span>
+                    </div>
+                    {showNotices && (
+                        <ul style={{ margin: '6px 0 0', paddingLeft: 18, lineHeight: 1.7 }}>
+                            {knownNotices.map((w, idx) => (
+                                <li key={idx}>{describeNotice(w)}</li>
+                            ))}
+                        </ul>
+                    )}
                 </div>
             )}
 
@@ -912,138 +978,190 @@ export function TeamOpsWorkspace() {
                 </div>
             </div>
 
-            {/* 6. Orders vs Fills (Separated tabs or sections) */}
+            {/* 6. Orders / Round trips / Fills */}
             <div className={styles.tableCard}>
                 <div className={styles.tableHeader}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                         <div className={styles.sectionTitle}>
                             <Clock size={14} style={{ color: '#3d8bff' }} />
-                            紙盤委託與成交紀錄 (Paper Orders vs Fills)
+                            紙盤交易紀錄 (Paper Trades)
                         </div>
                         <div className={styles.tabGroup}>
+                            <button
+                                className={`${styles.tabBtn} ${ordersTab === 'trips' ? styles.tabBtnActive : ''}`}
+                                onClick={() => setOrdersTab('trips')}
+                            >
+                                已完成交易 ({trips.length})
+                            </button>
                             <button
                                 className={`${styles.tabBtn} ${ordersTab === 'orders' ? styles.tabBtnActive : ''}`}
                                 onClick={() => setOrdersTab('orders')}
                             >
-                                未平倉/進行中委託 ({orders.length})
+                                進行中／被拒委託 ({pendingOrders.length})
                             </button>
                             <button
                                 className={`${styles.tabBtn} ${ordersTab === 'fills' ? styles.tabBtnActive : ''}`}
                                 onClick={() => setOrdersTab('fills')}
                             >
-                                歷史成交紀錄 ({fills.length})
+                                逐筆成交明細 ({fills.length})
                             </button>
                         </div>
                     </div>
                 </div>
 
                 <div className={styles.tableWrapper}>
-                    {ordersTab === 'orders' ? (
+                    {ordersTab === 'trips' && (
+                        <>
+                            <div style={{ padding: '8px 12px', fontSize: '0.78rem', color: '#8b94a7', display: 'flex', gap: 18, flexWrap: 'wrap' }}>
+                                <span>一筆 = 一次買進配對一次賣出（先進先出），點列展開看買賣細節。</span>
+                                {tripSummary.map(s => (
+                                    <span key={s.currency}>
+                                        {s.currency}：{s.count} 筆，勝率 {formatValue(s.winRate, 0)}%，合計損益{' '}
+                                        <strong style={{ color: s.pnl >= 0 ? '#8bd6a5' : '#ff8c8c' }}>{s.pnl >= 0 ? '+' : ''}{formatValue(s.pnl)}</strong>
+                                    </span>
+                                ))}
+                            </div>
+                            <table className={styles.dataTable}>
+                                <thead>
+                                    <tr>
+                                        <th className={styles.th}></th>
+                                        <th className={styles.th}>標的</th>
+                                        <th className={styles.th}>方向</th>
+                                        <th className={styles.th}>買入價</th>
+                                        <th className={styles.th}>賣出價</th>
+                                        <th className={styles.th}>損益 (PnL)</th>
+                                        <th className={styles.th}>策略</th>
+                                        <th className={styles.th}>賣出時間</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {trips.slice(0, tripLimit).map((t: RoundTrip) => {
+                                        const open = expandedTrip === t.trip_id;
+                                        const color = t.pnl >= 0 ? '#8bd6a5' : '#ff8c8c';
+                                        return (
+                                            <Fragment key={t.trip_id}>
+                                                <tr style={{ cursor: 'pointer' }} onClick={() => setExpandedTrip(open ? null : t.trip_id)}>
+                                                    <td className={styles.td} style={{ width: 24 }}>{open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}</td>
+                                                    <td className={styles.td}><strong>{t.symbol}</strong> <span style={{ color: '#8b94a7' }}>({t.market})</span></td>
+                                                    <td className={styles.td} style={{ color: t.direction === 'LONG' ? '#8bd6a5' : '#ff8c8c', fontWeight: 700 }}>{t.direction === 'LONG' ? '做多 LONG' : '做空 SHORT'}</td>
+                                                    <td className={styles.td}>{formatValue(t.buy_price)}</td>
+                                                    <td className={styles.td}>{formatValue(t.sell_price)}</td>
+                                                    <td className={styles.td} style={{ color, fontWeight: 700 }}>
+                                                        {t.pnl >= 0 ? '+' : ''}{formatValue(t.pnl)} {t.currency}
+                                                        <span style={{ marginLeft: 6, fontWeight: 400 }}>({formatPct(t.pnl_pct)})</span>
+                                                    </td>
+                                                    <td className={styles.td} style={{ color: '#8b94a7' }}>{t.strategy_id ?? '—'}</td>
+                                                    <td className={styles.td} style={{ color: '#8b94a7', fontSize: '0.7rem' }}>{fmtTripTime(t.sell_time)}</td>
+                                                </tr>
+                                                {open && (
+                                                    <tr key={t.trip_id + ':detail'}>
+                                                        <td className={styles.td} colSpan={8} style={{ textAlign: 'left', whiteSpace: 'normal', backgroundColor: 'rgba(61, 139, 255, 0.05)', fontSize: '0.76rem', lineHeight: 1.8 }}>
+                                                            <div>
+                                                                <strong>買進</strong>（{t.legs.buys.length} 筆成交，共 {formatValue(t.quantity, 0)} 股）：
+                                                                {t.legs.buys.map((b, i) => (
+                                                                    <span key={i} style={{ marginLeft: 10 }}>
+                                                                        {fmtTripTime(b.time)} @ {formatValue(b.price)} × {formatValue(b.qty, 0)}（費 {formatValue(b.fee)}）
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                            <div>
+                                                                <strong>賣出</strong>：{fmtTripTime(t.legs.sell.time)} @ {formatValue(t.legs.sell.price)} × {formatValue(t.legs.sell.qty, 0)}（費 {formatValue(t.legs.sell.fee)}）
+                                                            </div>
+                                                            <div>
+                                                                <strong>持有</strong> {fmtHold(t.buy_time, t.sell_time)} · 費用合計 {formatValue(t.fees)} · 帳本 {t.source}
+                                                            </div>
+                                                            <div style={{ color: '#dde3ee' }}>
+                                                                <strong>進場理由</strong>：{t.entry_reason ?? '—'}　<strong>出場原因</strong>：{t.exit_reason ?? '—'}
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                )}
+                                            </Fragment>
+                                        );
+                                    })}
+                                    {trips.length === 0 && (
+                                        <tr>
+                                            <td colSpan={8} style={{ textAlign: 'center', padding: '16px', color: '#8b94a7' }}>
+                                                尚無已完成（買進後又賣出）的交易
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                            {trips.length > tripLimit && (
+                                <div style={{ padding: 10, textAlign: 'center' }}>
+                                    <button className={styles.tabBtn} onClick={() => setTripLimit(n => n + 50)}>
+                                        再顯示 50 筆（尚有 {trips.length - tripLimit} 筆）
+                                    </button>
+                                </div>
+                            )}
+                        </>
+                    )}
+                    {ordersTab === 'orders' && (
                         <table className={styles.dataTable}>
                             <thead>
                                 <tr>
-                                    <th className={styles.th}>委託編號</th>
                                     <th className={styles.th}>標的 / 市場</th>
                                     <th className={styles.th}>買賣方向</th>
                                     <th className={styles.th}>數量</th>
-                                    <th className={styles.th}>價格 / 類型</th>
-                                    <th className={styles.th}>委託狀態</th>
+                                    <th className={styles.th}>價格</th>
+                                    <th className={styles.th}>狀態</th>
                                     <th className={styles.th}>策略來源</th>
-                                    <th className={styles.th}>AI 下單論據 (Rationale)</th>
+                                    <th className={styles.th}>原因</th>
                                     <th className={styles.th}>建立時間</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {orders.map((o: PaperOrder) => (
+                                {pendingOrders.map((o: PaperOrder) => (
                                     <tr key={o.order_id}>
-                                        <td className={styles.td}>{o.order_id}</td>
-                                        <td className={styles.td}>
-                                            <strong>{o.symbol}</strong> ({o.market})
-                                        </td>
-                                        <td
-                                            className={styles.td}
-                                            style={{
-                                                color: o.side === 'BUY' ? '#8bd6a5' : '#ff8c8c',
-                                                fontWeight: 700,
-                                            }}
-                                        >
-                                            {o.side}
-                                        </td>
+                                        <td className={styles.td}><strong>{o.symbol}</strong> ({o.market})</td>
+                                        <td className={styles.td} style={{ color: o.side === 'BUY' ? '#8bd6a5' : '#ff8c8c', fontWeight: 700 }}>{o.side}</td>
                                         <td className={styles.td}>{formatValue(o.quantity, 0)}</td>
-                                        <td className={styles.td}>
-                                            {formatValue(o.price)} ({o.order_type})
-                                        </td>
-                                        <td className={styles.td}>
-                                            <span style={{ padding: '2px 6px', borderRadius: 3, fontSize: '0.7rem', backgroundColor: 'rgba(61, 139, 255, 0.12)', color: '#3d8bff' }}>
-                                                {o.status}
-                                            </span>
-                                        </td>
-                                        <td className={styles.td} style={{ color: '#8b94a7' }}>
-                                            {o.strategy_id ?? '—'}
-                                        </td>
-                                        <td className={styles.td} style={{ textAlign: 'left', maxWidth: 260, whiteSpace: 'normal', color: '#dde3ee', fontSize: '0.72rem' }}>
-                                            {o.rationale ?? '—'}
-                                        </td>
-                                        <td className={styles.td} style={{ color: '#8b94a7', fontSize: '0.7rem' }}>
-                                            {formatSnapshotTime(o.created_at)}
-                                        </td>
+                                        <td className={styles.td}>{formatValue(o.price)}</td>
+                                        <td className={styles.td}>{o.status}</td>
+                                        <td className={styles.td} style={{ color: '#8b94a7' }}>{o.strategy_id ?? '—'}</td>
+                                        <td className={styles.td} style={{ textAlign: 'left', maxWidth: 260, whiteSpace: 'normal', fontSize: '0.72rem' }}>{o.rationale ?? '—'}</td>
+                                        <td className={styles.td} style={{ color: '#8b94a7', fontSize: '0.7rem' }}>{formatSnapshotTime(o.created_at)}</td>
                                     </tr>
                                 ))}
-                                {orders.length === 0 && (
+                                {pendingOrders.length === 0 && (
                                     <tr>
-                                        <td colSpan={9} style={{ textAlign: 'center', padding: '16px', color: '#8b94a7' }}>
-                                            目前無進行中紙盤委託
+                                        <td colSpan={8} style={{ textAlign: 'center', padding: '16px', color: '#8b94a7' }}>
+                                            目前沒有進行中或被拒的委託（紙盤委託皆即時模擬成交，已成交者請看「已完成交易」）
                                         </td>
                                     </tr>
                                 )}
                             </tbody>
                         </table>
-                    ) : (
+                    )}
+                    {ordersTab === 'fills' && (
                         <table className={styles.dataTable}>
                             <thead>
                                 <tr>
-                                    <th className={styles.th}>成交編號</th>
+                                    <th className={styles.th}>成交時間</th>
                                     <th className={styles.th}>標的 / 市場</th>
                                     <th className={styles.th}>買賣方向</th>
                                     <th className={styles.th}>成交數量</th>
-                                    <th className={styles.th}>成交均價</th>
-                                    <th className={styles.th}>手續費估計</th>
-                                    <th className={styles.th}>所屬策略</th>
-                                    <th className={styles.th}>成交時間</th>
+                                    <th className={styles.th}>成交價</th>
+                                    <th className={styles.th}>手續費</th>
+                                    <th className={styles.th}>策略</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {fills.map((f: PaperFill) => (
                                     <tr key={f.fill_id}>
-                                        <td className={styles.td}>{f.fill_id}</td>
-                                        <td className={styles.td}>
-                                            <strong>{f.symbol}</strong> ({f.market})
-                                        </td>
-                                        <td
-                                            className={styles.td}
-                                            style={{
-                                                color: f.side === 'BUY' ? '#8bd6a5' : '#ff8c8c',
-                                                fontWeight: 700,
-                                            }}
-                                        >
-                                            {f.side}
-                                        </td>
+                                        <td className={styles.td} style={{ color: '#8b94a7', fontSize: '0.7rem' }}>{formatSnapshotTime(f.timestamp)}</td>
+                                        <td className={styles.td}><strong>{f.symbol}</strong> ({f.market})</td>
+                                        <td className={styles.td} style={{ color: f.side === 'BUY' ? '#8bd6a5' : '#ff8c8c', fontWeight: 700 }}>{f.side}</td>
                                         <td className={styles.td}>{formatValue(f.quantity, 0)}</td>
                                         <td className={styles.td}>{formatValue(f.price)}</td>
-                                        <td className={styles.td} style={{ color: '#8b94a7' }}>
-                                            {formatValue(f.fee)}
-                                        </td>
-                                        <td className={styles.td} style={{ color: '#8b94a7' }}>
-                                            {f.strategy_id ?? '—'}
-                                        </td>
-                                        <td className={styles.td} style={{ color: '#8b94a7', fontSize: '0.7rem' }}>
-                                            {formatSnapshotTime(f.timestamp)}
-                                        </td>
+                                        <td className={styles.td} style={{ color: '#8b94a7' }}>{formatValue(f.fee)}</td>
+                                        <td className={styles.td} style={{ color: '#8b94a7' }}>{f.strategy_id ?? '—'}</td>
                                     </tr>
                                 ))}
                                 {fills.length === 0 && (
                                     <tr>
-                                        <td colSpan={8} style={{ textAlign: 'center', padding: '16px', color: '#8b94a7' }}>
+                                        <td colSpan={7} style={{ textAlign: 'center', padding: '16px', color: '#8b94a7' }}>
                                             尚無成交紀錄
                                         </td>
                                     </tr>

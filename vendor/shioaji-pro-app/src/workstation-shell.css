@@ -1,5 +1,6 @@
 .pm-workstation-shell {
-    min-height: 100vh;
+    height: 100vh;
+    overflow-y: auto;
     width: 100%;
     max-width: 100vw;
     overflow-x: hidden;
@@ -316,4 +317,10 @@
     .pm-order-panel {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+}
+
+.pm-teamops-host {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
 }
