@@ -15,7 +15,7 @@ The real parent acceptance rejected a result with `response="already <processed-
 ## Tests and acceptance
 Add meaningful behavioral tests in `tests/test_c0048_shadow_replay.py` (at least 12) plus existing focused suites. Include: frozen-input immutability; duplicate live guard retained; actual policy invoked in each shadow arm even when live `last` equals the bar session; no runtime I/O/network; one-variable candidate input contract; missing data fail closed; invalid historical pre-state blocked; costs/proposal-only labeling; stop/trailing/time-stop boundaries; parameter-sensitive synthetic example; existing no-difference case; original skipped-calculation payload rejected. Do not set `signal_recalculation_executed=true` without a trace proving the calculator ran.
 
-Acceptance command: `python -m pytest -o addopts= -q tests/test_c0048_shadow_replay.py tests/test_c0048_round2_shadow.py tests/test_c0048_main_handoff.py`.
+Acceptance command in this public engineering lane: `python -m pytest -o addopts= -q tests/test_c0048_shadow_replay.py`. Main also independently reruns the existing local `tests/test_c0048_round2_shadow.py` and `tests/test_c0048_main_handoff.py` suites against private fixtures after diff review. Those private/local suites are intentionally not staged here; missing private inputs must be reported as unavailable, never invented. Do not claim a public source run passed native acceptance.
 
 Never fabricate execution results. If your tool environment cannot run tests, report NOT_RUN; Main reruns them. Include exact source commit and semantic limitations in the mailbox.
 
