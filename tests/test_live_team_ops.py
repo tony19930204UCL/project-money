@@ -59,7 +59,7 @@ def test_schema_key_sets(runtime):
         assert set(snap[section]) == set(old[section])
     for section in ("portfolio", "posture", "risk"):
         assert set(old[section]) <= set(snap[section])
-    assert set(snap["portfolio"]) == set(old["portfolio"]) | {"sources", "equity_by_currency", "equity_rule"}
+    assert set(snap["portfolio"]) == set(old["portfolio"]) | {"sources", "equity_by_currency", "equity_rule", "swing_benchmark_return_pct"}
     assert set(snap["posture"]) == set(old["posture"]) | {"desk", "active_playbook", "next_review_time"}
     assert set(snap["risk"]) == set(old["risk"])
     old_h = to_public_team_ops_snapshot({"holdings": [{"symbol": "X"}]})["holdings"][0]
