@@ -56,6 +56,19 @@ class PaperOrderRequest(BaseModel):
     premium: Optional[float] = None
     provenance: Dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def validate_tw_trade_mode(self):
+        default_mode = "DAY_TRADE" if self.market == Market.TW and self.bucket == DecisionScope.INTRADAY else "DELIVERY"
+        mode = self.audit_metadata.get("tw_trade_mode", default_mode).upper()
+        if mode not in {"DELIVERY", "DAY_TRADE"}:
+            raise ValueError("INVALID_TW_TRADE_MODE")
+        if mode == "DAY_TRADE" and self.market != Market.TW:
+            raise ValueError("DAY_TRADE_MODE_REQUIRES_TW_MARKET")
+        if mode == "DAY_TRADE" and self.bucket != DecisionScope.INTRADAY:
+            raise ValueError("DAY_TRADE_MODE_REQUIRES_INTRADAY_BUCKET")
+        self.audit_metadata["tw_trade_mode"] = mode
+        return self
+
     @field_validator("reason")
     @classmethod
     def reason_not_blank(cls, value: str) -> str:
@@ -242,7 +255,8 @@ class PaperOrderService:
         notional = round(req.quantity * price * multiplier, 4)
         trade_value = req.quantity * effective_price * multiplier
         fee = self.cost_config.calculate_fee(req.market, trade_value)
-        tax = self.cost_config.calculate_tax(req.market, req.side, trade_value)
+        is_day_trade = req.audit_metadata.get("tw_trade_mode", "DELIVERY").upper() == "DAY_TRADE"
+        tax = self.cost_config.calculate_tax(req.market, req.side, trade_value, is_day_trade=is_day_trade)
         slippage = round(req.quantity * per_share_slippage * multiplier, 4)
         reasons: List[str] = []
         data_status = self._data_status(req)

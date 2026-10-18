@@ -12,7 +12,7 @@ import pytest
 
 from cio_market_lab.api.app import create_app
 from cio_market_lab.domain.models import Quote
-from cio_market_lab.engine.daily_research_plan import DailyResearchPlanProducer
+from cio_market_lab.engine.daily_research_plan import DailyResearchPlanProducer, plan_session_date
 from cio_market_lab.engine.decision_learning import CIODecisionLearningStore
 from cio_market_lab.engine.learning_readback import read_learning_snapshot
 from cio_market_lab.engine.paper_orders import PaperExperimentSettings
@@ -117,42 +117,42 @@ def _official_data(url: str):
 
 
 def _install_offline_model(monkeypatch):
-    plan = {
-        "thesis": "TEST_ONLY official-shaped research remains incomplete for an action",
-        "valuation_scenarios": {},
-        "catalysts": [],
-        "buy_zone": None,
-        "invalidation": "TEST_ONLY wait for refreshed official valuation evidence",
-        "invalidation_condition": None,
-        "exposure_ceiling": 0,
-        "stance": "WAIT",
-        "missing_evidence": ["TEST_ONLY valuation evidence"],
-        "review_trigger": "TEST_ONLY next official disclosure",
-    }
-
     def fake_chat(*args, **kwargs):
-        return {
-            "response": json.dumps(plan),
-            "runtime_metadata": {"TEST_ONLY": True},
-            "session_id": "TEST_ONLY_DAILY_PLAN_MODEL",
-            "returncode": 0,
-            "is_fixture": False,
-            "failed": False,
-            "error": None,
-        }
+        raise AssertionError("script-only producer must never invoke a paid model")
 
     monkeypatch.setattr(
         "cio_market_lab.integrations.hermes_chat.run_hermes_cli_chat",
         fake_chat,
     )
-    monkeypatch.setattr(
-        "cio_market_lab.integrations.runtime_evidence.RuntimeEvidenceAdapter.verify_runtime_evidence",
-        lambda self, **kwargs: SimpleNamespace(
-            is_fixture=False,
-            auth_verified=True,
-            is_success_response=True,
-        ),
-    )
+
+
+def _test_only_main_review(producer, refresh, now):
+    """Fixture reviewer, NOT independent Main acceptance or live evidence."""
+    assert refresh["status"] in {"SCRIPT_RESEARCH_REVIEW_REQUIRED", "DUPLICATE_SUBSTANTIVE_EVENT"}
+    assert refresh["model_called"] is False and refresh["paid_calls"] == 0
+    evidence = json.loads((producer.root / "official_baselines" / f'{refresh["symbol"]}.json').read_text())
+    packet = {
+        **evidence, "test_only": True, "verified": True,
+        "verification_status": "verified", "observed_at": now.isoformat(),
+        "thesis": "TEST_ONLY independent review: official evidence lacks valuation",
+        "valuation_scenarios": {}, "catalysts": [], "buy_zone": None,
+        "invalidation": "TEST_ONLY wait for refreshed official valuation evidence",
+        "invalidation_condition": None, "exposure_ceiling": 0,
+        "stance": "WAIT", "research_only": True,
+        "missing_evidence": ["TEST_ONLY valuation evidence"],
+        "plan_session_date": plan_session_date(refresh["symbol"], now),
+    }
+    producer.packet_root.mkdir(parents=True, exist_ok=True)
+    (producer.packet_root / f'{packet["symbol"]}.json').write_text(json.dumps(packet))
+    _, context = build_canonical_observation(packet, packet["symbol"], "TEST_ONLY_CHAIN_SESSION")
+    encoded = context.model_dump_json()
+    digest = hashlib.sha256(encoded.encode()).hexdigest()
+    path = Path(refresh["request_path"]).with_name(f"TEST_ONLY_review_context-{digest}.json")
+    if path.exists():
+        assert path.read_text() == encoded
+    else:
+        path.write_text(encoded)
+    return path
 
 
 def _producer(tmp_path: Path, monkeypatch, clock, learning_store):
@@ -189,8 +189,12 @@ def test_official_shaped_producer_freeze_and_input_gaps(tmp_path, monkeypatch):
 
     tw = producer.refresh("2330.TW", now=clock[0])
     us = producer.refresh("MSFT", now=clock[0])
-    assert tw["status"] == "AUTHENTICATED_RESEARCH_ONLY_PLAN"
-    assert us["status"] == "AUTHENTICATED_RESEARCH_ONLY_PLAN"
+    assert tw["status"] == "SCRIPT_RESEARCH_REVIEW_REQUIRED"
+    assert us["status"] == "SCRIPT_RESEARCH_REVIEW_REQUIRED"
+    assert not producer.manifest.exists()
+    assert not list(producer.packet_root.glob("*.json"))
+    _test_only_main_review(producer, tw, clock[0])
+    _test_only_main_review(producer, us, clock[0])
 
     tw_packet = json.loads((producer.packet_root / "2330.TW.json").read_text())
     us_packet = json.loads((producer.packet_root / "MSFT.json").read_text())
@@ -203,7 +207,7 @@ def test_official_shaped_producer_freeze_and_input_gaps(tmp_path, monkeypatch):
 
     loader = PersistedResearchPacketLoader(
         producer.packet_root,
-        trusted_manifest=producer.manifest,
+        allow_fixture=True,
     )
     direct_packet = loader.load("MSFT", clock[0])
     direct_observation, direct_context = build_canonical_observation(
@@ -211,23 +215,26 @@ def test_official_shaped_producer_freeze_and_input_gaps(tmp_path, monkeypatch):
     )
     scheduled = make_packet_observation_provider(
         producer.packet_root,
-        trusted_manifest=producer.manifest,
+        allow_fixture=True,
     )
     scheduled_observation = scheduled(symbol="MSFT", inputs={}, now=clock[0])
     scheduled_context = scheduled.context_for("MSFT")
     assert scheduled_observation == direct_observation
     assert scheduled_context.model_dump(mode="json") == direct_context.model_dump(mode="json")
 
-    frozen_plan = Path(us["plan_path"])
+    frozen_plan = Path(us["request_path"])
     frozen_hash = _sha(frozen_plan)
     cached = producer.refresh("MSFT", now=clock[0])
-    assert cached["status"] == "CACHED_IMMUTABLE_PLAN"
+    assert cached["status"] == "DUPLICATE_SUBSTANTIVE_EVENT"
     assert _sha(frozen_plan) == frozen_hash
 
     clock[0] = T0 + timedelta(days=1)
     refreshed = producer.refresh("MSFT", now=clock[0])
-    assert refreshed["plan_path"] != str(frozen_plan)
+    # Advancing the retrieval clock is not a new substantive official event.
+    assert refreshed["status"] == "DUPLICATE_SUBSTANTIVE_EVENT"
+    assert refreshed["request_path"] == str(frozen_plan)
     assert _sha(frozen_plan) == frozen_hash
+    _test_only_main_review(producer, refreshed, clock[0])
     next_packet = loader.load("MSFT", clock[0])
     _, next_context = build_canonical_observation(
         next_packet, "MSFT", "TEST_ONLY_CHAIN_SESSION"
@@ -280,7 +287,7 @@ def test_full_research_decision_outcome_lesson_fresh_process_chain(tmp_path, mon
     store = CIODecisionLearningStore(runtime)
     producer, reader = _producer(tmp_path, monkeypatch, clock, store)
     initial_refresh = producer.refresh("MSFT", now=clock[0])
-    old_plan = Path(initial_refresh["plan_path"])
+    old_plan = _test_only_main_review(producer, initial_refresh, clock[0])
     old_hash = _sha(old_plan)
 
     adapter = ChainMarketAdapter(clock[0], price=100.0)
@@ -298,7 +305,7 @@ def test_full_research_decision_outcome_lesson_fresh_process_chain(tmp_path, mon
         runner.cio_session_id = "TEST_ONLY_CHAIN_SESSION"
         runner.material_observation_provider = make_packet_observation_provider(
             producer.packet_root,
-            trusted_manifest=producer.manifest,
+            allow_fixture=True,
         )
         settings = PaperExperimentSettings(
             strategy_id="TEST_ONLY_CHAIN",
@@ -473,7 +480,7 @@ def test_full_research_decision_outcome_lesson_fresh_process_chain(tmp_path, mon
         clock[0] = due + timedelta(minutes=1)
         adapter.set_now(clock[0])
         producer.learning_store = CIODecisionLearningStore(runtime)
-        producer.refresh("MSFT", now=clock[0])
+        _test_only_main_review(producer, producer.refresh("MSFT", now=clock[0]), clock[0])
         assert _sha(old_plan) == old_hash
     finally:
         runner.shutdown()

@@ -134,7 +134,7 @@ def run_next(args) -> dict:
         runner.cio_session_id = "TEST_ONLY_CHAIN_SESSION"
         runner.material_observation_provider = make_packet_observation_provider(
             Path(args.packet_root),
-            trusted_manifest=Path(args.manifest),
+            allow_fixture=True,
         )
         settings = PaperExperimentSettings(
             strategy_id="TEST_ONLY_CHAIN",

@@ -44,6 +44,24 @@ def _timestamp(event: dict) -> str | None:
     return event.get("timestamp") or event.get("ts") or event.get("quote_timestamp") or event.get("at")
 
 
+def _session_state(market: str, now: datetime) -> dict:
+    """Weekday/time-of-day estimate only (no holiday calendar), labelled as such."""
+    from zoneinfo import ZoneInfo
+    tz, (o, c) = (("Asia/Taipei", ((9, 0), (13, 30))) if market == "tw" else ("America/New_York", ((9, 30), (16, 0))))
+    local = now.astimezone(ZoneInfo(tz))
+    minutes = local.hour * 60 + local.minute
+    is_open = local.weekday() < 5 and o[0] * 60 + o[1] <= minutes < c[0] * 60 + c[1]
+    label = ("開盤中" if is_open else ("週末休市" if local.weekday() >= 5 else "非交易時段")) + "（依時段推算，未含假日）"
+    return {"status": "OPEN" if is_open else "CLOSED", "session_label": label}
+
+
+def _file_stamp(path: Path) -> str | None:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
+    except OSError:
+        return None
+
+
 def _freshness(timestamp: Any, now: datetime) -> str:
     dt = _time(timestamp)
     if dt is None or dt > now:
@@ -243,7 +261,7 @@ def build_live_team_ops(root: Path, *, now: datetime | None = None) -> dict:
     risk.update(kill_switch_active=True, kill_switch_armed=None, breaches=[])
     out["risk"] = risk
     for market in ("tw", "us"):
-        out["sessions"][market].update(status="UNKNOWN", session_label="UNKNOWN")
+        out["sessions"][market].update(**_session_state(market, now))
     portfolio = _unknown_fields(out["portfolio"])
     portfolio.update(reporting_currency="MIXED", nav_status="NAV_UNAVAILABLE",
                             sources={}, equity_by_currency={}, equity_rule=EQUITY_RULE)
@@ -295,7 +313,7 @@ def build_live_team_ops(root: Path, *, now: datetime | None = None) -> dict:
                 entry = entry if entry is not None else derived["entry"]
                 strategy = strategy or derived["strategy"]
             holding = _holding(symbol, market, source, qty, entry, px, value,
-                _mapping(account.get("quote_timestamps")).get(symbol), now)
+                _mapping(account.get("quote_timestamps")).get(symbol) or (_file_stamp(root / f"{source}.json") if px is not None else None), now)
             holding.update(strategy_id=strategy, held_ticks=owner.get("held_ticks"))
             if derived:
                 holding.update(entry_day=(derived["entered_at"] or "")[:10] or None, stop=derived["stop"],
@@ -307,9 +325,12 @@ def build_live_team_ops(root: Path, *, now: datetime | None = None) -> dict:
             px = _number(marks.get(symbol))
             previous = _number(_mapping(account.get("previous_close")).get(symbol))
             timestamp = _mapping(account.get("quote_timestamps")).get(symbol)
+            from_file = False
+            if timestamp is None and px is not None:
+                timestamp, from_file = _file_stamp(root / f"{source}.json"), True
             out["quotes"].append({"symbol": symbol, "market": market, "price": px,
                 "change_pct": (px / previous - 1) * 100 if px is not None and previous and previous > 0 else None,
-                "source": source + ".marks" if px is not None else "UNKNOWN", "timestamp": timestamp,
+                "source": (source + ".marks") if px is not None else "UNKNOWN", "timestamp": timestamp,
                 "freshness": _freshness(timestamp, now) if px is not None else "UNKNOWN"})
         cash = _number(account.get("cash"))
         position_value = sum(values) if all(v is not None for v in values) and isinstance(account.get("positions"), dict) else None
@@ -458,7 +479,38 @@ def build_live_team_ops(root: Path, *, now: datetime | None = None) -> dict:
     out["data_freshness"] = ("fresh" if quote_freshness and all(f == "fresh" for f in quote_freshness)
                              else "stale" if "stale" in quote_freshness else "unavailable")
     out["integrity_warnings"] = warnings
+    _per_book_results(out, root)
     return out
+
+
+def _per_book_results(out: dict, root: Path) -> None:
+    """Per-book realized/unrealized/return so cards never stay empty. Initial capital of the two
+    intraday accounts is not recorded: it is back-solved from equity - pnl and rounded to 1,000 (marked as estimate);
+    swing_book uses its script constant (1,000,000)."""
+    sources = out["portfolio"].get("sources") or {}
+    for name, src in sources.items():
+        mine = [t for t in out["round_trips"] if t["source"] == name]
+        hold = [h for h in out["holdings"] if h.get("source") == name]
+        realized = sum(t["pnl"] for t in mine)
+        unreal = sum(h["unrealized_pnl"] for h in hold if h.get("unrealized_pnl") is not None)
+        src.update(realized_pnl_from_fills=realized, unrealized_pnl=unreal, trade_count=len(mine),
+                   win_count=sum(1 for t in mine if t["pnl"] > 0))
+        if name == "swing_book":
+            initial, basis = 1_000_000.0, "程式固定起始資金"
+        elif src.get("equity") is not None:
+            initial, basis = round((src["equity"] - realized - unreal) / 1000) * 1000.0, "由損益回推（估計）"
+        else:
+            continue
+        src.update(initial_capital=initial, initial_basis=basis,
+                   return_pct=(src["equity"] / initial - 1) * 100 if src.get("equity") is not None and initial else None)
+    bench = None
+    try:
+        book = json.loads((root / "swing_book.json").read_text())
+        if book.get("bench_equity") and "swing_book" in sources:
+            bench = (book["bench_equity"] / 1_000_000.0 - 1) * 100
+    except (OSError, ValueError):
+        pass
+    out["portfolio"]["swing_benchmark_return_pct"] = bench
 
 
 def _holding(symbol, market, source, qty, entry, px, value, timestamp, now):

@@ -31,6 +31,7 @@ class ExecutionCostConfig(BaseModel):
     min_fee_tw: float = 20.0       # Minimum NTD 20
     min_fee_us: float = 1.0        # Minimum USD 1.0
     tax_rate_tw_sell: float = 0.003  # 0.3% TW securities transaction tax on sell
+    tax_rate_tw_day_trade_sell: float = 0.0015  # 0.15%現股當沖；適用期限至2027-12-31
     tax_rate_us_sell: float = 0.0    # 0% transaction tax on US
     slippage_bps: float = 5.0      # 5 basis points (0.05%)
     allow_stale_execution: bool = False
@@ -41,17 +42,18 @@ class ExecutionCostConfig(BaseModel):
             return round(max(self.min_fee_tw, trade_value * self.fee_rate_tw), 4)
         return round(max(self.min_fee_us, trade_value * self.fee_rate_us), 4)
 
-    def calculate_tax(self, market: Market, side: OrderSide, trade_value: float) -> float:
+    def calculate_tax(self, market: Market, side: OrderSide, trade_value: float, *, is_day_trade: bool = False) -> float:
         if side == OrderSide.SELL and market == Market.TW:
-            return round(trade_value * self.tax_rate_tw_sell, 4)
+            rate = self.tax_rate_tw_day_trade_sell if is_day_trade else self.tax_rate_tw_sell
+            return round(trade_value * rate, 4)
         return 0.0
 
-    def get_tax_rate(self, market: Market, side: OrderSide) -> float:
+    def get_tax_rate(self, market: Market, side: OrderSide, *, is_day_trade: bool = False) -> float:
         """Return jurisdictional tax rate for side; BUY is always 0.0 unless explicit jurisdictional buy tax exists."""
         if side == OrderSide.BUY:
             return 0.0
         if market == Market.TW:
-            return self.tax_rate_tw_sell
+            return self.tax_rate_tw_day_trade_sell if is_day_trade else self.tax_rate_tw_sell
         return self.tax_rate_us_sell
 
     def calculate_slippage(self, base_price: float, side: OrderSide) -> Tuple[float, float]:

@@ -31,6 +31,7 @@ def test_exit_policy_learns_time_and_session_end_limbs():
 def test_runner_momentum_sizes_from_marked_equity():
     strategy = Momentum("AAA", market="US", target_pct=0.10, max_position_pct=0.20)
     account = PaperAccount(cash=10_000, marks={})
-    strategy.signals({"AAA": SimpleNamespace(c=100)}, account)
+    for _ in range(strategy.LOOKBACK):
+        assert strategy.signals({"AAA": SimpleNamespace(c=100)}, account) == []
     signals = strategy.signals({"AAA": SimpleNamespace(c=101)}, account)
     assert signals[0].size == 9

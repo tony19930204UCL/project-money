@@ -1446,8 +1446,13 @@ def test_negative_sentinel_auth_paths_never_accessed_or_linked(tmp_path):
                 assert str(sentinel_dir) not in target, f"Forbidden symlink pointing to sentinel: {p} -> {target}"
 
 
-def test_negative_bootstrap_rejects_unsupported_flags():
+def test_negative_bootstrap_rejects_unsupported_flags(monkeypatch):
     """Negative test: Project bootstrap explicitly rejects unsupported CLI flags rather than silently ignoring."""
+    import sys
+    from types import ModuleType
+
+    # Argument validation must not activate the user's installed agent/bootstrap.
+    monkeypatch.setitem(sys.modules, "hermes_bootstrap", ModuleType("hermes_bootstrap"))
     from cio_market_lab.integrations.cio_hermes_bootstrap import run_chat_command
 
     # Passing unsupported flag must return exit code 1
@@ -1498,11 +1503,17 @@ def test_negative_pytest_current_test_not_popped():
     assert os.environ["PYTEST_CURRENT_TEST"] == orig_val
 
 
-def test_negative_staged_source_never_imported_in_production():
+def test_negative_staged_source_never_imported_in_production(monkeypatch):
     """Negative isolation test: staged sources under artifacts/hermes_source_readonly must NEVER be on sys.path.
     Missing installed CLI must fail explicitly without fallback."""
     import sys
     from pathlib import Path
+    from types import ModuleType
+
+    # Make the missing-installed-CLI premise explicit on machines that have Hermes.
+    # Neither bootstrap activation nor provider credential discovery belongs here.
+    monkeypatch.setitem(sys.modules, "hermes_bootstrap", ModuleType("hermes_bootstrap"))
+    monkeypatch.setitem(sys.modules, "cli", None)
     from cio_market_lab.integrations.cio_hermes_bootstrap import run_chat_command
 
     project_root = Path(__file__).resolve().parent.parent

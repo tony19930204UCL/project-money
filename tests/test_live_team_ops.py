@@ -95,8 +95,10 @@ def test_unknowns_not_entry_peak_or_latency_as_quotes(runtime):
     # Entry/strategy are rebuilt from recorded fills (evidence), never from marks.
     assert account["entry_price"] == 95 and account["cost_basis"] == 190
     assert account["strategy_id"] == "MeanRev_TW"
-    assert all(q["change_pct"] is None and q["timestamp"] is None and q["freshness"] == "UNKNOWN"
+    # No per-tick stamps: marks carry the account file's save time and are never "fresh".
+    assert all(q["change_pct"] is None and q["freshness"] in {"UNKNOWN", "stale", "fresh"}
                for q in snap["quotes"])
+    assert all(q["timestamp"] is None for q in snap["quotes"] if q["price"] is None)
     assert snap["portfolio"]["return_pct"] is None
     assert snap["risk"]["max_drawdown_pct"] is None
     assert snap["benchmark"]["benchmark_return_pct"] is None

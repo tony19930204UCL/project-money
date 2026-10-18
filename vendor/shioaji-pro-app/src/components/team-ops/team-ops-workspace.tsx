@@ -48,12 +48,14 @@ const NOTICE_TEXT: Array<[string, string]> = [
     ['LIVE_PAPER_RUNTIME_READ_ONLY', '資料來源是紙盤執行紀錄檔的唯讀快照，不是券商帳戶或正式結算資料。'],
     ['Per source equity', '各帳本（台股、美股、波段）各自獨立計算「現金＋持倉市值」，同代碼不合併；台幣與美元沒有可驗證匯率前，不加總成總淨值。'],
     ['UNKNOWN_RUNTIME_KILL_SWITCH', '目前沒有執行器回報熔斷開關狀態，頁面以保守的「已鎖定」顯示，並非實際觸發。'],
-    ['UNKNOWN_MARK_TIMESTAMPS', '帳戶持倉價是紀錄當下的收盤／標記值，沒有逐筆時間戳，因此不標示「即時」。'],
-    ['UNKNOWN_INITIAL_CAPITAL_FX_BENCHMARK', '尚未記錄初始本金、匯率與基準，所以不顯示總報酬率與總淨值（不拿估算值充數）。'],
+    ['UNKNOWN_MARK_TIMESTAMPS', '帳戶持倉價是紀錄當下的標記值，沒有逐筆時間戳：時間以帳戶檔最後存檔時間代替，並標示為延遲，不稱即時。'],
+    ['UNKNOWN_INITIAL_CAPITAL_FX_BENCHMARK', '執行器未記錄初始本金、匯率與基準：不做跨幣別總淨值；各帳本報酬率改以起始資金計算（波段為程式常數，台股／美股帳戶為由損益回推的估計值，已標示）。'],
     ['SWING_INDIVIDUAL_MARKS_UNAVAILABLE', '波段帳本沒有逐檔即時價；持倉旁的價格改用官方收盤價作參考，帳本總淨值沿用其自己記錄的收盤權益。'],
     ['SWING_PARAMS_VERSION_DIFFERS', '波段帳本進場時用的參數版本，與目前參數檔版本不同（參數之後又被更新過），屬正常的版本差異。'],
     ['HISTORY_BOUNDED', '委託、成交與動態流水只顯示最新 100 筆；完整交易（買賣配對）則由全部成交紀錄還原。'],
 ];
+
+const zh = (v?: string | null): string => (!v || !v.trim() || v === 'UNKNOWN' || v === 'UNAVAILABLE' ? '未記錄' : v);
 
 function isKnownNotice(raw: string): boolean {
     return NOTICE_TEXT.some(([key]) => raw.startsWith(key));
@@ -144,6 +146,18 @@ export function TeamOpsWorkspace() {
     const visibleQuotes = quotes.filter((q) => selectedQuoteSource === 'ALL' || q.source === selectedQuoteSource);
     const orders = snapshot?.orders ?? [];
     const fills = snapshot?.fills ?? [];
+    const exitStats = (() => {
+        const m = new Map<string, { strategy: string; currency: string; total: number; wins: number; pnl: number; by: Record<string, { n: number; pnl: number }> }>();
+        for (const t of snapshot?.round_trips ?? []) {
+            const key = `${t.strategy_id ?? '—'}|${t.currency}`;
+            const r = m.get(key) ?? { strategy: t.strategy_id ?? '—', currency: t.currency, total: 0, wins: 0, pnl: 0, by: {} };
+            const reason = (t.exit_reason ?? '').replace('exit:', '');
+            r.total += 1; r.pnl += t.pnl; r.wins += t.pnl > 0 ? 1 : 0;
+            r.by[reason] = { n: (r.by[reason]?.n ?? 0) + 1, pnl: (r.by[reason]?.pnl ?? 0) + t.pnl };
+            m.set(key, r);
+        }
+        return [...m.values()].map(r => ({ ...r, winRate: (r.wins / r.total) * 100 })).sort((a, b) => b.total - a.total);
+    })();
     const allNotices = snapshot?.integrity_warnings ?? [];
     const knownNotices = allNotices.filter(isKnownNotice);
     const unknownNotices = allNotices.filter(w => !isKnownNotice(w));
@@ -223,7 +237,7 @@ export function TeamOpsWorkspace() {
             default:
                 return (
                     <span className={styles.badgeUnavailable}>
-                        <AlertCircle size={11} /> 數據不可用 (UNAVAILABLE)
+                        <AlertCircle size={11} /> 無即時報價
                     </span>
                 );
         }
@@ -430,7 +444,7 @@ export function TeamOpsWorkspace() {
                     </div>
 
                     <div style={{ display: 'flex', gap: 14, fontSize: '0.68rem', color: '#8b94a7', flexWrap: 'wrap', marginTop: 2 }}>
-                        <span>市場體系: {posture?.tw_regime?.regime ?? '—'} (TW) / {posture?.us_regime?.regime ?? '—'} (US)</span>
+                        <span>市場體系: {zh(posture?.tw_regime?.regime)} (TW) / {zh(posture?.us_regime?.regime)} (US)</span>
                         <span>數據品質: {String(freshness).toUpperCase()}</span>
                         <span>會話狀態: TW {sessions?.tw?.status ?? '—'} · US {sessions?.us?.status ?? '—'}</span>
                         <span>總持倉曝險: {formatPct(risk?.gross_exposure != null ? (risk.gross_exposure * 100) : null)}</span>
@@ -450,7 +464,7 @@ export function TeamOpsWorkspace() {
                                         <div className={styles.agentMeta}>{role.role_name}</div>
                                     </div>
                                     <span className={isWorking ? styles.agentBadgeWorking : isStandby ? styles.agentBadgeStandby : styles.agentBadgeOffline}>
-                                        <Radio size={10} /> {isWorking ? '運作中' : isStandby ? '監控待命' : '未就緒'}
+                                        <Radio size={10} /> {isWorking ? '運作中' : isStandby ? '監控待命' : '離線（顯示最後紀錄）'}
                                     </span>
                                 </div>
                                 <div style={{ fontSize: '0.7rem', color: '#8b94a7', marginTop: 2, marginBottom: 4 }}>
@@ -468,127 +482,99 @@ export function TeamOpsWorkspace() {
                 </div>
             </div>
 
-            {/* 2. Canonical Team Equity & NAV Metrics Cards */}
-            <div className={styles.metricsGrid}>
-                {/* Team Equity / NAV */}
-                <div className={styles.metricCard}>
-                    <div className={styles.metricLabel}>
-                        <span>團隊淨值 (Total NAV)</span>
-                        {navStatus === 'NAV_UNAVAILABLE' ? (
-                            <span className={styles.badgeUnavailable} style={{ fontSize: '0.65rem', padding: '1px 4px' }}>
-                                NAV_UNAVAILABLE
-                            </span>
-                        ) : (
-                            <span style={{ fontSize: '0.7rem' }}>{currency}</span>
-                        )}
+            {/* 2. Per-book results (each book is independent; never summed across currencies) */}
+            <div className={styles.tableCard}>
+                <div className={styles.tableHeader}>
+                    <div className={styles.sectionTitle}>
+                        <TrendingUp size={14} style={{ color: '#3d8bff' }} />
+                        各帳本成績 (Book Results)
                     </div>
-                    <div
-                        className={styles.metricValue}
-                        style={{
-                            color: navStatus === 'NAV_UNAVAILABLE' || portfolio?.equity === null ? '#ff8c8c' : '#ffffff',
-                        }}
-                    >
-                        {navStatus === 'NAV_UNAVAILABLE' || portfolio?.equity === null
-                            ? 'NAV_UNAVAILABLE'
-                            : formatCurrency(portfolio?.equity, currency)}
-                    </div>
-                    <div className={styles.metricSubtext}>
-                        基準本金: {formatCurrency(portfolio?.initial_cash, currency)}
-                    </div>
+                    {(navStatus === 'NAV_UNAVAILABLE' || portfolio?.equity == null) && (
+                        <span className={styles.badgeUnavailable} style={{ fontSize: '0.65rem', padding: '1px 4px' }}>跨幣別總淨值 NAV_UNAVAILABLE（無匯率）</span>
+                    )}
+                    <span style={{ fontSize: '0.72rem', color: '#8b94a7' }}>三個帳本資金獨立、幣別不同，不加總；已實現損益由逐筆成交還原</span>
                 </div>
-
-                {/* Cash Balance */}
-                <div className={styles.metricCard}>
-                    <div className={styles.metricLabel}>
-                        <span>可用紙盤現金 (Cash)</span>
-                        <span style={{ fontSize: '0.7rem' }}>{currency}</span>
-                    </div>
-                    <div className={styles.metricValue}>
-                        {formatCurrency(portfolio?.cash, currency)}
-                    </div>
-                    <div className={styles.metricSubtext}>
-                        現金配置比重: {portfolio?.equity && portfolio?.cash ? `${((portfolio.cash / portfolio.equity) * 100).toFixed(1)}%` : '—'}
-                    </div>
-                </div>
-
-                {/* Realized P&L */}
-                <div className={styles.metricCard}>
-                    <div className={styles.metricLabel}>
-                        <span>已實現損益 (Realized P&L)</span>
-                        <span style={{ fontSize: '0.7rem' }}>{currency}</span>
-                    </div>
-                    <div
-                        className={styles.metricValue}
-                        style={{
-                            color:
-                                portfolio?.realized_pnl == null
-                                    ? '#8b94a7'
-                                    : portfolio.realized_pnl >= 0
-                                      ? '#8bd6a5'
-                                      : '#ff8c8c',
-                        }}
-                    >
-                        {formatCurrency(portfolio?.realized_pnl, currency)}
-                    </div>
-                    <div className={styles.metricSubtext}>
-                        本週期累計平倉成果
-                    </div>
-                </div>
-
-                {/* Unrealized P&L */}
-                <div className={styles.metricCard}>
-                    <div className={styles.metricLabel}>
-                        <span>未實現損益 (Unrealized P&L)</span>
-                        <span style={{ fontSize: '0.7rem' }}>{currency}</span>
-                    </div>
-                    <div
-                        className={styles.metricValue}
-                        style={{
-                            color:
-                                portfolio?.unrealized_pnl == null
-                                    ? '#8b94a7'
-                                    : portfolio.unrealized_pnl >= 0
-                                      ? '#8bd6a5'
-                                      : '#ff8c8c',
-                        }}
-                    >
-                        {formatCurrency(portfolio?.unrealized_pnl, currency)}
-                    </div>
-                    <div className={styles.metricSubtext}>
-                        現有持倉即時浮動盈虧
-                    </div>
-                </div>
-
-                {/* Team Total Return */}
-                <div className={styles.metricCard}>
-                    <div className={styles.metricLabel}>
-                        <span>累積報酬率 (Team Return)</span>
-                        {portfolio?.return_pct != null ? (
-                            portfolio.return_pct >= 0 ? (
-                                <ArrowUpRight size={13} style={{ color: '#8bd6a5' }} />
-                            ) : (
-                                <ArrowDownRight size={13} style={{ color: '#ff8c8c' }} />
-                            )
-                        ) : null}
-                    </div>
-                    <div
-                        className={styles.metricValue}
-                        style={{
-                            color:
-                                portfolio?.return_pct == null
-                                    ? '#8b94a7'
-                                    : portfolio.return_pct >= 0
-                                      ? '#8bd6a5'
-                                      : '#ff8c8c',
-                        }}
-                    >
-                        {formatPct(portfolio?.return_pct)}
-                    </div>
-                    <div className={styles.metricSubtext}>
-                        超額報酬 Alpha: {formatPct(benchmark?.alpha_pct)}
-                    </div>
+                <div className={styles.tableWrapper}>
+                    <table className={styles.dataTable}>
+                        <thead>
+                            <tr>
+                                <th className={styles.th}>帳本</th>
+                                <th className={styles.th}>淨值</th>
+                                <th className={styles.th}>現金</th>
+                                <th className={styles.th}>已實現</th>
+                                <th className={styles.th}>未實現</th>
+                                <th className={styles.th}>報酬率</th>
+                                <th className={styles.th}>交易 / 勝率</th>
+                                <th className={styles.th}>起始資金</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {Object.entries(portfolio?.sources ?? {}).map(([name, raw]) => {
+                                const src = raw as Record<string, any>;
+                                const cur = src.currency ?? '';
+                                const pnlColor = (v: number | null | undefined) => (v == null ? '#8b94a7' : v >= 0 ? '#8bd6a5' : '#ff8c8c');
+                                return (
+                                    <tr key={name}>
+                                        <td className={styles.td}><strong>{name}</strong> <span style={{ color: '#8b94a7' }}>({cur})</span></td>
+                                        <td className={styles.td}>{formatCurrency(src.equity, cur)}</td>
+                                        <td className={styles.td}>{formatCurrency(src.cash, cur)}</td>
+                                        <td className={styles.td} style={{ color: pnlColor(src.realized_pnl_from_fills) }}>{src.trade_count ? formatCurrency(src.realized_pnl_from_fills, cur) : '尚無平倉'}</td>
+                                        <td className={styles.td} style={{ color: pnlColor(src.unrealized_pnl) }}>{formatCurrency(src.unrealized_pnl, cur)}</td>
+                                        <td className={styles.td} style={{ color: pnlColor(src.return_pct), fontWeight: 700 }}>{formatPct(src.return_pct)}</td>
+                                        <td className={styles.td}>{src.trade_count ? `${src.trade_count} 筆 / ${formatValue((src.win_count / src.trade_count) * 100, 0)}%` : '—'}</td>
+                                        <td className={styles.td} style={{ color: '#8b94a7', fontSize: '0.7rem' }}>{formatCurrency(src.initial_capital, cur)}（{src.initial_basis ?? '—'}）</td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
                 </div>
             </div>
+
+            {/* 2b. Exit-reason anatomy: why long strategies lose */}
+            {exitStats.length > 0 && (
+                <div className={styles.tableCard}>
+                    <div className={styles.tableHeader}>
+                        <div className={styles.sectionTitle}>
+                            <ShieldAlert size={14} style={{ color: '#f6c453' }} />
+                            策略出場原因分析：停損、時間到期、停利各佔多少
+                        </div>
+                        <span style={{ fontSize: '0.72rem', color: '#8b94a7' }}>停利 = 達到目標價；損益為已扣費用</span>
+                    </div>
+                    <div className={styles.tableWrapper}>
+                        <table className={styles.dataTable}>
+                            <thead>
+                                <tr>
+                                    <th className={styles.th}>策略</th>
+                                    <th className={styles.th}>交易數</th>
+                                    <th className={styles.th}>停利達成</th>
+                                    <th className={styles.th}>硬停損</th>
+                                    <th className={styles.th}>移動停損</th>
+                                    <th className={styles.th}>時間到期</th>
+                                    <th className={styles.th}>勝率</th>
+                                    <th className={styles.th}>合計損益</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {exitStats.map(r => (
+                                    <tr key={r.strategy}>
+                                        <td className={styles.td}><strong>{r.strategy}</strong> <span style={{ color: '#8b94a7' }}>({r.currency})</span></td>
+                                        <td className={styles.td}>{r.total}</td>
+                                        {(['take_profit', 'hard_stop', 'trailing_stop', 'time_stop'] as const).map(k => (
+                                            <td key={k} className={styles.td} style={{ color: k === 'take_profit' ? '#8bd6a5' : undefined }}>
+                                                {r.by[k]?.n ?? 0}（{formatValue(((r.by[k]?.n ?? 0) / r.total) * 100, 0)}%）
+                                                <span style={{ color: (r.by[k]?.pnl ?? 0) >= 0 ? '#8bd6a5' : '#ff8c8c', marginLeft: 4, fontSize: '0.68rem' }}>{(r.by[k]?.pnl ?? 0) >= 0 ? '+' : ''}{formatValue(r.by[k]?.pnl ?? 0, 0)}</span>
+                                            </td>
+                                        ))}
+                                        <td className={styles.td}>{formatValue(r.winRate, 0)}%</td>
+                                        <td className={styles.td} style={{ color: r.pnl >= 0 ? '#8bd6a5' : '#ff8c8c', fontWeight: 700 }}>{r.pnl >= 0 ? '+' : ''}{formatValue(r.pnl, 0)}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
 
             {/* 3. Middle Section: TW & US Regime, Posture & Rationale + Risk Budget & Kill Switch */}
             <div className={styles.middleGrid}>
@@ -619,7 +605,7 @@ export function TeamOpsWorkspace() {
                                           : '#f6c453',
                             }}
                         >
-                            {posture?.posture_label?.trim() ? posture.posture_label : '—'}
+                            {zh(posture?.posture_label)}
                         </span>
                     </div>
 
@@ -637,15 +623,15 @@ export function TeamOpsWorkspace() {
                         <div className={styles.regimeItem}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <strong style={{ fontSize: '0.76rem' }}>台股體系 (TW Regime)</strong>
-                                <span style={{ fontSize: '0.68rem', color: posture?.tw_regime?.regime && posture.tw_regime.regime !== '—' && posture.tw_regime.regime !== 'UNAVAILABLE' ? '#8bd6a5' : '#8b94a7' }}>
-                                    {posture?.tw_regime?.regime?.trim() ? posture.tw_regime.regime : '—'}
+                                <span style={{ fontSize: '0.68rem', color: posture?.tw_regime?.regime && posture.tw_regime.regime !== '—' && posture.tw_regime.regime !== 'UNKNOWN' && posture.tw_regime.regime !== 'UNAVAILABLE' ? '#8bd6a5' : '#8b94a7' }}>
+                                    {zh(posture?.tw_regime?.regime)}
                                 </span>
                             </div>
                             <span style={{ fontSize: '0.72rem', color: '#8b94a7', marginTop: 2 }}>
-                                趨勢: {posture?.tw_regime?.trend?.trim() ? posture.tw_regime.trend : '—'}
+                                趨勢: {zh(posture?.tw_regime?.trend)}
                             </span>
                             <span style={{ fontSize: '0.72rem', color: '#8b94a7' }}>
-                                波動: {posture?.tw_regime?.volatility?.trim() ? posture.tw_regime.volatility : '—'}
+                                波動: {zh(posture?.tw_regime?.volatility)}
                             </span>
                         </div>
 
@@ -653,15 +639,15 @@ export function TeamOpsWorkspace() {
                         <div className={styles.regimeItem}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <strong style={{ fontSize: '0.76rem' }}>美股體系 (US Regime)</strong>
-                                <span style={{ fontSize: '0.68rem', color: posture?.us_regime?.regime && posture.us_regime.regime !== '—' && posture.us_regime.regime !== 'UNAVAILABLE' ? '#f6c453' : '#8b94a7' }}>
-                                    {posture?.us_regime?.regime?.trim() ? posture.us_regime.regime : '—'}
+                                <span style={{ fontSize: '0.68rem', color: posture?.us_regime?.regime && posture.us_regime.regime !== '—' && posture.us_regime.regime !== 'UNKNOWN' && posture.us_regime.regime !== 'UNAVAILABLE' ? '#f6c453' : '#8b94a7' }}>
+                                    {zh(posture?.us_regime?.regime)}
                                 </span>
                             </div>
                             <span style={{ fontSize: '0.72rem', color: '#8b94a7', marginTop: 2 }}>
-                                趨勢: {posture?.us_regime?.trend?.trim() ? posture.us_regime.trend : '—'}
+                                趨勢: {zh(posture?.us_regime?.trend)}
                             </span>
                             <span style={{ fontSize: '0.72rem', color: '#8b94a7' }}>
-                                波動: {posture?.us_regime?.volatility?.trim() ? posture.us_regime.volatility : '—'}
+                                波動: {zh(posture?.us_regime?.volatility)}
                             </span>
                         </div>
                     </div>
@@ -681,7 +667,7 @@ export function TeamOpsWorkspace() {
                                 </span>
                             ) : risk.kill_switch_active ? (
                                 <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: '0.72rem', fontWeight: 700, backgroundColor: 'rgba(242, 54, 69, 0.2)', color: '#ff8c8c' }}>
-                                    <Lock size={10} style={{ verticalAlign: '-1px' }} /> 熔斷已鎖定 (TRIPPED)
+                                    <Lock size={10} style={{ verticalAlign: '-1px' }} /> 保守鎖定（無執行器連線，非實際觸發）
                                 </span>
                             ) : risk.kill_switch_armed ? (
                                 <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: '0.72rem', fontWeight: 700, backgroundColor: 'rgba(22, 179, 137, 0.15)', color: '#8bd6a5' }}>

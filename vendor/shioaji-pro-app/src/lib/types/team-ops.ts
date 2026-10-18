@@ -22,6 +22,7 @@ export interface SessionInfo {
 }
 
 export interface TeamPortfolioSummary {
+    sources?: Record<string, Record<string, any>>;
     reporting_currency: string;
     equity: number | null;
     nav_status: NavStatus;

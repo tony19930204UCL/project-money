@@ -39,7 +39,8 @@ def test_tw_session_trades_despite_dash_quotes(tmp_path):
     feed.latency_log = tmp_path / "feed_latency.jsonl"
     orders = _default_orders(tmp_path)
     orders._now_fn = lambda: OPEN
-    cfg = build_config(tmp_path, feed=feed, order_service=orders, ticks=40, sleep_free=True)
+    # Use a complete production swing warmup rather than a retired 40-tick scalp.
+    cfg = build_config(tmp_path, feed=feed, order_service=orders, ticks=160, sleep_free=True)
     cfg["markets"].pop("US")
     assert run_daily(OPEN, cfg)["markets"]["TW"] == "SESSION_RAN"
     rows = [json.loads(x) for x in (tmp_path / "TW_journal.jsonl").read_text().splitlines()]
@@ -47,4 +48,4 @@ def test_tw_session_trades_despite_dash_quotes(tmp_path):
     errors = [r for r in rows if r.get("status") == "ERROR"]
     assert sim, rows[:5]
     assert len(errors) < len(rows) * 0.2, errors[:3]
-    assert counter["2330"] >= 40
+    assert counter["2330"] >= 160
