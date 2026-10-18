@@ -461,7 +461,7 @@ def create_app(
     event_store: Optional[EventStore] = None,
     fixture_mode: Optional[bool] = None,
 ) -> FastAPI:
-    root = workspace_root or Path(__file__).resolve().parent.parent.parent
+    root = Path(workspace_root or os.environ.get("CIO_WORKSPACE_ROOT") or Path(__file__).resolve().parent.parent.parent)
     state = AppState(
         workspace_root=root,
         runtime_dir=runtime_dir,
@@ -1088,11 +1088,17 @@ def create_app(
 
     @app.get("/api/paper/team-ops", tags=["Risk", "TeamOps"])
     def get_team_ops(request: Request) -> Dict[str, Any]:
-        """Authoritative canonical Team Ops snapshot with unified Team NAV, consolidated positions, and posture."""
+        """Read live paper-runtime books when present; otherwise label legacy data."""
         st = app.state.app_state
+        paper_runtime = st.workspace_root / "data" / "paper_runtime"
+        if paper_runtime.is_dir():
+            from cio_market_lab.api.live_team_ops import build_live_team_ops
+            return build_live_team_ops(paper_runtime)
         # GET is a bounded snapshot read, not a NAV recomputation on the owner.
         snap = st.runner.get_canonical_team_ops(is_read_only=True)
-        return to_public_team_ops_snapshot(snap)
+        public = to_public_team_ops_snapshot(snap)
+        public.setdefault("integrity_warnings", []).append("PAPER_RUNTIME_ABSENT: legacy canonical snapshot fallback; not live paper_runtime")
+        return public
 
     @app.get("/api/paper/competition", tags=["Experiments"])
     def paper_competition() -> Dict[str, Any]:
