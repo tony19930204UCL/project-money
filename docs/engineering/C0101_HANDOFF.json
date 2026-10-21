@@ -1,35 +1,34 @@
 {
   "schema_version": 2,
   "task_id": "c0101-paper-repairs-20261021",
-  "instruction_id": "c0101-close-002",
+  "instruction_id": "Q1-r0",
   "repository": "tony19930204UCL/project-money",
   "pr_number": 55,
   "branch": "fix/c0101-paper-owner-queue-20261021",
-  "source_head_sha": "23b795c8cbc5b0d223f5885866a6ea262e3e18d6",
-  "status": "READY_FOR_REVIEW",
-  "summary": "Bounded source round: owner real run_once synthetic regression, completed-date Yahoo null-close bounded intraday resolver integrated in download, and synthetic close tests. Independent acceptance pending.",
+  "source_head_sha": "28e3a2cd87b99f3595c3c39901ac58b3d2bc3a6b",
+  "status": "IMPLEMENTED_UNTESTED",
+  "summary": "Daily null, all-null and malformed close classification with at most two injectable retries and completed-session intraday fallback; synthetic offline regressions added. Existing owner fixes untouched.",
   "changed_files": [
     "cio_market_lab/engine/paper_close_fallback.py",
     "cio_market_lab/engine/paper_dual_speed.py",
-    "tests/test_c0101_close_fallback.py",
-    "tests/test_c0101_owner.py"
+    "tests/test_c0101_close_fallback.py"
   ],
   "tests": [
     {
       "command": "python -m unittest tests.test_c0101_owner tests.test_c0101_close_fallback",
       "result": "NOT_RUN",
-      "evidence": "GitHub connector-only changes; no test execution performed"
+      "evidence": "Explicit instruction: Main runs acceptance; no tests executed."
     }
   ],
   "remaining_work": [
-    "Main independent execution and acceptance of bounded round",
-    "Queue/momentum/canonical attach in separately owned rounds"
+    "Main independent acceptance_cmd: at least 19 passed, zero failed",
+    "Main inspect latest-day Yahoo payload and intraday fallback integration"
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Run owner fill and close fallback tests at exact source_head_sha; inspect null-close Yahoo fixtures and date boundaries.",
-    "if_pass": "Accept only bounded C0101 close/owner round; proceed with separately owned queue/momentum/canonical work.",
-    "if_fail": "Repair failing synthetic fixtures or source without touching runtime.",
+    "verify_now": "Run acceptance_cmd at source_head_sha and inspect exact Yahoo incomplete-close paths.",
+    "if_pass": "Accept Q1-r0 source round after >=19 passed and zero failed.",
+    "if_fail": "Return exact failures for source-only repair.",
     "blockers": []
   }
 }
