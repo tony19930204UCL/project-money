@@ -54,6 +54,50 @@ def allowed(item):
             bool(item.get('authorization_basis')))
 
 
+
+def _candidate(candidate):
+    """Fail closed: only explicitly pre-authorized, bounded paper experiments."""
+    if not isinstance(candidate, dict):
+        raise ValueError('PRE_AUTHORIZED_PAPER_SANDBOX_REQUIRED')
+    if not (candidate.get('authorization') == 'PRE_AUTHORIZED_PAPER_SANDBOX'
+            and candidate.get('sandboxed') is True
+            and candidate.get('paper_only') is True
+            and candidate.get('live_orders') is False
+            and candidate.get('cost_model_escalation') is False
+            and allowed(candidate)):
+        raise ValueError('PRE_AUTHORIZED_PAPER_SANDBOX_REQUIRED')
+    ident = candidate.get('id')
+    if not isinstance(ident, str) or not ident or len(ident) > 80 or any(
+            c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for c in ident):
+        raise ValueError('INVALID_CANDIDATE_ID')
+    if candidate.get('state', 'PENDING') != 'PENDING':
+        raise ValueError('INVALID_INITIAL_STATE')
+    if not isinstance(candidate.get('output'), str) or not candidate['output']:
+        raise ValueError('INVALID_OUTPUT')
+    return {**candidate, 'state': 'PENDING'}
+
+
+def enqueue(candidate, root=ROOT):
+    """Atomically persist a single authorized candidate; never dispatch it."""
+    item = _candidate(candidate)
+    with locked(root) as root:
+        queue = load(root)
+        if (not isinstance(queue, dict) or queue.get('version') != 1
+                or not isinstance(queue.get('items'), list)
+                or any(not isinstance(x, dict) or not isinstance(x.get('id'), str)
+                       for x in queue['items'])):
+            raise ValueError('CORRUPT_RESEARCH_QUEUE')
+        if any(x['id'] == item['id'] for x in queue['items']):
+            return {'status': 'DUPLICATE', 'id': item['id']}
+        queue['items'].append(item)
+        ds.dump(root / 'queue.json', queue)
+        return {'status': 'ENQUEUED', 'id': item['id']}
+
+
+def register(candidate, root=ROOT):
+    """Registration is an enqueue-only interface, not execution authorization."""
+    return enqueue(candidate, root=root)
+
 def reconcile(queue):
     for item in queue['items']:
         if item.get('state') in ('RUNNING', 'STARTING') and not alive(item.get('handle', {})):
