@@ -55,6 +55,7 @@ def download(symbol, now):
     if result.get('events', {}).get('splits'):
         raise ValueError('SPLIT_BASIS_REQUIRES_EXPLICIT_RECONCILIATION:' + symbol)
     q = result['indicators']['quote'][0]
+    from cio_market_lab.engine.paper_close_fallback import completed_close
     divs = {datetime.fromtimestamp(v['date'], NY).date().isoformat(): float(v['amount'])
             for v in result.get('events', {}).get('dividends', {}).values()}
     rows = {}
@@ -67,7 +68,14 @@ def download(symbol, now):
         try:
             row = {k: float(q[k][i]) for k in ('open', 'high', 'low', 'close', 'volume')}
         except (ValueError, TypeError, KeyError, IndexError):
-            continue
+            if i >= len(q.get('close', [])) or q['close'][i] is not None:
+                continue
+            # Only repair an otherwise valid completed daily bar; never synthesize OHLC.
+            try:
+                row = {k: float(q[k][i]) for k in ('open', 'high', 'low', 'volume')}
+                row['close'] = completed_close(symbol, d.isoformat(), now)
+            except (ValueError, TypeError, KeyError, IndexError):
+                raise ValueError('UNRESOLVED_COMPLETED_NULL_CLOSE:' + symbol + ':' + d.isoformat())
         if any(not math.isfinite(v) for v in row.values()) or min(row[k] for k in ('open', 'low', 'close')) <= 0:
             raise ValueError('INVALID_BAR:' + symbol)
         if row['low'] > min(row['open'], row['close']) or row['high'] < max(row['open'], row['close']):
