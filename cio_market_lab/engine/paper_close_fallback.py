@@ -1,10 +1,38 @@
 """Bounded Yahoo intraday repair for a completed daily null close (paper only)."""
 from datetime import datetime
 import math
+import time
 import requests
 from zoneinfo import ZoneInfo
 
 NY = ZoneInfo("America/New_York")
+
+
+REASON = "INCOMPLETE_DAILY_BAR_NULL_CLOSE"
+
+
+def valid_close(value):
+    try:
+        number = float(value)
+        return number if math.isfinite(number) and number > 0 else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def daily_close(closes, *, fetcher=None, sleep=time.sleep, retries=2):
+    """Retry an incomplete latest daily close at most twice."""
+    if retries < 0 or retries > 2:
+        raise ValueError("INVALID_RETRY_BOUND")
+    for attempt in range(retries + 1):
+        value = valid_close(closes[-1]) if isinstance(closes, (list, tuple)) and closes else None
+        if value is not None:
+            return value
+        if attempt < retries and fetcher is not None:
+            sleep(0)
+            closes = fetcher()
+        else:
+            break
+    raise ValueError(REASON)
 
 
 def completed_close(symbol, session, now, *, get=requests.get):
@@ -25,7 +53,7 @@ def completed_close(symbol, session, now, *, get=requests.get):
     for stamp, close in zip(result.get("timestamp", []), closes):
         local = datetime.fromtimestamp(stamp, NY)
         if local.date() == day and (local.hour, local.minute) >= (15, 55) and (local.hour, local.minute) < (16, 0):
-            if close is not None and math.isfinite(float(close)) and float(close) > 0:
+            if close is not None and valid_close(close) is not None:
                 valid.append(float(close))
     if not valid:
         raise ValueError("NO_SAME_SESSION_FINAL_INTRADAY_CLOSE")
