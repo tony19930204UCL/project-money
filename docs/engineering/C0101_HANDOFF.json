@@ -1,32 +1,34 @@
 {
   "schema_version": 2,
   "task_id": "c0101-paper-repairs-20261021",
-  "instruction_id": "Q1-r2",
+  "instruction_id": "Q2-r0",
   "repository": "tony19930204UCL/project-money",
   "pr_number": 55,
   "branch": "fix/c0101-paper-owner-queue-20261021",
-  "source_head_sha": "3ee50bda8b81dc3fb82915215a1aab59b1e0d3db",
-  "status": "READY_FOR_REVIEW",
-  "summary": "Expanded offline null-close retry and intraday guard regressions from 8 test methods to 20; existing paper close fallback implementation and owner fixes preserved. Main independently verifies acceptance.",
+  "source_head_sha": "58d3b4a2e915aa0de18bc3a2b7d501fd8d8a6fd9",
+  "status": "IMPLEMENTED_UNTESTED",
+  "summary": "Added gated enqueue(candidate) and register(candidate) to existing paper queue; strict pre-authorized sandbox, no live orders or cost escalation, duplicate detection and atomic persistence; eight offline regression methods.",
   "changed_files": [
-    "tests/test_c0101_close_fallback.py"
+    "cio_market_lab/engine/paper_research_queue.py",
+    "tests/test_c0101_queue.py",
+    "docs/engineering/C0101_HANDOFF.json"
   ],
   "tests": [
     {
-      "command": "Main acceptance_cmd (exact command not supplied)",
+      "command": "python -m unittest tests.test_c0101_queue",
       "result": "NOT_RUN",
-      "evidence": "Engineer did not execute tests. Main reported at HEAD 423d4f07315baea7e7b2db26f119bcd7c16e5db7: rc=0, 9 passed, 5 subtests passed, below >=19 threshold. Added 12 test methods; no claim of passing new acceptance."
+      "evidence": "No tests executed by engineer; Main owns independent acceptance. Eight test methods authored, no passing result claimed."
     }
   ],
   "remaining_work": [
-    "Main rerun exact acceptance_cmd at updated HEAD; verify >=19 passed and 0 failed.",
-    "If tests fail, return complete traceback and exact HEAD."
+    "Main run acceptance_cmd and confirm >=6 passed, 0 failed and allowlist compliance.",
+    "Main verify existing queue consumer and authorized candidate schema integration."
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Run acceptance_cmd on PR55 Q1-r2 HEAD; require >=19 passed, 0 failed and allowlist compliance.",
-    "if_pass": "Accept source for review only; do not merge/deploy/trade.",
-    "if_fail": "Return exact HEAD and failing test output for bounded repair.",
+    "verify_now": "Run Q2 acceptance_cmd at source_head_sha; require >=6 passed, 0 failed; inspect changed-file allowlist.",
+    "if_pass": "Accept source for review only; do not merge, deploy or trade.",
+    "if_fail": "Return exact HEAD, traceback and failing assertions for bounded repair.",
     "blockers": []
   }
 }
