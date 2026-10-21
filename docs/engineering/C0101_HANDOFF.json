@@ -1,0 +1,40 @@
+{
+  "schema_version": 2,
+  "task_id": "c0101-paper-repairs-20261021",
+  "instruction_id": "c0101-initial-001",
+  "repository": "tony19930204UCL/project-money",
+  "pr_number": 55,
+  "branch": "fix/c0101-paper-owner-queue-20261021",
+  "source_head_sha": "5c3ad0f1e5c2f4bac37b7a25a6c5d8a9e9414878",
+  "status": "BLOCKED",
+  "summary": "Implemented callback forwarding and accepted full SELL state cleanup; remaining C0101/C0102 scope not implemented or verified.",
+  "changed_files": [
+    "cio_market_lab/engine/strategy_feedback.py",
+    "cio_market_lab/engine/paper_trading_loop.py"
+  ],
+  "tests": [
+    {
+      "command": "NOT_RUN",
+      "result": "NOT_RUN",
+      "evidence": "GitHub connector source edits only; no test shell execution"
+    }
+  ],
+  "remaining_work": [
+    "Real fill and wrapped callback regression tests",
+    "Canonical attach, native patch, consecutive official sessions evaluator",
+    "Daily null-close fallback and regression tests",
+    "Queue enqueue/register/dispatch and tests",
+    "C0102 momentum experiment, data contract, CLI and tests",
+    "Independent Main acceptance"
+  ],
+  "next_step_reminder": {
+    "to": "Main CIO",
+    "verify_now": "Review source HEAD and run actual synthetic tests; reject incomplete C0101/C0102 acceptance.",
+    "if_pass": "Continue remaining authorized engineering work before accepting full scope.",
+    "if_fail": "Repair source with reproducible test evidence; keep runtime unchanged.",
+    "blockers": [
+      "Remaining scope unimplemented",
+      "Tests NOT_RUN"
+    ]
+  }
+}
