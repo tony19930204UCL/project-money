@@ -43,9 +43,10 @@ class Costs:
     # Conservative modeled envelope, NOT a claim of a verified broker tariff.
 
 
-def download(symbol, now):
+def download(symbol, now, *, fetcher=None, sleep=None):
     url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + symbol
-    response = requests.get(url, params={'range': '5y', 'interval': '1d', 'events': 'div,splits'},
+    get = fetcher or requests.get
+    response = get(url, params={'range': '5y', 'interval': '1d', 'events': 'div,splits'},
                             headers={'User-Agent': 'Mozilla/5.0'}, timeout=25)
     response.raise_for_status(); payload = response.json()
     result = payload['chart']['result'][0]
@@ -55,27 +56,44 @@ def download(symbol, now):
     if result.get('events', {}).get('splits'):
         raise ValueError('SPLIT_BASIS_REQUIRES_EXPLICIT_RECONCILIATION:' + symbol)
     q = result['indicators']['quote'][0]
-    from cio_market_lab.engine.paper_close_fallback import completed_close
+    from cio_market_lab.engine.paper_close_fallback import completed_close, daily_close, valid_close, REASON
     divs = {datetime.fromtimestamp(v['date'], NY).date().isoformat(): float(v['amount'])
             for v in result.get('events', {}).get('dividends', {}).values()}
     rows = {}
     from cio_market_lab.engine.paper_autonomy import market_state
     latest_complete = market_state(now)['last_completed']
-    for i, stamp in enumerate(result['timestamp']):
+    stamps = result['timestamp']
+    for i, stamp in enumerate(stamps):
         d = datetime.fromtimestamp(stamp, NY).date()
         if latest_complete is None or d.isoformat()>latest_complete:
             continue
-        try:
-            row = {k: float(q[k][i]) for k in ('open', 'high', 'low', 'close', 'volume')}
-        except (ValueError, TypeError, KeyError, IndexError):
-            if i >= len(q.get('close', [])) or q['close'][i] is not None:
-                continue
-            # Only repair an otherwise valid completed daily bar; never synthesize OHLC.
+        raw_close = q.get('close', [])
+        close = valid_close(raw_close[i]) if i < len(raw_close) else None
+        if close is None:
+            # Only the latest completed daily bar is eligible for a bounded repair.
+            if i != len(stamps) - 1:
+                raise ValueError(REASON + ':' + symbol + ':' + d.isoformat())
+            def refetch():
+                r = get(url, params={'range': '5y', 'interval': '1d', 'events': 'div,splits'},
+                        headers={'User-Agent': 'Mozilla/5.0'}, timeout=25)
+                r.raise_for_status()
+                new = r.json()['chart']['result'][0]
+                if new['meta']['symbol'] != symbol or new.get('timestamp', [])[-1:] != stamps[-1:]:
+                    return []
+                return new['indicators']['quote'][0].get('close', [])
             try:
-                row = {k: float(q[k][i]) for k in ('open', 'high', 'low', 'volume')}
-                row['close'] = completed_close(symbol, d.isoformat(), now)
-            except (ValueError, TypeError, KeyError, IndexError):
-                raise ValueError('UNRESOLVED_COMPLETED_NULL_CLOSE:' + symbol + ':' + d.isoformat())
+                close = daily_close(raw_close, fetcher=refetch,
+                                    **({'sleep': sleep} if sleep is not None else {}))
+            except ValueError:
+                try:
+                    close = completed_close(symbol, d.isoformat(), now, get=get)
+                except (ValueError, TypeError, KeyError, IndexError) as exc:
+                    raise ValueError(REASON + ':' + symbol + ':' + d.isoformat()) from exc
+        try:
+            row = {k: float(q[k][i]) for k in ('open', 'high', 'low', 'volume')}
+        except (ValueError, TypeError, KeyError, IndexError) as exc:
+            raise ValueError('INVALID_BAR:' + symbol) from exc
+        row['close'] = close
         if any(not math.isfinite(v) for v in row.values()) or min(row[k] for k in ('open', 'low', 'close')) <= 0:
             raise ValueError('INVALID_BAR:' + symbol)
         if row['low'] > min(row['open'], row['close']) or row['high'] < max(row['open'], row['close']):
