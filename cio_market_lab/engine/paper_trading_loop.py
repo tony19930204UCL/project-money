@@ -5,7 +5,12 @@ from pathlib import Path
 import json
 import math
 import dataclasses
-from cio_market_lab.data.intraday_feed import FeedUnavailable, MarketOpenWarmup
+from cio_market_lab.data.intraday_feed import FeedUnavailable
+try:
+    from cio_market_lab.data.intraday_feed import MarketOpenWarmup
+except ImportError:
+    class MarketOpenWarmup(FeedUnavailable):
+        """Compatibility for feed versions without a warmup exception."""
 
 from cio_market_lab.engine.paper_orders import PaperOrderRequest, PaperDataContext
 from cio_market_lab.domain.models import Market, DecisionScope, OrderSide, OrderType, OrderOrigin
