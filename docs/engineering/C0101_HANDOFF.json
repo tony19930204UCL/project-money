@@ -1,34 +1,32 @@
 {
   "schema_version": 2,
   "task_id": "c0101-paper-repairs-20261021",
-  "instruction_id": "Q1-r0",
+  "instruction_id": "Q1-r1",
   "repository": "tony19930204UCL/project-money",
   "pr_number": 55,
   "branch": "fix/c0101-paper-owner-queue-20261021",
-  "source_head_sha": "28e3a2cd87b99f3595c3c39901ac58b3d2bc3a6b",
-  "status": "IMPLEMENTED_UNTESTED",
-  "summary": "Daily null, all-null and malformed close classification with at most two injectable retries and completed-session intraday fallback; synthetic offline regressions added. Existing owner fixes untouched.",
+  "source_head_sha": "0b3c374a829c3af428bc5c610771cb2aa386c867",
+  "status": "READY_FOR_REVIEW",
+  "summary": "Fixed acceptance collection ImportError by providing compatibility MarketOpenWarmup exception when older intraday_feed lacks it. Prior null-close fallback and owner fixes retained; acceptance not rerun by engineer.",
   "changed_files": [
-    "cio_market_lab/engine/paper_close_fallback.py",
-    "cio_market_lab/engine/paper_dual_speed.py",
-    "tests/test_c0101_close_fallback.py"
+    "cio_market_lab/engine/paper_trading_loop.py"
   ],
   "tests": [
     {
-      "command": "python -m unittest tests.test_c0101_owner tests.test_c0101_close_fallback",
+      "command": "Main acceptance_cmd (exact command not supplied)",
       "result": "NOT_RUN",
-      "evidence": "Explicit instruction: Main runs acceptance; no tests executed."
+      "evidence": "Main previous acceptance at cb1b5777b2f2766d8966741273c70c77602f5b5f: rc=2, passed=0, collection ImportError MarketOpenWarmup. Engineer explicitly instructed not to run tests; no execution after fix."
     }
   ],
   "remaining_work": [
-    "Main independent acceptance_cmd: at least 19 passed, zero failed",
-    "Main inspect latest-day Yahoo payload and intraday fallback integration"
+    "Main run exact acceptance_cmd at new branch HEAD; require >=19 passed, 0 failed.",
+    "If further collection/runtime failures, return full traceback."
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Run acceptance_cmd at source_head_sha and inspect exact Yahoo incomplete-close paths.",
-    "if_pass": "Accept Q1-r0 source round after >=19 passed and zero failed.",
-    "if_fail": "Return exact failures for source-only repair.",
+    "verify_now": "Run acceptance_cmd on PR55 updated HEAD; verify >=19 passed and 0 failed.",
+    "if_pass": "Accept Q1-r1 source for review; no merge or deploy authorized.",
+    "if_fail": "Return complete failing test output and exact HEAD for bounded repair.",
     "blockers": []
   }
 }
