@@ -125,6 +125,12 @@ class WeightedStrategy:
         self.ticker = strategy.ticker
         self.strategy_id = getattr(strategy, "strategy_id", type(strategy).__name__)
 
+    def on_execution(self, *args, **kwargs):
+        callback = getattr(self._strategy, "on_execution", None)
+        if callable(callback):
+            return callback(*args, **kwargs)
+        return None
+
     def signals(self, quotes, account):
         # Entry weight never disables existing-position exits. The loop still
         # enforces strategy ownership, position limits and order risk checks.
