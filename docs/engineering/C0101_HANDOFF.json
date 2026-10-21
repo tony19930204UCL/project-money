@@ -1,12 +1,12 @@
 {
   "schema_version": 2,
   "task_id": "c0101-paper-repairs-20261021",
-  "instruction_id": "Q2-r0",
+  "instruction_id": "Q2-r1",
   "repository": "tony19930204UCL/project-money",
   "pr_number": 55,
   "branch": "fix/c0101-paper-owner-queue-20261021",
-  "source_head_sha": "58d3b4a2e915aa0de18bc3a2b7d501fd8d8a6fd9",
-  "status": "IMPLEMENTED_UNTESTED",
+  "source_head_sha": "b2801e30ff438cb0ff1ab4152b8b550955d8fbc7",
+  "status": "READY_FOR_REVIEW",
   "summary": "Added gated enqueue(candidate) and register(candidate) to existing paper queue; strict pre-authorized sandbox, no live orders or cost escalation, duplicate detection and atomic persistence; eight offline regression methods.",
   "changed_files": [
     "cio_market_lab/engine/paper_research_queue.py",
@@ -17,18 +17,17 @@
     {
       "command": "python -m unittest tests.test_c0101_queue",
       "result": "NOT_RUN",
-      "evidence": "No tests executed by engineer; Main owns independent acceptance. Eight test methods authored, no passing result claimed."
+      "evidence": "Engineer did not execute tests. Main independently reports acceptance at b2801e30ff438cb0ff1ab4152b8b550955d8fbc7: passed=8, rc=0, failures=no; not independently verified by engineer."
     }
   ],
   "remaining_work": [
-    "Main run acceptance_cmd and confirm >=6 passed, 0 failed and allowlist compliance.",
-    "Main verify existing queue consumer and authorized candidate schema integration."
+    "Main confirm its recorded acceptance evidence and review queue consumer integration; no additional code changes requested."
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Run Q2 acceptance_cmd at source_head_sha; require >=6 passed, 0 failed; inspect changed-file allowlist.",
-    "if_pass": "Accept source for review only; do not merge, deploy or trade.",
-    "if_fail": "Return exact HEAD, traceback and failing assertions for bounded repair.",
+    "verify_now": "Confirm previously reported acceptance at b2801e30ff438cb0ff1ab4152b8b550955d8fbc7 (8 passed, rc=0) and allowlist compliance.",
+    "if_pass": "Proceed with source review only; no merge, deploy, or live trading.",
+    "if_fail": "Return exact failing HEAD, command and traceback for bounded repair.",
     "blockers": []
   }
 }
