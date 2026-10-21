@@ -132,12 +132,20 @@ class WeightedStrategy:
         return None
 
     def signals(self, quotes, account):
-        # Entry weight never disables existing-position exits. The loop still
-        # enforces strategy ownership, position limits and order risk checks.
-        return [replace(signal, size=signal.size * self.multiplier)
-                if signal.side.upper() == "BUY" else signal
-                for signal in self._strategy.signals(quotes, account)
-                if self.multiplier != 0 or signal.side.upper() != "BUY"]
+        result = []
+        for signal in self._strategy.signals(quotes, account):
+            held = getattr(account, "positions", {}).get(signal.ticker, 0)
+            reduces_long = (signal.instrument_type.lower() in ("stock", "etf")
+                            and signal.side.upper() == "SELL"
+                            and 0 < signal.size <= held)
+            # Feedback weights govern new risk, not the quantity required to
+            # exit an already-held long. Zero must not suppress an escape, and
+            # a multiplier above one must not turn that escape into a short.
+            if reduces_long:
+                result.append(signal)
+            elif self.multiplier > 0:
+                result.append(replace(signal, size=signal.size * self.multiplier))
+        return result
 
 
 def apply_weights(strategies, table):

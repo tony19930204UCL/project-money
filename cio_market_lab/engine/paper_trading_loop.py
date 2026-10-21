@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import json
 import math
+import dataclasses
+from cio_market_lab.data.intraday_feed import FeedUnavailable, MarketOpenWarmup
 
 from cio_market_lab.engine.paper_orders import PaperOrderRequest, PaperDataContext
 from cio_market_lab.domain.models import Market, DecisionScope, OrderSide, OrderType, OrderOrigin
@@ -29,6 +31,7 @@ class PaperAccount:
     realized_pnl: float = 0.0
     daily_start_equity: float | None = None
     marks: dict = field(default_factory=dict)
+    strategy_state: dict = field(default_factory=dict)
 
 
 class MomentumSwing:
@@ -65,7 +68,8 @@ class PaperTradingLoop:
     def __init__(self, order_service, journal_path, *, max_position_pct=.2,
                  max_leverage=1., daily_loss_limit=.05, fee_rate=.001,
                  tw_sell_tax=.003, spread_bps=5, seed=0, derivative_engine=None,
-                 contracts=None):
+                 contracts=None, realism=None):
+        self.realism = realism
         self.orders = order_service
         self.journal_path = Path(journal_path)
         self.max_position_pct = max_position_pct
@@ -78,25 +82,6 @@ class PaperTradingLoop:
         self.sequence = 0
         self.derivatives = derivative_engine
         self.contracts = contracts or {}
-        self.ownership = {}
-        if self.journal_path.exists():
-            for line in self.journal_path.read_text(encoding="utf-8").splitlines():
-                try:
-                    event = json.loads(line)
-                    if event.get("status") != "SIMULATED" or not event.get("strategy_id"):
-                        continue
-                    ticker, owner = event["ticker"], event["strategy_id"]
-                    qty = float(event["size"])
-                    prior = self.ownership.get(ticker)
-                    if event["side"] == "BUY" and (prior is None or prior["owner"] == owner):
-                        self.ownership[ticker] = {"owner": owner, "qty": qty + (prior["qty"] if prior else 0),
-                                                  "entry": prior["entry"] if prior else event.get("fill_price")}
-                    elif event["side"] == "SELL" and prior and prior["owner"] == owner:
-                        prior["qty"] -= qty
-                        if prior["qty"] <= 1e-8:
-                            del self.ownership[ticker]
-                except (ValueError, KeyError, TypeError):
-                    continue
 
     def _journal(self, record):
         self.journal_path.parent.mkdir(parents=True, exist_ok=True)
@@ -111,40 +96,56 @@ class PaperTradingLoop:
 
     def run_once(self, feed, account, strategies):
         symbols = sorted({s.ticker for s in strategies} | set(account.positions))
-        quotes = {symbol: feed.latest(symbol) for symbol in symbols}
+        quotes = {}
+        skipped = []
+        for symbol in symbols:
+            try:
+                quotes[symbol] = feed.latest(symbol)
+            except MarketOpenWarmup:
+                raise  # skip the whole tick; do not mark held positions blind
+            except (FeedUnavailable, ValueError):
+                if symbol in account.positions:
+                    raise  # never mark a held position blind
+                skipped.append(symbol)
+        strategies = [s for s in strategies if s.ticker not in skipped]
         if any(q is None or not math.isfinite(q.c) or q.c <= 0
                or q.staleness_seconds > 300 or q.staleness_seconds < 0
                for q in quotes.values()):
             raise ValueError("INVALID_OR_STALE_QUOTE")
         equity = self._equity(account, quotes)
+        if self.realism is not None:
+            self.realism.observe(quotes, equity)
         if account.daily_start_equity is None:
             account.daily_start_equity = equity
         breaker = equity <= account.daily_start_equity * (1 - self.daily_loss_limit)
         results = []
         for strategy in strategies:
-            account.strategy_ownership = self.ownership
             for signal in strategy.signals(quotes, account):
                 self.sequence += 1
                 quote = quotes.get(signal.ticker)
                 side = signal.side.upper()
                 kind = signal.instrument_type.lower()
+                # SELL is not inherently reduce-only (it could open a short).
+                # Exempt only valid reductions of an existing long position
+                # from the daily new-risk breaker; keep every other check.
+                reduces_existing_long = (
+                    kind in ("stock", "etf") and side == "SELL"
+                    and math.isfinite(signal.size)
+                    and 0 < signal.size <= account.positions.get(signal.ticker, 0)
+                )
                 reason = None
+                rx = None
                 fill = None
                 fee = tax = 0.
                 if quote is None or side not in ("BUY", "SELL") or not math.isfinite(signal.size) or signal.size <= 0:
                     reason = "INVALID_SIGNAL"
                 elif kind not in ("stock", "etf", "option", "warrant", "future"):
                     reason = "INVALID_INSTRUMENT"
-                elif side == "SELL" and getattr(strategy, "strategy_id", None) and (
-                    signal.ticker not in self.ownership or
-                    self.ownership[signal.ticker]["owner"] != strategy.strategy_id or
-                    signal.size > self.ownership[signal.ticker]["qty"] + 1e-8):
-                    reason = "FOREIGN_OR_UNOWNED_POSITION"
-                elif side == "BUY" and getattr(strategy, "strategy_id", None) and (
-                    signal.ticker in self.ownership and
-                    self.ownership[signal.ticker]["owner"] != strategy.strategy_id):
-                    reason = "POSITION_OWNED_BY_OTHER_STRATEGY"
-                elif breaker:
+                elif (account.positions.get(signal.ticker, 0) > 0
+                      and account.strategy_state.get(signal.ticker, {}).get("strategy_id")
+                      not in (None, getattr(strategy, "strategy_id", None))):
+                    reason = "STRATEGY_OWNERSHIP_MISMATCH"
+                elif breaker and not reduces_existing_long:
                     reason = "DAILY_LOSS_CIRCUIT_BREAKER"
                 elif kind in ("option", "warrant", "future"):
                     # Existing derivatives engine requires authenticated contract,
@@ -158,12 +159,22 @@ class PaperTradingLoop:
                         reason = "DERIVATIVE_EXECUTION_ADAPTER_NOT_ACCEPTED"
                 else:
                     price = quote.c * (1 + self.spread_bps / 20000 * (1 if side == "BUY" else -1))
+                    if self.realism is not None:
+                        rx = self.realism.execute(
+                            symbol=signal.ticker, side=side, size=signal.size, quote=quote,
+                            book=getattr(strategy, "book", "SWING"), equity=equity,
+                            session_end=getattr(account, "session_end", False))
+                        if rx["allowed"]:
+                            signal = dataclasses.replace(signal, size=rx["size"])
+                            price = rx["price"]
                     signed = signal.size if side == "BUY" else -signal.size
                     old_qty = account.positions.get(signal.ticker, 0)
                     new_qty = old_qty + signed
                     gross = sum(abs(qty * quotes[sym].c) for sym, qty in account.positions.items())
                     projected = gross - abs(old_qty * quote.c) + abs(new_qty * quote.c)
-                    if new_qty < 0:
+                    if rx is not None and not rx["allowed"]:
+                        reason = rx["reason"]
+                    elif new_qty < 0:
                         reason = "NO_SHORT_STOCK"
                     elif new_qty * quote.c > equity * self.max_position_pct + 1e-8:
                         reason = "POSITION_LIMIT"
@@ -172,6 +183,8 @@ class PaperTradingLoop:
                     else:
                         fee = price * signal.size * self.fee_rate
                         tax = price * signal.size * self.tw_sell_tax if side == "SELL" and signal.ticker.upper().endswith((".TW", ".TWO")) else 0.
+                        if rx is not None:
+                            fee, tax = rx["fee"], rx["tax"]
                         cash_delta = (-1 if side == "BUY" else 1) * price * signal.size - fee - tax
                         if account.cash + cash_delta < -1e-8:
                             reason = "INSUFFICIENT_CASH"
@@ -187,6 +200,14 @@ class PaperTradingLoop:
                                                       age_seconds=quote.staleness_seconds,
                                                       last_price=quote.c),
                                 instrument_type="ETF" if kind == "etf" else "EQUITY")
+                            # The loop account is the position source of truth; the order
+                            # service ledger is rebuilt empty each run, so sync it first.
+                            if side == "SELL":
+                                try:
+                                    led = self.orders.portfolio_manager.get_ledger(request.bucket, request.strategy_id)
+                                    led.get_position(signal.ticker).quantity = old_qty
+                                except Exception:
+                                    pass
                             decision = self.orders._risk_decision(request)
                             if not decision.allowed:
                                 reason = "PAPER_ORDER_REJECTED:" + ",".join(decision.reasons)
@@ -204,20 +225,13 @@ class PaperTradingLoop:
                                             state.pop(signal.ticker, None)
                                     account.marks[signal.ticker] = quote.c
                                     fill = price
-                                    owner = getattr(strategy, "strategy_id", None)
-                                    if owner:
-                                        if side == "BUY":
-                                            prior = self.ownership.get(signal.ticker)
-                                            self.ownership[signal.ticker] = {
-                                                "owner": owner, "qty": signal.size + (prior["qty"] if prior else 0),
-                                                "entry": prior["entry"] if prior else price}
-                                        else:
-                                            owned = self.ownership[signal.ticker]
-                                            owned["qty"] -= signal.size
-                                            if owned["qty"] <= 1e-8:
-                                                del self.ownership[signal.ticker]
+                                    if rx is not None:
+                                        self.realism.commit(
+                                            symbol=signal.ticker, side=side, size=signal.size,
+                                            price=price, fee=fee, tax=tax, quote=quote,
+                                            book=rx["book"], strategy_id=getattr(strategy, "strategy_id", None))
                 record = dict(sequence=self.sequence, ticker=signal.ticker,
-                              strategy_id=getattr(strategy, 'strategy_id', None),
+                              strategy_id=getattr(strategy, "strategy_id", None),
                               instrument_type=kind, side=side, size=signal.size,
                               thesis=signal.thesis, expected_outcome=signal.expected_outcome,
                               invalidation=signal.invalidation, stop=signal.stop,
@@ -226,7 +240,19 @@ class PaperTradingLoop:
                               fill_price=fill, fee=fee if not reason else 0.,
                               tax=tax if not reason else 0., paper_only=True,
                               quote_timestamp=quote.ts.isoformat() if quote else None)
+                if not math.isfinite(signal.size):
+                    # Invalid inputs must be rejected without crashing the
+                    # strict JSON journal or losing their diagnostic value.
+                    record["size"] = None
+                    record["invalid_size_repr"] = repr(signal.size)
+                if self.realism is not None and kind in ("stock", "etf"):
+                    record.update(book=getattr(strategy, "book", "SWING"),
+                                  realism_version=self.realism.state["version"],
+                                  participation=(rx or {}).get("participation"))
                 self._journal(record)
+                callback = getattr(strategy, "on_execution", None)
+                if callable(callback):
+                    callback(signal, record, account)
                 results.append(record)
         return dict(events=results, equity=self._equity(account, quotes),
                     circuit_breaker=breaker, marks={s: q.c for s, q in quotes.items()})

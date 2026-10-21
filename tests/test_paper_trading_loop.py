@@ -193,39 +193,20 @@ def test_mean_reversion():
     s.signals({"AAA": SimpleNamespace(c=100)}, None)
     assert len(s.signals({"AAA": SimpleNamespace(c=90)}, None)) == 1
 
-class OwnedStrategy(Strategy):
-    def __init__(self, owner, side="BUY", size=1):
-        super().__init__(side, size)
-        self.strategy_id = owner
 
+def test_sell_with_real_service_after_fresh_ledger(tmp_path):
+    """Regression: service ledger is rebuilt empty each run; SELL of a held
+    position must not be rejected INSUFFICIENT_PAPER_POSITION."""
+    from cio_market_lab.engine.paper_runner import _default_orders, _configure, UNIVERSE
+    orders = _default_orders(tmp_path)
+    spec = UNIVERSE["US"]
+    _configure(orders, "US", spec)
+    t = list(spec["tickers"])[0]
 
-def test_foreign_sell_and_partial_exit(tmp_path):
-    loop, acc, _ = setup(tmp_path)
-    loop.run_once(Feed({"AAA": 100}), acc, [OwnedStrategy("Momentum", size=3)])
-    result = loop.run_once(Feed({"AAA": 100}), acc, [OwnedStrategy("MeanRev", "SELL")])
-    assert result["events"][0]["reason"] == "FOREIGN_OR_UNOWNED_POSITION"
-    assert acc.positions["AAA"] == 3
-    loop.run_once(Feed({"AAA": 100}), acc, [OwnedStrategy("Momentum", "SELL", 1)])
-    assert loop.ownership["AAA"]["owner"] == "Momentum"
-    assert loop.ownership["AAA"]["qty"] == 2
-
-
-def test_rejected_exit_preserves_owner_and_restart(tmp_path):
-    loop, acc, orders = setup(tmp_path)
-    loop.run_once(Feed({"AAA": 100}), acc, [OwnedStrategy("Momentum", size=2)])
-    orders.allowed = False
-    rejected = loop.run_once(Feed({"AAA": 100}), acc, [OwnedStrategy("Momentum", "SELL", 2)])
-    assert rejected["events"][0]["status"] == "REJECTED"
-    restarted = PaperTradingLoop(orders, loop.journal_path)
-    assert restarted.ownership["AAA"]["owner"] == "Momentum"
-    assert restarted.ownership["AAA"]["qty"] == 2
-
-
-def test_old_owner_cannot_clear_new_owner(tmp_path):
-    loop, acc, _ = setup(tmp_path)
-    loop.run_once(Feed({"AAA": 100}), acc, [OwnedStrategy("Momentum")])
-    loop.run_once(Feed({"AAA": 100}), acc, [OwnedStrategy("Momentum", "SELL")])
-    loop.run_once(Feed({"AAA": 100}), acc, [OwnedStrategy("MeanRev")])
-    event = loop.run_once(Feed({"AAA": 100}), acc, [OwnedStrategy("Momentum", "SELL")])["events"][0]
-    assert event["status"] == "REJECTED"
-    assert loop.ownership["AAA"]["owner"] == "MeanRev"
+    class S(Strategy):
+        ticker = t
+    loop = PaperTradingLoop(orders, tmp_path / "j.jsonl", max_position_pct=1)
+    account = PaperAccount(1000, {t: 2})
+    res = loop.run_once(Feed({t: 10}), account, [S("SELL", 2)])
+    ev = res["events"][0]
+    assert "INSUFFICIENT_PAPER_POSITION" not in str(ev["reason"]), ev
