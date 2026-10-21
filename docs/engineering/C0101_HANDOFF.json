@@ -1,32 +1,32 @@
 {
   "schema_version": 2,
   "task_id": "c0101-paper-repairs-20261021",
-  "instruction_id": "Q1-r1",
+  "instruction_id": "Q1-r2",
   "repository": "tony19930204UCL/project-money",
   "pr_number": 55,
   "branch": "fix/c0101-paper-owner-queue-20261021",
-  "source_head_sha": "0b3c374a829c3af428bc5c610771cb2aa386c867",
+  "source_head_sha": "3ee50bda8b81dc3fb82915215a1aab59b1e0d3db",
   "status": "READY_FOR_REVIEW",
-  "summary": "Fixed acceptance collection ImportError by providing compatibility MarketOpenWarmup exception when older intraday_feed lacks it. Prior null-close fallback and owner fixes retained; acceptance not rerun by engineer.",
+  "summary": "Expanded offline null-close retry and intraday guard regressions from 8 test methods to 20; existing paper close fallback implementation and owner fixes preserved. Main independently verifies acceptance.",
   "changed_files": [
-    "cio_market_lab/engine/paper_trading_loop.py"
+    "tests/test_c0101_close_fallback.py"
   ],
   "tests": [
     {
       "command": "Main acceptance_cmd (exact command not supplied)",
       "result": "NOT_RUN",
-      "evidence": "Main previous acceptance at cb1b5777b2f2766d8966741273c70c77602f5b5f: rc=2, passed=0, collection ImportError MarketOpenWarmup. Engineer explicitly instructed not to run tests; no execution after fix."
+      "evidence": "Engineer did not execute tests. Main reported at HEAD 423d4f07315baea7e7b2db26f119bcd7c16e5db7: rc=0, 9 passed, 5 subtests passed, below >=19 threshold. Added 12 test methods; no claim of passing new acceptance."
     }
   ],
   "remaining_work": [
-    "Main run exact acceptance_cmd at new branch HEAD; require >=19 passed, 0 failed.",
-    "If further collection/runtime failures, return full traceback."
+    "Main rerun exact acceptance_cmd at updated HEAD; verify >=19 passed and 0 failed.",
+    "If tests fail, return complete traceback and exact HEAD."
   ],
   "next_step_reminder": {
     "to": "Main CIO",
-    "verify_now": "Run acceptance_cmd on PR55 updated HEAD; verify >=19 passed and 0 failed.",
-    "if_pass": "Accept Q1-r1 source for review; no merge or deploy authorized.",
-    "if_fail": "Return complete failing test output and exact HEAD for bounded repair.",
+    "verify_now": "Run acceptance_cmd on PR55 Q1-r2 HEAD; require >=19 passed, 0 failed and allowlist compliance.",
+    "if_pass": "Accept source for review only; do not merge/deploy/trade.",
+    "if_fail": "Return exact HEAD and failing test output for bounded repair.",
     "blockers": []
   }
 }
