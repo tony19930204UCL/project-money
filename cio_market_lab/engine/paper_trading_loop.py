@@ -198,6 +198,10 @@ class PaperTradingLoop:
                                 else:
                                     account.cash += cash_delta
                                     account.positions[signal.ticker] = new_qty
+                                    if side == "SELL" and new_qty <= 0:
+                                        state = getattr(account, "strategy_state", None)
+                                        if isinstance(state, dict):
+                                            state.pop(signal.ticker, None)
                                     account.marks[signal.ticker] = quote.c
                                     fill = price
                                     owner = getattr(strategy, "strategy_id", None)
